@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anonymizer"
+version = "0.1.0"
+description = "Local CLI to anonymize PDF/DOCX/text documents to Markdown (EN + FI)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "anonymizer contributors" }]
+keywords = ["anonymize", "pii", "presidio", "pdf", "docx", "privacy"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: Text Processing",
+]
+dependencies = [
+  "presidio-analyzer>=2.2.355",
+  "presidio-anonymizer>=2.2.355",
+  "spacy>=3.7.0",
+  "python-docx>=1.1.0",
+  "pymupdf>=1.24.0",
+  "typer>=0.12.0",
+  "rich>=13.0.0",
+  "pyyaml>=6.0",
+  "lingua-language-detector>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+]
+
+[project.scripts]
+anonymize = "anonymizer.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anonymizer"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/anonymizer" = "anonymizer"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/anonymizer", "README.md", "LICENSE", "config.example.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "integration: tests that need spaCy models or Tesseract",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

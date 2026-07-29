@@ -1,0 +1,36 @@
+# Example configuration for anonymizer
+# Copy to config.yaml and pass with: anonymize doc.pdf --config config.yaml
+
+# Score threshold for NER recognizers (0.0–1.0)
+score_threshold: 0.5
+
+# Entity types to redact (omit to use tool defaults)
+# entities:
+#   - PERSON
+#   - ORG
+#   - EMAIL_ADDRESS
+#   - PHONE_NUMBER
+#   - LOCATION
+#   - IP_ADDRESS
+#   - CREDIT_CARD
+#   - IBAN_CODE
+#   - FI_HETU
+#   - FI_BUSINESS_ID
+#   - DATE_TIME  # off by default unless --include-dates
+
+# Never redact these exact strings (case-insensitive match on normalized text)
+allowlist:
+  - United States
+  - European Union
+  - Suomi
+  - Finland
+
+# Always redact these strings as the given type (supplier / provider names, etc.)
+denylist:
+  # - text: "Acme Supplies Oy"
+  #   entity_type: ORG
+  # - text: "John Placeholder"
+  #   entity_type: PERSON
+
+# Language: auto | en | fi | en,fi
+# lang: auto
