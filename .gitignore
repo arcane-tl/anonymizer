@@ -33,6 +33,7 @@ htmlcov/
 *.map.json
 /out/
 /output/
+samples/out/
 
 # spaCy models if vendored locally
 models/

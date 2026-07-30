@@ -18,6 +18,7 @@ from anonymizer.anonymize.language import resolve_language
 from anonymizer.anonymize.mapping import EntityMap, normalize_entity_text
 from anonymizer.anonymize.recognizers.fi_business_id import FiBusinessIdRecognizer
 from anonymizer.anonymize.recognizers.fi_hetu import FiHetuRecognizer
+from anonymizer.anonymize.recognizers.fi_phone import FiPhoneRecognizer
 from anonymizer.models import AnonymizeResult, EntityHit, LanguageDecision
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ def _pattern_analyzer() -> AnalyzerEngine:
     nlp_engine = provider.create_engine()
     registry = RecognizerRegistry(supported_languages=["en"])
     registry.load_predefined_recognizers(nlp_engine=nlp_engine, languages=["en"])
-    for Rec in (FiHetuRecognizer, FiBusinessIdRecognizer):
+    for Rec in (FiHetuRecognizer, FiBusinessIdRecognizer, FiPhoneRecognizer):
         rec = Rec()
         rec.supported_language = "en"
         registry.add_recognizer(rec)
@@ -173,6 +174,10 @@ def _standalone_fi_patterns(
     if not entities or "FI_BUSINESS_ID" in entities:
         results.extend(
             FiBusinessIdRecognizer().analyze(text, entities=["FI_BUSINESS_ID"])
+        )
+    if not entities or "PHONE_NUMBER" in entities:
+        results.extend(
+            FiPhoneRecognizer().analyze(text, entities=["PHONE_NUMBER"])
         )
     return results
 
