@@ -11,29 +11,69 @@ Local Mac CLI that anonymizes documents (PDF, DOCX, plain text) by removing pers
 
 ## Install (macOS)
 
-### System dependencies (OCR)
+### One-liner (recommended)
+
+Installs the app under `~/.local/share/anonymizer`, puts `anonymize` on your PATH (`~/.local/bin`), installs OCR packages via Homebrew when available, and downloads English + Finnish spaCy models.
 
 ```bash
-brew install tesseract tesseract-lang ocrmypdf
-tesseract --list-langs   # should include eng and fin
+curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
 ```
 
-### Python package
+From a git clone:
+
+```bash
+git clone https://github.com/arcane-tl/anonymizer.git
+cd anonymizer
+./scripts/install.sh --yes
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--yes` | Non-interactive |
+| `--no-ocr` | Skip Homebrew Tesseract/ocrmypdf |
+| `--models sm` | Smaller spaCy models (faster download) |
+| `--models lg` | Large models (default, better accuracy) |
+| `--from-source` | Install into the current clone (dev-style) |
+| `--with-dev` | Also install pytest |
+| `--prefix DIR` | Install location (default `~/.local/share/anonymizer`) |
+
+After install:
+
+```bash
+anonymize --version
+anonymize document.pdf -o clean.md
+```
+
+Upgrade:
+
+```bash
+~/.local/share/anonymizer/scripts/install.sh --yes
+```
+
+Uninstall:
+
+```bash
+~/.local/share/anonymizer/scripts/uninstall.sh --yes
+```
+
+### Manual / development install
 
 Requires **Python 3.11+**.
 
 ```bash
+# OCR (scanned PDFs)
+brew install tesseract tesseract-lang ocrmypdf
+tesseract --list-langs   # should include eng and fin
+
 cd anonymizer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-
-# spaCy models (large preferred)
 python -m spacy download en_core_web_lg
 python -m spacy download fi_core_news_lg
 ```
 
-If large models are unavailable, medium/small variants are tried automatically.
+If large models are unavailable, medium/small variants are tried automatically at runtime.
 
 ## Usage
 
@@ -87,7 +127,7 @@ anonymize --version
 | Person names | `[PERSON_n]` |
 | Organizations / suppliers / providers | `[ORG_n]` |
 | Email | `[EMAIL_n]` |
-| Phone | `[PHONE_n]` |
+| Phone (incl. Finnish `+358` / `040…`) | `[PHONE_n]` |
 | Location | `[LOCATION_n]` |
 | Finnish henkilötunnus | `[FI_HETU_n]` |
 | Finnish Y-tunnus | `[FI_BUSINESS_ID_n]` |
