@@ -117,9 +117,19 @@ The library does **not** ship a search list of real-world companies or people. V
 
 ## Install (macOS)
 
-### One-liner (recommended)
+### Homebrew (recommended)
 
-Installs the app under `~/.local/share/anonymizer`, puts `anonymize` on your PATH (`~/.local/bin`), installs OCR packages via Homebrew when available, and downloads English + Finnish spaCy models.
+See [Quick start](#quick-start) and [packaging/homebrew/README.md](packaging/homebrew/README.md).
+
+From a clone you can also run:
+
+```bash
+./packaging/homebrew/install-local.sh
+```
+
+### curl installer (alternative)
+
+Installs under `~/.local/share/anonymizer`, puts `anonymize` on `~/.local/bin`, optional OCR via Homebrew, spaCy models (default **lg**).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes

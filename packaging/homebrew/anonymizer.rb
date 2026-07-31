@@ -56,6 +56,10 @@ class Anonymizer < Formula
         anonymize doctor
         anonymize --version
 
+      A harmless linkage warning may appear for the lingua language-detection
+      wheel during install; the CLI still runs. Prefer:
+        $(brew --prefix)/opt/anonymizer/bin/anonymize --version
+
       If `anonymize` still points at ~/.local/bin (curl installer), either
       put Homebrew first on PATH or run:
         brew link --overwrite anonymizer
