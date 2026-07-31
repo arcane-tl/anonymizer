@@ -65,3 +65,44 @@ def test_end_to_end_placeholder():
     assert "040 123 4567" not in out
     assert "[PHONE_1]" in out
     assert "[PHONE_2]" in out or out.count("[PHONE_") >= 1
+
+
+def test_parenthetical_area_and_mobile():
+    """Common FI print forms: (040) 123 4567, (09) 1234 567."""
+    samples = [
+        "(040) 123 4567",
+        "(050) 987 6543",
+        "(09) 1234 567",
+        "(040)1234567",
+        "Puh. (09) 478 4450",
+    ]
+    for s in samples:
+        hits = find_fi_phones(s)
+        assert hits, f"missed parenthetical phone in {s!r}"
+        # Full number (with parens) should be captured, not only digits after
+        joined = " ".join(h[2] for h in hits)
+        assert "040" in joined.replace(" ", "") or "050" in joined.replace(
+            " ", ""
+        ) or "09" in joined.replace(" ", "") or "478" in joined
+
+
+def test_parenthetical_phone_engine_redacts():
+    """Shipped DocumentAnonymizer path redacts (040) … national forms."""
+    from anonymizer.anonymize.config import AnonymizerConfig
+    from anonymizer.anonymize.engine import DocumentAnonymizer
+
+    text = (
+        "Yhteys: (040) 123 4567 tai (09) 1234 567. "
+        "Vanha muoto 040 123 4567 edelleen toimii."
+    )
+    cfg = AnonymizerConfig(mode="strict", lang="fi", use_llm=False)
+    cfg.apply_mode()
+    r = DocumentAnonymizer(cfg).anonymize_text(text, lang_flag="fi")
+    out = r.anonymized_text
+    assert "(040) 123 4567" not in out
+    assert "(09) 1234 567" not in out
+    assert "040 123 4567" not in out
+    assert "[PHONE_" in out
+    # Original surfaces in reverse map
+    originals = set(r.mapping.values())
+    assert any("040" in v and "123" in v for v in originals)

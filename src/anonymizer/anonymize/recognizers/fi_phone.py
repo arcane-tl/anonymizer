@@ -27,17 +27,37 @@ _INTL = re.compile(
     re.IGNORECASE,
 )
 
-# National numbers with separators (prefer spaced form to avoid Y-tunnus / dates)
-# e.g. 040 123 4567, 09 1234 567, 050-987-6543
-_NAT_SEP = re.compile(
-    r"(?<!\d)"
-    r"0"
+# Shared national trunk+prefix (mobile / area) without outer parens
+_NAT_PREFIX = (
     r"(?:"
     r"4\d|50|45|44|40|41|42|43|46|49|"  # mobile-ish
     r"9|2|3|5|6|8|13|14|15|16|17|18|19"  # area codes (partial)
     r")"
-    r"(?:[\s\-./]+\d{2,4}){1,4}"
-    r"(?!\d)",
+)
+
+# National numbers with separators (prefer spaced form to avoid Y-tunnus / dates)
+# e.g. 040 123 4567, 09 1234 567, 050-987-6543
+_NAT_SEP = re.compile(
+    rf"(?<!\d)"
+    rf"0{_NAT_PREFIX}"
+    rf"(?:[\s\-./]+\d{{2,4}}){{1,4}}"
+    rf"(?!\d)",
+)
+
+# Parenthetical trunk+prefix: (040) 123 4567, (09) 1234 567 — common in FI print
+_NAT_PAREN = re.compile(
+    rf"(?<!\d)"
+    rf"\(\s*0{_NAT_PREFIX}\s*\)"
+    rf"(?:[\s\-./\u00a0]+\d{{2,4}}){{1,4}}"
+    rf"(?!\d)",
+)
+
+# Continuous after paren: (040)1234567
+_NAT_PAREN_CONT = re.compile(
+    rf"(?<!\d)"
+    rf"\(\s*0{_NAT_PREFIX}\s*\)"
+    rf"\d{{6,8}}"
+    rf"(?!\d)",
 )
 
 # Continuous national mobile (10 digits common): 0401234567, 0501234567
@@ -73,6 +93,14 @@ _NAT_SERVICE_SEP = re.compile(
     r"(?!\d)",
 )
 
+# Service with parentheses: (010) 832 4500
+_NAT_SERVICE_PAREN = re.compile(
+    r"(?<!\d)"
+    r"\(\s*0(?:10|20|29|30|39|60|70|75)\s*\)"
+    r"(?:[\s\-./\u00a0]+\d{2,4}){1,4}"
+    r"(?!\d)",
+)
+
 # After an explicit phone label, accept broader digit runs (PDF often drops
 # trunk 0 or uses NBSP): e.g. Puhelinnumero: 108324500
 _LABELED = re.compile(
@@ -87,6 +115,9 @@ _LABELED = re.compile(
 
 _PATTERNS = (
     _INTL,
+    _NAT_PAREN,
+    _NAT_PAREN_CONT,
+    _NAT_SERVICE_PAREN,
     _NAT_SEP,
     _NAT_MOBILE_CONT,
     _NAT_LAND_CONT,
