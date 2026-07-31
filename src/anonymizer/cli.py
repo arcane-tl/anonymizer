@@ -126,6 +126,49 @@ def _setup_logging(verbose: bool) -> None:
             logging.getLogger(name).setLevel(logging.ERROR)
 
 
+def _abs_display_path(path: Path) -> str:
+    """Absolute path string for success messages (expands ~)."""
+    return str(expand_user_path(path).resolve())
+
+
+def _report_write_success(
+    *,
+    quiet: bool,
+    input_name: str,
+    elapsed: str,
+    summary: str,
+    out_path: Path | None,
+    map_file: Path | None,
+) -> None:
+    """Tell the user exactly where files landed (main post-run UX).
+
+    Paths are printed on their own line so long absolute paths are not
+    soft-wrapped mid-segment by the terminal width.
+    """
+    out_disp = _abs_display_path(out_path) if out_path is not None else None
+    map_disp = _abs_display_path(map_file) if map_file is not None else None
+
+    # overflow=ignore keeps absolute paths intact for copy-paste / tests
+    print_kw = {"overflow": "ignore", "crop": False, "soft_wrap": False}
+
+    if quiet:
+        console.print(
+            f"[green]OK[/green] {input_name} · {elapsed} · {summary}",
+            **print_kw,
+        )
+    if out_disp is not None:
+        label = "Wrote" if not quiet else "→"
+        console.print(f"[green]{label}[/green] {out_disp}", **print_kw)
+    else:
+        label = "Wrote" if not quiet else "→"
+        console.print(f"[green]{label}[/green] stdout", **print_kw)
+    if map_disp is not None:
+        console.print(
+            f"[dim]map[/dim] {map_disp} [dim](contains PII)[/dim]",
+            **print_kw,
+        )
+
+
 def _build_config(
     *,
     mode: str,
@@ -369,6 +412,9 @@ def _run_pipeline(
         progress.substep("Rendering Markdown…")
         md = render_from_extracted(doc, anon_blocks, result)
 
+        written_out: Path | None = None
+        written_map: Path | None = None
+
         if output is not None and str(output) == "-":
             progress.substep("Writing to stdout…")
             sys.stdout.write(md)
@@ -384,6 +430,7 @@ def _run_pipeline(
                 )
             progress.substep(f"Writing {out_path}…")
             out_path.write_text(md, encoding="utf-8")
+            written_out = out_path
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -408,6 +455,7 @@ def _run_pipeline(
                 mp.chmod(0o600)
             except OSError:
                 pass
+            written_map = mp
 
         counts = (
             ", ".join(f"{k}={v}" for k, v in sorted(result.entity_counts.items()))
@@ -419,11 +467,14 @@ def _run_pipeline(
             + (" · OCR" if doc.used_ocr else "")
         )
         progress.done_document(summary)
-        if quiet:
-            console.print(
-                f"[green]OK[/green] {input_path.name} · "
-                f"{progress.elapsed_str().strip()} · {summary}"
-            )
+        _report_write_success(
+            quiet=quiet,
+            input_name=input_path.name,
+            elapsed=progress.elapsed_str().strip(),
+            summary=summary,
+            out_path=written_out,
+            map_file=written_map,
+        )
         ok_count += 1
 
     progress.done_batch(ok_count, len(inputs))

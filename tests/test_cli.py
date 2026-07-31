@@ -169,3 +169,62 @@ def test_cli_bad_config_exits_cleanly(tmp_path: Path):
     combined = (result.stdout or "") + (result.stderr or "")
     assert "Invalid YAML" in combined
     assert "Traceback" not in combined
+
+
+def test_cli_quiet_success_shows_absolute_output_path(tmp_path: Path):
+    """Quiet mode must still tell the user where the Markdown landed."""
+    src = tmp_path / "note.txt"
+    src.write_text("Hello plain extract.\n", encoding="utf-8")
+    out = tmp_path / "body.md"
+    result = _invoke(
+        ["extract", str(src), "-o", str(out), "--quiet"]
+    )
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    assert out.is_file()
+    abs_out = str(out.resolve())
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert abs_out in combined
+    assert "OK" in combined
+
+
+def test_cli_success_shows_wrote_path_non_quiet(tmp_path: Path):
+    src = tmp_path / "note.txt"
+    src.write_text("Hello extract again.\n", encoding="utf-8")
+    out = tmp_path / "out" / "body.md"
+    result = _invoke(["extract", str(src), "-o", str(out)])
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    abs_out = str(out.resolve())
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert abs_out in combined
+    assert "Wrote" in combined
+
+
+def test_report_write_success_helper_formats_paths(tmp_path: Path):
+    from rich.console import Console
+
+    from anonymizer.cli import _report_write_success
+    import anonymizer.cli as cli_mod
+
+    out = tmp_path / "x.md"
+    out.write_text("x", encoding="utf-8")
+    mp = tmp_path / "x.map.json"
+    mp.write_text("{}", encoding="utf-8")
+
+    recorded = Console(stderr=True, force_terminal=False, record=True)
+    old = cli_mod.console
+    try:
+        cli_mod.console = recorded
+        _report_write_success(
+            quiet=True,
+            input_name="x.txt",
+            elapsed="1.0s",
+            summary="mode=extract · entities: none",
+            out_path=out,
+            map_file=mp,
+        )
+        text = recorded.export_text()
+        assert str(out.resolve()) in text
+        assert str(mp.resolve()) in text
+        assert "OK" in text
+    finally:
+        cli_mod.console = old
