@@ -13,6 +13,9 @@ curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/i
 # New terminal (or: export PATH="$HOME/.local/bin:$PATH")
 anonymize doctor
 
+# Optional Mac GUI (drag-and-drop; branch feature/macos-gui — see packaging/macos/README.md)
+# ./packaging/macos/install-app.sh
+
 # Full scrub (default) → contract.anonymized.md
 anonymize contract.pdf
 
