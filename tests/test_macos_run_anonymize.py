@@ -132,3 +132,19 @@ def test_run_anonymize_text_alias_is_extract(tmp_path: Path, script_env: dict):
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "x.md").is_file()
+
+
+def test_anonymizer_open_zero_does_not_prompt_or_fail(tmp_path: Path, script_env: dict):
+    """Droplet sets ANONYMIZER_OPEN=0|1 up front — must not re-prompt."""
+    src = tmp_path / "x.txt"
+    src.write_text("hello\n", encoding="utf-8")
+    env = {**script_env, "ANONYMIZER_OPEN": "0"}
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), "extract", str(src)],
+        capture_output=True,
+        text=True,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "OUTPUT:" in proc.stdout

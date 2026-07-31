@@ -197,20 +197,29 @@ if [[ "$fail" -gt 0 ]]; then
 fi
 echo "done: $ok file(s) ok (mode=$MODE)" >&2
 
-# Optional open when run in a real terminal (review path / CLI users)
+# Open policy (droplet sets this up front so we never ask twice):
+#   ANONYMIZER_OPEN=1|y|yes  → open outputs, no prompt
+#   ANONYMIZER_OPEN=0|n|no   → never open, no prompt
+#   unset + --review + TTY   → prompt once (CLI / Terminal without droplet)
 want_open="${ANONYMIZER_OPEN:-}"
-if [[ ${#outputs[@]} -gt 0 && -t 0 ]]; then
-  if [[ -z "$want_open" ]]; then
-    # Only auto-prompt in --review sessions (user already in Terminal)
-    if [[ "$REVIEW" -eq 1 ]]; then
-      printf 'Open anonymized file(s) in the default app? [y/N] ' >&2
-      read -r want_open || want_open=""
-    fi
-  fi
+if [[ ${#outputs[@]} -gt 0 ]]; then
   case "$(printf '%s' "$want_open" | tr '[:upper:]' '[:lower:]')" in
     1|y|yes)
       if command -v open >/dev/null 2>&1; then
         open "${outputs[@]}"
+      fi
+      ;;
+    0|n|no|"")
+      if [[ -z "$want_open" && "$REVIEW" -eq 1 && -t 0 ]]; then
+        printf 'Open anonymized file(s) in the default app? [y/N] ' >&2
+        read -r ans || ans=""
+        case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+          y|yes)
+            if command -v open >/dev/null 2>&1; then
+              open "${outputs[@]}"
+            fi
+            ;;
+        esac
       fi
       ;;
   esac
