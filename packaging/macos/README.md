@@ -31,7 +31,9 @@ chmod +x packaging/macos/install-app.sh packaging/macos/run-anonymize.sh
    - ☑ **Review findings before saving** (Terminal checklist; off for text-only)  
    - ☑ **Open result when finished**  
 3. Click **Start** (or Cancel).
-4. When finished (no review path): one **Done** dialog with **Show in Finder**.
+4. When finished (no review path):
+   - **Open** checked → file opens; no extra Finder/OK popup (notification only)
+   - **Open** unchecked → one **Done** dialog with **Show in Finder**
 
 ```text
 Drop → [ Options window ] → work → [ Done ]

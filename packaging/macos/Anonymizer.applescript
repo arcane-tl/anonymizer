@@ -111,14 +111,23 @@ on processFiles(theFiles)
 	set outPaths to parseOutputLines(shellOut)
 	set nOut to count of outPaths
 
-	if wantOpen and nOut > 0 then
-		repeat with p in outPaths
-			try
-				do shell script "open " & quoted form of p
-			end try
-		end repeat
+	-- User already chose "Open result when finished" in the options panel:
+	-- open the file(s) and stop — no second dialog (Show in Finder / OK).
+	if wantOpen then
+		if nOut > 0 then
+			repeat with p in outPaths
+				try
+					do shell script "open " & quoted form of p
+				end try
+			end repeat
+			display notification "Opened " & (nOut as text) & " result file" & pluralS(nOut) & "." with title "Anonymizer" subtitle "Done"
+		else
+			display notification "Finished. Look next to your original files for .md." with title "Anonymizer" subtitle "Done"
+		end if
+		return
 	end if
 
+	-- Open was unchecked: one result dialog so they can still reveal in Finder
 	set resultBody to "Done" & return & return
 	if nOut is 0 then
 		set resultBody to resultBody & "Finished. Check next to your original files for .md output."
