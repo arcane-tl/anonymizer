@@ -7,10 +7,11 @@ Thin wrapper around the `anonymize` CLI. Branch: `feature/macos-gui`.
 ## Prerequisites
 
 1. **macOS**
-2. Working CLI:
+2. Working CLI (`anonymize` on PATH) — Homebrew preferred:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
+brew install --HEAD --formula ./packaging/homebrew/anonymizer.rb
+# or: curl installer — see root README / scripts/install.sh
 anonymize doctor
 ```
 
