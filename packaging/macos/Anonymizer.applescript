@@ -20,20 +20,51 @@ end run
 
 on open theFiles
 	try
-		processFiles(theFiles)
+		-- Finder may pass a single alias (not a list) when one file is dropped
+		processFiles(normalizeFileList(theFiles))
 	on error errMsg number errNum
 		if errNum is -128 then return
 		display dialog "Anonymizer: " & errMsg buttons {"OK"} default button 1 with icon stop
 	end try
 end open
 
+on normalizeFileList(theFiles)
+	-- Ensure we always iterate a real list of file references
+	try
+		if class of theFiles is list then
+			return theFiles
+		end if
+	end try
+	return {theFiles}
+end normalizeFileList
+
+on filePOSIXPath(fRef)
+	-- Robust path for alias / file / POSIX file from Finder or choose-file
+	try
+		return POSIX path of (fRef as alias)
+	end try
+	try
+		return POSIX path of fRef
+	end try
+	try
+		return fRef as text
+	end try
+	error "Could not read path for dropped file."
+end filePOSIXPath
+
 on processFiles(theFiles)
 	-- Step 0: confirm which files
+	-- Avoid "name of alias …" (often fails for Finder drops / some volumes).
+	-- Use POSIX path + basename instead; index the list (not "repeat with f in").
 	set fileNames to {}
 	set posixFiles to {}
-	repeat with f in theFiles
-		set end of fileNames to name of f
-		set end of posixFiles to quoted form of POSIX path of f
+	set nIn to count of theFiles
+	repeat with i from 1 to nIn
+		set fRef to item i of theFiles
+		set pp to filePOSIXPath(fRef)
+		if pp ends with "/" then set pp to text 1 thru -2 of pp
+		set end of posixFiles to quoted form of pp
+		set end of fileNames to do shell script "basename " & quoted form of pp
 	end repeat
 	set nFiles to count of fileNames
 	if nFiles is 0 then return
