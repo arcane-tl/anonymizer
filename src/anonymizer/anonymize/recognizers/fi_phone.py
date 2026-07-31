@@ -55,14 +55,60 @@ _NAT_LAND_CONT = re.compile(
     r"(?!\d)",
 )
 
-_PATTERNS = (_INTL, _NAT_SEP, _NAT_MOBILE_CONT, _NAT_LAND_CONT)
+# Service / corporate national: 010…, 020…, 029…, 075… (continuous)
+_NAT_SERVICE_CONT = re.compile(
+    r"(?<!\d)"
+    r"0"
+    r"(?:10|20|29|30|39|60|70|75|800|900)"
+    r"\d{5,8}"
+    r"(?!\d)",
+)
+
+# Same with separators: 010 832 4500
+_NAT_SERVICE_SEP = re.compile(
+    r"(?<!\d)"
+    r"0"
+    r"(?:10|20|29|30|39|60|70|75)"
+    r"(?:[\s\-./\u00a0]+\d{2,4}){1,4}"
+    r"(?!\d)",
+)
+
+# After an explicit phone label, accept broader digit runs (PDF often drops
+# trunk 0 or uses NBSP): e.g. Puhelinnumero: 108324500
+_LABELED = re.compile(
+    r"(?i)(?:puhelinnumero|puhelin|phone|tel\.?|puh\.?)\s*[:：]?\s*"
+    r"("
+    r"\+?358[\s\-./\u00a0()]*\d(?:[\s\-./\u00a0()]*\d){6,12}"
+    r"|"
+    r"0?\d(?:[\s\-./\u00a0()]*\d){6,12}"
+    r")"
+    r"(?!\d)",
+)
+
+_PATTERNS = (
+    _INTL,
+    _NAT_SEP,
+    _NAT_MOBILE_CONT,
+    _NAT_LAND_CONT,
+    _NAT_SERVICE_CONT,
+    _NAT_SERVICE_SEP,
+)
 
 
 def _digits_only(s: str) -> str:
     return re.sub(r"\D", "", s)
 
 
-def is_plausible_fi_phone(raw: str) -> bool:
+def _normalize_phone_text(text: str) -> str:
+    """NBSP / narrow spaces → regular space for matching."""
+    return (
+        text.replace("\u00a0", " ")
+        .replace("\u202f", " ")
+        .replace("\u2009", " ")
+    )
+
+
+def is_plausible_fi_phone(raw: str, *, labeled: bool = False) -> bool:
     """Heuristic validation for Finnish phone candidates."""
     d = _digits_only(raw)
     if not (_MIN_DIGITS <= len(d) <= _MAX_DIGITS):
@@ -74,6 +120,9 @@ def is_plausible_fi_phone(raw: str) -> bool:
         national = d[3:]
     elif d.startswith("0"):
         national = d[1:]
+    elif labeled and len(d) >= 8:
+        # PDF forms sometimes omit trunk 0 after "Puhelinnumero:"
+        national = d
     else:
         return False
     if national.startswith("0"):
@@ -83,15 +132,21 @@ def is_plausible_fi_phone(raw: str) -> bool:
 
 
 def find_fi_phones(text: str) -> list[tuple[int, int, str]]:
-    """Return (start, end, matched_text) for Finnish phone numbers."""
+    """Return (start, end, matched_text) for Finnish phone numbers.
+
+    Offsets refer to the original ``text`` (NBSP normalized only for matching
+    when lengths match; we normalize in place so indices align).
+    """
+    # In-place compatible normalize: replace NBSP with space (same length)
+    norm = _normalize_phone_text(text)
     hits: list[tuple[int, int, str]] = []
     seen: set[tuple[int, int]] = set()
     for pattern in _PATTERNS:
-        for m in pattern.finditer(text):
+        for m in pattern.finditer(norm):
             span = (m.start(), m.end())
             if span in seen:
                 continue
-            value = m.group(0)
+            value = text[m.start() : m.end()]  # original slice
             if not is_plausible_fi_phone(value):
                 continue
             # Reject if this is clearly a Y-tunnus (7digits-1digit) already handled elsewhere
@@ -99,6 +154,19 @@ def find_fi_phones(text: str) -> list[tuple[int, int, str]]:
                 continue
             seen.add(span)
             hits.append((m.start(), m.end(), value))
+    # Label-anchored matches (group 1 = number only)
+    for m in _LABELED.finditer(norm):
+        start, end = m.start(1), m.end(1)
+        span = (start, end)
+        if span in seen:
+            continue
+        value = text[start:end]
+        if not is_plausible_fi_phone(value, labeled=True):
+            continue
+        if re.fullmatch(r"\d{7}-\d", value.strip()):
+            continue
+        seen.add(span)
+        hits.append((start, end, value))
     # Prefer longer spans on overlap
     hits.sort(key=lambda h: (h[0], -(h[1] - h[0])))
     merged: list[tuple[int, int, str]] = []

@@ -1,0 +1,52 @@
+# Service agreement (English test template)
+
+This Service Agreement ("Agreement") is entered into as of 15 March 2024 by and between:
+
+**Supplier ("Provider")**
+- Legal name: NORDIC WIDGETS OY
+- Also trading as: SILVER PINE
+- Business contact: Jordan Avery Blake
+- Email: jordan.blake@nordic-widgets.example.com
+- Phone: +1 (415) 555-0199
+- Registered office: 500 Market Street, San Francisco
+- Website: https://www.nordic-widgets.example.com/services
+- Secondary site: www.silver-pine.example.org
+- Payment account IBAN: GB29 NWBK 6016 1331 9268 19
+
+**Customer ("Client")**
+- Legal name: ACME LOGISTICS LTD
+- Contact person: Morgan Ellis Quinn
+- Email: morgan.quinn@acme-logistics.example.com
+- Phone: +44 20 7946 0958
+- Delivery address: 12 Baker Street, London
+- Vehicle used for site visits: plate reference ABC-123 (test plate format)
+- Network endpoint for EDI: 203.0.113.42
+
+## 1. Background
+
+The Provider, NORDIC WIDGETS OY, agrees to supply logistics support software to the Client,
+ACME LOGISTICS LTD. Day-to-day coordination is handled by Jordan Avery Blake and
+Morgan Ellis Quinn. Marketing materials may also refer to the brand SILVER PINE.
+
+## 2. Scope of services
+
+Provider shall deliver the services described at https://www.nordic-widgets.example.com/services
+and maintain status pages at www.silver-pine.example.org. Support tickets go to
+jordan.blake@nordic-widgets.example.com or by phone to +1 (415) 555-0199.
+
+## 3. Commercial terms
+
+Fees are payable to NORDIC WIDGETS OY under IBAN GB29 NWBK 6016 1331 9268 19.
+The Client ACME LOGISTICS LTD may escalate disputes to Morgan Ellis Quinn.
+
+## 4. Notices
+
+Notices to Provider: Jordan Avery Blake, 500 Market Street, San Francisco.
+Notices to Client: Morgan Ellis Quinn, 12 Baker Street, London.
+
+## 5. Signatures
+
+For NORDIC WIDGETS OY: _________________________  Jordan Avery Blake
+For ACME LOGISTICS LTD: _________________________  Morgan Ellis Quinn
+
+— End of English test contract —

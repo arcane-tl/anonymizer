@@ -23,3 +23,15 @@ def test_different_types_independent_counters():
     assert m.get_or_assign("PERSON", "Acme") == "[PERSON_1]"
     assert m.get_or_assign("ORG", "Acme") == "[ORG_1]"
     assert m.get_or_assign("EMAIL_ADDRESS", "a@b.com") == "[EMAIL_1]"
+
+
+def test_plate_placeholder_uses_country_code():
+    from anonymizer.anonymize.mapping import placeholder_label
+
+    assert placeholder_label("FI_LICENSE_PLATE") == "PLATE_FI"
+    assert placeholder_label("SE_LICENSE_PLATE") == "PLATE_SE"
+    m = EntityMap()
+    assert m.get_or_assign("FI_LICENSE_PLATE", "ABC-123") == "[PLATE_FI_1]"
+    assert m.get_or_assign("FI_LICENSE_PLATE", "XYZ-9") == "[PLATE_FI_2]"
+    # Same plate surface → same id
+    assert m.get_or_assign("FI_LICENSE_PLATE", "abc-123") == "[PLATE_FI_1]"

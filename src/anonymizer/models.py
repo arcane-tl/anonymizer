@@ -19,6 +19,7 @@ class TextBlock:
     text: str
     kind: BlockKind = BlockKind.PARAGRAPH
     level: int | None = None  # heading level 1–6
+    page: int | None = None  # 1-based page index when known (PDF)
 
 
 @dataclass
@@ -64,3 +65,5 @@ class AnonymizeResult:
     mapping: dict[str, str]  # placeholder -> original
     language: LanguageDecision
     hits: list[EntityHit] = field(default_factory=list)
+    # Operating mode: extract | standard | strict
+    mode: str = "strict"

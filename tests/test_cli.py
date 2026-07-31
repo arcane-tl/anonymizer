@@ -4,7 +4,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from anonymizer.cli import app
+from anonymizer.cli import _preprocess_argv, app
 from anonymizer.anonymize.engine import apply_stable_placeholders
 from anonymizer.anonymize.recognizers.fi_business_id import FiBusinessIdRecognizer
 from anonymizer.anonymize.recognizers.fi_hetu import FiHetuRecognizer
@@ -19,14 +19,21 @@ from anonymizer.models import (
 runner = CliRunner()
 
 
+def _invoke(args: list[str]):
+    rewritten = _preprocess_argv(["anonymize", *args])
+    if rewritten is None:
+        return runner.invoke(app, ["--help"])
+    return runner.invoke(app, rewritten[1:])
+
+
 def test_version():
-    result = runner.invoke(app, ["--version"])
+    result = _invoke(["--version"])
     assert result.exit_code == 0
     assert "anonymizer" in result.stdout
 
 
 def test_list_entities():
-    result = runner.invoke(app, ["--list-entities"])
+    result = _invoke(["--list-entities"])
     assert result.exit_code == 0
     assert "PERSON" in result.stdout
     assert "FI_HETU" in result.stdout
@@ -43,7 +50,7 @@ def test_text_file_pattern_entities(tmp_path: Path):
         "Contact support@example.com about order.\n\nY-tunnus 0737546-2.\n",
         encoding="utf-8",
     )
-    result = runner.invoke(app, [str(src), "-o", str(tmp_path / "out.md"), "--lang", "en"])
+    result = _invoke([str(src), "-o", str(tmp_path / "out.md"), "--lang", "en"])
     # If models missing, exit non-zero — then do lightweight assertion path
     if result.exit_code != 0:
         text = src.read_text(encoding="utf-8")

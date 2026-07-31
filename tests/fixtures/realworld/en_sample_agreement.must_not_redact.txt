@@ -1,0 +1,20 @@
+# Tokens/phrases that must still appear after offline anonymization (precision).
+# One string per line. Skip empty lines and # comments.
+# These are legal/boilerplate terms, not PII.
+AGREEMENT
+Agreement
+Publisher
+Author
+WHEREAS
+Copyright
+Work
+shall
+hereof
+hereby
+Manuscript
+Section
+lien
+Permissions
+Initial Delivery Date
+Letter of Intent
+Memorandum of Understanding

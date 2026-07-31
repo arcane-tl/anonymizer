@@ -1,0 +1,63 @@
+SOURCE: Wikipedia FI «Sopimus» (CC BY-SA) + synthetic commercial annex
+URL: https://fi.wikipedia.org/wiki/Sopimus
+
+# Julkinen tausta
+
+Sopimus eli välipuhe on kahden tai useamman tahon välinen toimi, jolla luodaan tai muutetaan velvoitteita.
+
+
+== Sopimuksen solmiminen ==
+Sopimus voidaan tehdä suullisesti tai kirjallisesti. Molemmat ovat yhtä päteviä, mutta kirjallinen muoto helpottaa todistelua sopimuksen sisällöstä. Tietyissä erityistapauksissa, esimerkiksi kiinteistön kaupassa, sopimus on pätevä vain kirjallisena.
+Sopimusosapuolia voivat olla erilaiset oikeussubjektit, kuten ihmiset, yritykset ja julkisyhteisöt. Sopimuksen tekeminen edellyttää, että sopijapuolet ovat oikeustoimikelpoisia ja oikeuskelpoisia. Sopimusta tehtäessä voi käyttää edustajaa. Vakiosopimus on sopimus, jonka ehdot on laadittu sellaisiksi, että ne soveltuvat käytettäviksi monien eri sopimuskumppanien kanssa.
+Sopimus sisältää keskeisiä määräyksiä, esimerkiksi suoritusvelvollisuuden, ja sivumääräyksiä, kuten sopimukseen liittyvä takaus.
+Sopimusoikeus oikeudenalana käsittelee sopimuksen tekemistä ja sitovuutta koskevia kysymyksiä. Sopimusrikkomuksen seuraamuksista on yleisiä säädöksiä kauppalaissa. Sopimusrikkomuksesta voi seurata korvausvelvollisuus.
+
+
+== Historia ==
+Abstrakti kirjoitustaito keksittiin Sumerissa kirjanpitoa varten. Vuoden 3000 eaa. tienoilla nuolenpääkirjoituksella pidettiin kirjaa hyödykkeiden vaihdosta ja pian myös veloista, ensimmäisistä kirjallisista sopimuksista.
+
+
+== Valtiosopimukset ==
+Valtiot tekevät keskenään valtiosopimuksia, joista tavallisia ovat kauppasopimukset, poliittiset sopimukset ja sotilaalliset sopimukset.
+
+
+== Kansainvälistä terminologiaa ==
+Monet nykypäivän kansainvälisen kaupan sopimustekniset termit perustuvat englanninkielisiin termeihin ja niistä johdettuihin akronyymeihin, joita joskus käytetään myös suomenkielisissä asiakirjoissa. Sopimusterminologiaan kuuluu esimerkiksi lupa aloittaa työ (engl. Authorisation to Proceed, ATP), työn aloitus (engl. Kick-off, KO).
+Usein kaupallisten tahojen välisessä suhteessa tehdään juridisesti sitomattomia aiesopimuksia (engl. Letter of Intent, LOI) tai muistioita (engl. Memorandum of Understanding, MOU), joiden varassa usein aloitetaan yhteistyö ennen varsinaista allekirjoitettua sopimusta.
+
+
+== Katso myös ==
+Neuvottelu
+Älysopimus
+
+# Liite: esimerkkitäyttö (synteettiset tiedot — ei oikeita henkilöitä)
+
+Alla olevat arvot ovat keksittyjä regressiotestejä varten.
+
+Toimittaja: NORDIC WIDGETS OY
+Markkinointinimi: SILVER PINE
+Y-tunnus: 0737546-2
+ALV-numero: FI07375462
+Yhteyshenkilö: Maija Korhonen
+Sähköposti: maija.korhonen@nordic-widgets.example.fi
+Puhelin: +358 50 987 6543
+Vaihtoehtoinen numero: 040 123 4567
+Osoite:
+Mannerheimintie 12
+Postinumero ja Toimipaikka:
+00100 Helsinki
+Varasto:
+Testikatu 99 B 2, 02330 Espoo
+Rekisterinumero/tunniste:
+ABC-123
+IBAN: FI21 1234 5600 0007 85
+Verkkosivu: https://www.nordic-widgets.example.fi/palvelut
+Lisätieto: www.silver-pine.example.fi
+
+Tilaaja: ACME LOGISTICS AB
+Yhteyshenkilö: Pekka Nieminen
+Henkilötunnus: 131052-308T
+Sähköposti: pekka.nieminen@acme-logistics.example.fi
+Puhelin: +358 (0) 9 1234 567
+Osoite: Aleksanterinkatu 1, 00100 Helsinki
+Kilpailijavertailussa mainittu myös: COPPER LAKE

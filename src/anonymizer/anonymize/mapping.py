@@ -18,6 +18,8 @@ TYPE_LABELS: dict[str, str] = {
     "LOCATION": "LOCATION",
     "LOC": "LOCATION",
     "GPE": "LOCATION",
+    "STREET": "STREET",
+    "CITY": "CITY",
     "DATE_TIME": "DATE",
     "IP_ADDRESS": "IP",
     "CREDIT_CARD": "CREDIT_CARD",
@@ -27,6 +29,13 @@ TYPE_LABELS: dict[str, str] = {
     "NRP": "NRP",
     "FI_HETU": "FI_HETU",
     "FI_BUSINESS_ID": "FI_BUSINESS_ID",
+    # VAT / ALV: VAT_FI_n  e.g. FI28567738 → [VAT_FI_1]
+    "FI_VAT": "VAT_FI",
+    # Plates: PLATE_{COUNTRY}_{n}  e.g. Finnish ABC-123 → [PLATE_FI_1]
+    "FI_LICENSE_PLATE": "PLATE_FI",
+    "FI_POSTAL_CODE": "POSTAL",
+    "VEHICLE_VIN": "VIN",
+    "URL": "URL",
     "CUSTOM": "CUSTOM",
 }
 
@@ -36,7 +45,21 @@ def normalize_entity_text(text: str) -> str:
 
 
 def placeholder_label(entity_type: str) -> str:
-    return TYPE_LABELS.get(entity_type.upper(), entity_type.upper())
+    """Return placeholder type label (e.g. PERSON, PLATE_FI).
+
+    Vehicle plates use ``PLATE_{COUNTRYCODE}`` so numbers look like
+    ``[PLATE_FI_1]``. Unknown plate entities named ``XX_LICENSE_PLATE``
+    map to ``PLATE_XX`` automatically.
+    """
+    key = entity_type.upper()
+    if key in TYPE_LABELS:
+        return TYPE_LABELS[key]
+    # e.g. SE_LICENSE_PLATE → PLATE_SE
+    if key.endswith("_LICENSE_PLATE"):
+        country = key[: -len("_LICENSE_PLATE")]
+        if country:
+            return f"PLATE_{country}"
+    return key
 
 
 @dataclass

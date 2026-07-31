@@ -1,0 +1,16 @@
+# Precision: form labels and boilerplate that must survive redaction.
+Sopimus
+Y-tunnus
+ALV-numero
+Osoite
+Postinumero ja Toimipaikka
+Rekisterinumero/tunniste
+Toimittaja
+Yhteyshenkilö
+Sähköposti
+Puhelin
+Neuvottelu
+Letter of Intent
+Memorandum of Understanding
+Sopimusrikkomus
+Valtiosopimukset

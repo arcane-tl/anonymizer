@@ -7,12 +7,16 @@ from pathlib import Path
 from anonymizer.extract import SUPPORTED_EXTENSIONS
 
 
+def format_supported_extensions() -> str:
+    return ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
+
 def collect_inputs(path: Path) -> list[Path]:
     if path.is_file():
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise ValueError(
-                f"Unsupported file type: {path.suffix}. "
-                f"Supported: {sorted(SUPPORTED_EXTENSIONS)}"
+                f"Unsupported file type: {path.suffix or '(none)'}. "
+                f"Supported: {format_supported_extensions()}"
             )
         return [path]
     if path.is_dir():
@@ -21,13 +25,45 @@ def collect_inputs(path: Path) -> list[Path]:
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 files.append(p)
         if not files:
-            raise ValueError(f"No supported documents found in directory: {path}")
+            raise ValueError(
+                f"No supported documents found in {path}. "
+                f"Looking for: {format_supported_extensions()}"
+            )
         return files
-    raise FileNotFoundError(f"Path not found: {path}")
+    # Friendlier not-found
+    hint = ""
+    parent = path.parent
+    if parent.is_dir():
+        close = [
+            p.name
+            for p in parent.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+        ][:5]
+        if close:
+            hint = f" Nearby files: {', '.join(close)}."
+    raise FileNotFoundError(
+        f"Path not found: {path}.{hint} "
+        f"Check the path (tab-complete helps) or drag the file into the terminal."
+    )
 
 
-def default_output_path(input_path: Path, out_dir: Path | None = None) -> Path:
-    name = f"{input_path.stem}.anonymized.md"
+def default_output_path(
+    input_path: Path,
+    out_dir: Path | None = None,
+    *,
+    mode: str = "strict",
+) -> Path:
+    """Choose a default Markdown path; never overwrite the source file."""
+    if mode == "extract":
+        # Prefer stem.md next to the source; avoid clobbering a .md input
+        candidate = input_path.with_name(f"{input_path.stem}.md")
+        if candidate.resolve() == input_path.resolve():
+            name = f"{input_path.stem}.extracted.md"
+        else:
+            name = f"{input_path.stem}.md"
+    else:
+        name = f"{input_path.stem}.anonymized.md"
+
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / name

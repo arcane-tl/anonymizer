@@ -1,36 +1,42 @@
 # Example configuration for anonymizer
 # Copy to config.yaml and pass with: anonymize doc.pdf --config config.yaml
+#
+# Detection is versatile — no built-in company/person catalogs:
+#   patterns (IDs, plates, postcodes, legal forms) + heuristics + spaCy NER
+#   + optional LLM (--llm / use_llm below)
 
-# Score threshold for NER recognizers (0.0–1.0)
+# ---------------------------------------------------------------------------
+# Operating mode (also: CLI --mode extract|standard|strict)
+# ---------------------------------------------------------------------------
+# extract  — PDF/DOCX/text → Markdown only (no redaction; images/logos skipped)
+# standard — identity PII: person, email, phone, hetu, addresses, IBAN, cards, IP
+#            (keeps companies, Y-tunnus, VAT, URLs, country-level LOCATION, plates)
+# strict   — full scrub (default): also ORG/brands, LOCATION, URLs, plates, VAT…
+#
+# mode: strict
+
 score_threshold: 0.5
 
-# Entity types to redact (omit to use tool defaults)
+# Explicit entity list overrides the mode preset when set:
 # entities:
 #   - PERSON
-#   - ORG
 #   - EMAIL_ADDRESS
 #   - PHONE_NUMBER
-#   - LOCATION
-#   - IP_ADDRESS
-#   - CREDIT_CARD
-#   - IBAN_CODE
-#   - FI_HETU
-#   - FI_BUSINESS_ID
-#   - DATE_TIME  # off by default unless --include-dates
 
-# Never redact these exact strings (case-insensitive match on normalized text)
+# Never redact these exact strings (your list only)
 allowlist:
-  - United States
-  - European Union
-  - Suomi
-  - Finland
+  - Y-tunnus
+  - Hetu
 
-# Always redact these strings as the given type (supplier / provider names, etc.)
+# Always redact these (your known suppliers, etc.)
 denylist:
-  # - text: "Acme Supplies Oy"
+  # - text: "Your Supplier Name Here"
   #   entity_type: ORG
-  # - text: "John Placeholder"
-  #   entity_type: PERSON
 
-# Language: auto | en | fi | en,fi
 # lang: auto
+
+# Optional LLM layer (off by default). Prefer ollama (local).
+# use_llm: false
+# llm_provider: ollama   # or xai (remote — sends document text to api.x.ai)
+# llm_model: llama3.2
+# ollama_url: http://127.0.0.1:11434

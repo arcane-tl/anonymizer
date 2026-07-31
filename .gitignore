@@ -35,6 +35,11 @@ htmlcov/
 /output/
 samples/out/
 
+# Local private / customer documents (never commit)
+/test.pdf
+/test*.pdf
+/*.local.*
+
 # spaCy models if vendored locally
 models/
 *.whl

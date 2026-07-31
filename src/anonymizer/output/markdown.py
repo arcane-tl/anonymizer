@@ -41,6 +41,7 @@ def render_markdown(
         "anonymized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": "anonymizer",
         "tool_version": __version__,
+        "mode": result.mode,
         "lang_mode": result.language.mode,
         "detected_languages": result.language.detected,
         "nlp_passes": result.language.nlp_passes,

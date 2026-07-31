@@ -27,6 +27,12 @@ def test_collect_and_output_paths(tmp_path: Path):
     f.write_text("hi", encoding="utf-8")
     assert collect_inputs(f) == [f]
     assert default_output_path(f).name == "a.anonymized.md"
+    assert default_output_path(f, mode="strict").name == "a.anonymized.md"
+    assert default_output_path(f, mode="extract").name == "a.md"
+    # Never overwrite a .md source in extract mode
+    md = tmp_path / "note.md"
+    md.write_text("x", encoding="utf-8")
+    assert default_output_path(md, mode="extract").name == "note.extracted.md"
     out = default_output_path(f, tmp_path / "out")
     assert out == tmp_path / "out" / "a.anonymized.md"
 

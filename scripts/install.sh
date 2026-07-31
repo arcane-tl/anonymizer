@@ -318,9 +318,23 @@ EOF
   chmod +x "$launcher"
   ok "CLI installed: $launcher"
 
+  # Optional: symlink into Homebrew-style bins when writable (often already on PATH)
+  local brew_bin
+  for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    if [[ -d "$brew_bin" && -w "$brew_bin" ]]; then
+      ln -sf "$launcher" "$brew_bin/anonymize" 2>/dev/null && \
+        ok "Also linked: $brew_bin/anonymize" && break
+    fi
+  done
+
   local export_line="export PATH=\"$BIN_DIR:\$PATH\""
   if echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
     ok "$BIN_DIR is on PATH"
+    return 0
+  fi
+  # Homebrew bin may already provide the command
+  if command -v anonymize >/dev/null 2>&1; then
+    ok "anonymize is available on PATH ($(command -v anonymize))"
     return 0
   fi
 
@@ -375,11 +389,29 @@ verify_install() {
   info "Verifying install…"
   local cli="$BIN_DIR/anonymize"
   "$cli" --version
-  "$cli" --list-entities >/dev/null
+  if "$cli" doctor >/dev/null 2>&1; then
+    ok "anonymize doctor passed"
+  else
+    # Still print doctor output for the user
+    "$cli" doctor || warn "doctor reported issues — see above"
+  fi
   ok "anonymize is ready"
 }
 
 print_summary() {
+  local path_hint=""
+  if ! command -v anonymize >/dev/null 2>&1; then
+    path_hint=$(
+      cat <<EOF
+
+${YELLOW}PATH tip (this terminal only):${RESET}
+  export PATH="$BIN_DIR:\$PATH"
+
+  Or open a ${BOLD}new terminal window${RESET} (installer may have updated your shell rc).
+EOF
+    )
+  fi
+
   cat <<EOF
 
 ${BOLD}${GREEN}Installation complete${RESET}
@@ -387,10 +419,15 @@ ${BOLD}${GREEN}Installation complete${RESET}
   Install root:  $INSTALL_ROOT
   CLI:           $BIN_DIR/anonymize
   Config sample: $INSTALL_ROOT/config.example.yaml
-
+$path_hint
 ${BOLD}Try it:${RESET}
-  anonymize --version
-  anonymize path/to/document.pdf -o clean.md
+  anonymize doctor
+  anonymize extract path/to/document.pdf
+  anonymize path/to/document.pdf
+  anonymize standard path/to/contract.pdf
+
+  anonymize examples          # more copy-paste commands
+  anonymize --help
 
 ${BOLD}Upgrade later:${RESET}
   $INSTALL_ROOT/scripts/install.sh --yes --from-source

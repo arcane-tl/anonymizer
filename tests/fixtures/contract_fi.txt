@@ -1,0 +1,60 @@
+# Toimitussopimus (suomenkielinen testipohja)
+
+Tämä toimitussopimus ("Sopimus") on solmittu 15.3.2024 seuraavien osapuolten välillä:
+
+**Toimittaja**
+- Virallinen nimi: NORDIC WIDGETS OY
+- Markkinointinimi: SILVER PINE
+- Y-tunnus: 0737546-2
+- ALV-numero: FI07375462
+- Yhteyshenkilö: Maija Korhonen
+- Sähköposti: maija.korhonen@nordic-widgets.example.fi
+- Puhelin: +358 50 987 6543
+- Vaihtoehtoinen numero: 040 123 4567
+- Käyntiosoite: Mannerheimintie 12, 00100 Helsinki
+- Varasto: Testikatu 99 B 2, 02330 Espoo
+- Verkkosivu: https://www.nordic-widgets.example.fi/palvelut
+- Lisätieto: www.silver-pine.example.fi
+- Ajoneuvo: rekisteritunnus ABC-123
+- IBAN: FI21 1234 5600 0007 85
+
+**Tilaaja**
+- Virallinen nimi: ACME LOGISTICS AB
+- Yhteyshenkilö: Pekka Nieminen
+- Henkilötunnus (testi): 131052-308T
+- Sähköposti: pekka.nieminen@acme-logistics.example.fi
+- Puhelin: +358 (0) 9 1234 567
+- Osoite: Aleksanterinkatu 1, 00100 Helsinki
+- Kilpailijavertailussa mainittu myös: COPPER LAKE
+
+## 1. Tausta
+
+Toimittaja NORDIC WIDGETS OY sitoutuu toimittamaan palveluita tilaajalle ACME LOGISTICS AB.
+Yhteydenpidosta vastaavat Maija Korhonen ja Pekka Nieminen. Brändiä SILVER PINE voidaan
+käyttää markkinoinnissa. Vertailutoimittajana on mainittu COPPER LAKE.
+
+## 2. Toimitukset
+
+Toimitukset osoitteeseen Mannerheimintie 12, 00100 Helsinki tai varastoon Testikatu 99 B 2,
+02330 Espoo. Seuranta: https://www.nordic-widgets.example.fi/palvelut ja
+www.silver-pine.example.fi. Kiireellisissä tapauksissa soitetaan +358 50 987 6543 tai
+040 123 4567. Kuljetuskalusto: ABC-123.
+
+## 3. Laskutus
+
+Laskut osoitetaan y-tunnukselle 0737546-2 ja maksetaan tilille FI21 1234 5600 0007 85.
+Tilaajan yhteyshenkilö Pekka Nieminen (131052-308T) vahvistaa vastaanoton.
+
+## 4. Ilmoitukset
+
+Toimittajalle: Maija Korhonen, maija.korhonen@nordic-widgets.example.fi,
+Mannerheimintie 12, 00100 Helsinki.
+Tilaajalle: Pekka Nieminen, pekka.nieminen@acme-logistics.example.fi,
+Aleksanterinkatu 1, 00100 Helsinki.
+
+## 5. Allekirjoitukset
+
+NORDIC WIDGETS OY: _________________________  Maija Korhonen
+ACME LOGISTICS AB: _________________________  Pekka Nieminen
+
+— Suomenkielisen testisopimuksen loppu —
