@@ -47,10 +47,19 @@ Optional:
    - **strict** — full scrub (default)
    - **standard** — people & contact; keeps companies
    - **extract** — text only, no redaction
-4. Wait for the notification. Markdown is written **next to the source file**  
-   (`file.anonymized.md` or `file.md` for extract).
+4. **Review?** (strict / standard only) — **Yes** opens **Terminal** with  
+   `anonymize … --review` (checkbox list: space = keep clear, enter = write).  
+   After review, Terminal asks whether to **open** the Markdown file(s).
+5. Without review: the app runs quietly, then asks **Open the anonymized file now?**  
+   (**Open** / **Not now**).
+
+Markdown is written **next to the source file**  
+(`file.anonymized.md` or `file.md` for extract).
 
 Double-click the app (no drop) → file picker.
+
+> **Why Terminal for review?** The interactive checklist needs a real terminal  
+> (`do shell script` has no TTY). Non-review runs stay fully dialog-based.
 
 ## How it works
 

@@ -50,6 +50,23 @@ def test_run_anonymize_extract_writes_markdown(tmp_path: Path, script_env: dict)
     assert out.is_file(), list(tmp_path.iterdir())
     body = out.read_text(encoding="utf-8")
     assert "Hello from Mac GUI helper" in body
+    # Droplet parses OUTPUT: lines from stdout to offer "Open?"
+    assert f"OUTPUT:{out.resolve()}" in proc.stdout.replace("\r", "")
+
+
+def test_run_anonymize_review_requires_tty(tmp_path: Path, script_env: dict):
+    src = tmp_path / "note.txt"
+    src.write_text("Contact alice@example.com\n", encoding="utf-8")
+    # Pipe stdin so the script is not a TTY
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), "--review", "strict", str(src)],
+        capture_output=True,
+        text=True,
+        env=script_env,
+        stdin=subprocess.DEVNULL,
+    )
+    assert proc.returncode == 2
+    assert "interactive terminal" in (proc.stderr + proc.stdout).lower()
 
 
 def test_run_anonymize_default_mode_is_strict_verb(tmp_path: Path, script_env: dict):
