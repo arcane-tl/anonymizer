@@ -197,17 +197,11 @@ on showOptionsPanel(fileNames)
 		cell's setTag:i
 	end repeat
 	matrix's selectCellAtRow:0 column:0
-	matrix's sizeToCells()
-	-- After sizeToCells, re-set frame width for long labels
-	set mf to matrix's frame()
-	set mf's size's width to (panelW - 24)
-	set mf's size's height to 80
-	set mf's origin's y to 78
-	set mf's origin's x to 12
-	matrix's setFrame:mf
+	-- Do not mutate NSRect fields in AppleScript (crashes: "Can't get size of {{…}}").
+	-- Keep a fixed frame wide enough for the mode labels.
+	matrix's setFrame:{{12, 78}, {panelW - 24, 80}}
 	matrix's setToolTip:"All modes are listed here — pick one."
 	accessory's addSubview:matrix
-
 	-- Review checkbox
 	set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 44}, {panelW - 24, 28}}
 	reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
