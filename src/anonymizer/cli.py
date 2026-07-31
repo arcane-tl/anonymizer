@@ -23,6 +23,7 @@ from anonymizer.anonymize.config import (
     SPACY_MODELS,
     STANDARD_ENTITIES,
     AnonymizerConfig,
+    ConfigError,
     entities_for_mode,
     load_config,
     normalize_mode,
@@ -37,7 +38,7 @@ from anonymizer.anonymize.review import (
 )
 from anonymizer.extract import extract_document
 from anonymizer.output.markdown import render_from_extracted
-from anonymizer.util.files import collect_inputs, default_output_path
+from anonymizer.util.files import collect_inputs, default_output_path, expand_user_path
 from anonymizer.util.progress import RunProgress
 
 EPILOG = """
@@ -188,23 +189,41 @@ def _run_pipeline(
 ) -> None:
     _setup_logging(verbose)
 
+    # Typer/Click do not expand ~; do it once for every user path.
+    path = expand_user_path(path)
+    if output is not None and str(output) != "-":
+        output = expand_user_path(output)
+    if out_dir is not None:
+        out_dir = expand_user_path(out_dir)
+    if map_path is not None:
+        map_path = expand_user_path(map_path)
+    if config is not None:
+        config = expand_user_path(config)
+        if not config.is_file():
+            console.print(f"[red]Error:[/red] Config file not found: {config}")
+            raise typer.Exit(2)
+
     try:
         mode = normalize_mode(mode)
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(2) from exc
 
-    cfg = _build_config(
-        mode=mode,
-        lang=lang,
-        config=config,
-        entities=entities,
-        score_threshold=score_threshold,
-        include_dates=include_dates,
-        llm=llm,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
-    )
+    try:
+        cfg = _build_config(
+            mode=mode,
+            lang=lang,
+            config=config,
+            entities=entities,
+            score_threshold=score_threshold,
+            include_dates=include_dates,
+            llm=llm,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+        )
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(2) from exc
     # CLI flag wins over config default
     if keep_headers:
         cfg.keep_headers = True
@@ -633,8 +652,9 @@ def main(
         Optional[Path],
         typer.Option(
             "--config",
-            help="YAML config (mode, allowlist, denylist, …).",
-            exists=True,
+            help="YAML config (mode, allowlist, denylist, …). Supports ~/… paths.",
+            # exists checked after expand_user_path in _run_pipeline
+            # (Typer does not expand ~ before exists=True validation).
             dir_okay=False,
             rich_help_panel="Common",
         ),

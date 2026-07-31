@@ -11,7 +11,18 @@ def format_supported_extensions() -> str:
     return ", ".join(sorted(SUPPORTED_EXTENSIONS))
 
 
+def expand_user_path(path: Path) -> Path:
+    """Expand leading ``~`` / ``~user`` so shell-style home paths work.
+
+    Typer/Click pass Path values without expanding ``~``, so
+    ``~/Documents/x.pdf`` would otherwise be treated as a relative path
+    under a literal ``~`` directory.
+    """
+    return path.expanduser()
+
+
 def collect_inputs(path: Path) -> list[Path]:
+    path = expand_user_path(path)
     if path.is_file():
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise ValueError(
@@ -54,6 +65,7 @@ def default_output_path(
     mode: str = "strict",
 ) -> Path:
     """Choose a default Markdown path; never overwrite the source file."""
+    input_path = expand_user_path(input_path)
     if mode == "extract":
         # Prefer stem.md next to the source; avoid clobbering a .md input
         candidate = input_path.with_name(f"{input_path.stem}.md")
@@ -65,6 +77,7 @@ def default_output_path(
         name = f"{input_path.stem}.anonymized.md"
 
     if out_dir is not None:
+        out_dir = expand_user_path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / name
     return input_path.with_name(name)

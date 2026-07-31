@@ -37,6 +37,41 @@ def test_collect_and_output_paths(tmp_path: Path):
     assert out == tmp_path / "out" / "a.anonymized.md"
 
 
+def test_collect_inputs_expands_tilde(tmp_path: Path, monkeypatch):
+    """Shell-style ~/paths must resolve (Typer does not expand ~)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / "doc.txt"
+    f.write_text("hello", encoding="utf-8")
+    found = collect_inputs(Path("~/doc.txt"))
+    assert found == [f.expanduser()]
+    assert found[0].is_file()
+
+
+def test_collect_inputs_expands_tilde_directory(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    a = docs / "a.txt"
+    b = docs / "b.md"
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
+    (docs / "skip.bin").write_bytes(b"\x00")
+    found = collect_inputs(Path("~/docs"))
+    assert found == [a.expanduser(), b.expanduser()]
+
+
+def test_default_output_path_expands_tilde_out_dir(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    src = tmp_path / "src.txt"
+    src.write_text("x", encoding="utf-8")
+    out = default_output_path(src, Path("~/exports"))
+    assert out == (tmp_path / "exports" / "src.anonymized.md").expanduser()
+    assert out.parent.is_dir()
+    # Must not create a literal "~" directory under cwd
+    assert out.parts[0] != "~"
+    assert "~" not in out.parts
+
+
 def test_extract_docx_fixture():
     path = Path(__file__).parent / "fixtures" / "sample_en.docx"
     if not path.exists():

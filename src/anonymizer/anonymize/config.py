@@ -168,48 +168,96 @@ class AnonymizerConfig:
         return ents
 
 
+class ConfigError(ValueError):
+    """User-facing failure loading or interpreting a YAML config file."""
+
+
+def _format_yaml_error(path: Path, exc: yaml.YAMLError) -> str:
+    """Build a short, actionable message from a PyYAML exception."""
+    mark = getattr(exc, "problem_mark", None)
+    where = ""
+    if mark is not None:
+        # problem_mark is 0-based
+        where = f" at line {mark.line + 1}, column {mark.column + 1}"
+    problem = getattr(exc, "problem", None)
+    if problem:
+        detail = str(problem).strip().rstrip(".")
+    else:
+        detail = str(exc).strip().splitlines()[0]
+    return (
+        f"Invalid YAML in config file {path}{where}: {detail}. "
+        f"Check indentation and quotes (see config.example.yaml)."
+    )
+
+
 def load_config(path: Path | None) -> AnonymizerConfig:
     cfg = AnonymizerConfig()
     if path is None:
         return cfg
-    data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if "score_threshold" in data:
-        cfg.score_threshold = float(data["score_threshold"])
-    if "mode" in data and data["mode"]:
-        cfg.mode = normalize_mode(str(data["mode"]))
-    if "entities" in data and data["entities"] is not None:
-        cfg.entities = list(data["entities"])
-        cfg.entities_explicit = True
-    if "allowlist" in data and data["allowlist"] is not None:
-        # YAML allowlist replaces defaults when provided (including empty list)
-        cfg.allowlist = [str(x) for x in data["allowlist"]]
-    if "denylist" in data and data["denylist"]:
-        entries: list[DenylistEntry] = []
-        for item in data["denylist"]:
-            if isinstance(item, str):
-                entries.append(DenylistEntry(text=item, entity_type="ORG"))
-            elif isinstance(item, dict):
-                entries.append(
-                    DenylistEntry(
-                        text=str(item.get("text", "")),
-                        entity_type=str(item.get("entity_type", "ORG")),
+    path = path.expanduser()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Cannot read config file {path}: {exc}") from exc
+
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ConfigError(_format_yaml_error(path, exc)) from exc
+
+    if raw is None:
+        data: dict[str, Any] = {}
+    elif not isinstance(raw, dict):
+        raise ConfigError(
+            f"Config file {path} must be a YAML mapping (key: value pairs), "
+            f"not a {type(raw).__name__}. See config.example.yaml."
+        )
+    else:
+        data = raw
+
+    try:
+        if "score_threshold" in data:
+            cfg.score_threshold = float(data["score_threshold"])
+        if "mode" in data and data["mode"]:
+            cfg.mode = normalize_mode(str(data["mode"]))
+        if "entities" in data and data["entities"] is not None:
+            cfg.entities = list(data["entities"])
+            cfg.entities_explicit = True
+        if "allowlist" in data and data["allowlist"] is not None:
+            # YAML allowlist replaces defaults when provided (including empty list)
+            cfg.allowlist = [str(x) for x in data["allowlist"]]
+        if "denylist" in data and data["denylist"]:
+            entries: list[DenylistEntry] = []
+            for item in data["denylist"]:
+                if isinstance(item, str):
+                    entries.append(DenylistEntry(text=item, entity_type="ORG"))
+                elif isinstance(item, dict):
+                    entries.append(
+                        DenylistEntry(
+                            text=str(item.get("text", "")),
+                            entity_type=str(item.get("entity_type", "ORG")),
+                        )
                     )
-                )
-        cfg.denylist = [e for e in entries if e.text]
-    if "lang" in data and data["lang"]:
-        cfg.lang = str(data["lang"])
-    if "include_dates" in data:
-        cfg.include_dates = bool(data["include_dates"])
-    if "use_llm" in data:
-        cfg.use_llm = bool(data["use_llm"])
-    if "llm_provider" in data and data["llm_provider"]:
-        cfg.llm_provider = str(data["llm_provider"])
-    if "llm_model" in data:
-        cfg.llm_model = str(data["llm_model"]) if data["llm_model"] else None
-    if "ollama_url" in data and data["ollama_url"]:
-        cfg.ollama_url = str(data["ollama_url"])
-    if "keep_headers" in data:
-        cfg.keep_headers = bool(data["keep_headers"])
+            cfg.denylist = [e for e in entries if e.text]
+        if "lang" in data and data["lang"]:
+            cfg.lang = str(data["lang"])
+        if "include_dates" in data:
+            cfg.include_dates = bool(data["include_dates"])
+        if "use_llm" in data:
+            cfg.use_llm = bool(data["use_llm"])
+        if "llm_provider" in data and data["llm_provider"]:
+            cfg.llm_provider = str(data["llm_provider"])
+        if "llm_model" in data:
+            cfg.llm_model = str(data["llm_model"]) if data["llm_model"] else None
+        if "ollama_url" in data and data["ollama_url"]:
+            cfg.ollama_url = str(data["ollama_url"])
+        if "keep_headers" in data:
+            cfg.keep_headers = bool(data["keep_headers"])
+    except ConfigError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid config in {path}: {exc}") from exc
+
     # Apply mode preset when entities were not explicitly listed
     if not cfg.entities_explicit:
         cfg.entities = entities_for_mode(cfg.mode)
