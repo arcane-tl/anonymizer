@@ -106,3 +106,54 @@ def test_parenthetical_phone_engine_redacts():
     # Original surfaces in reverse map
     originals = set(r.mapping.values())
     assert any("040" in v and "123" in v for v in originals)
+
+
+def test_unlabeled_international_phones_redacted_at_default_threshold():
+    """Presidio scores unlabeled +1/+44 phones ~0.4; default threshold is 0.5.
+
+    Without a phone floor these numbers leak in clear text.
+    """
+    from anonymizer.anonymize.config import AnonymizerConfig
+    from anonymizer.anonymize.engine import DocumentAnonymizer
+
+    text = (
+        "Call +1 (415) 555-0199 today or reach the London desk at "
+        "+44 20 7946 0958 for support."
+    )
+    cfg = AnonymizerConfig(mode="strict", lang="en", use_llm=False)
+    cfg.apply_mode()
+    # Explicit default — the bug is specific to threshold 0.5
+    assert cfg.score_threshold == 0.5
+    r = DocumentAnonymizer(cfg).anonymize_text(text, lang_flag="en")
+    out = r.anonymized_text
+    assert "+1 (415) 555-0199" not in out, out
+    assert "+44 20 7946 0958" not in out, out
+    assert "[PHONE_" in out
+    originals = set(r.mapping.values())
+    assert "+1 (415) 555-0199" in originals
+    assert "+44 20 7946 0958" in originals
+
+
+def test_y_tunnus_not_kept_as_low_confidence_phone():
+    """Presidio often tags Y-tunnus as PHONE at 0.4 — must not promote it."""
+    from anonymizer.anonymize.config import AnonymizerConfig
+    from anonymizer.anonymize.engine import (
+        DocumentAnonymizer,
+        _is_y_tunnus_like_phone_fp,
+        _looks_like_international_phone,
+    )
+
+    assert _is_y_tunnus_like_phone_fp("0737546-2")
+    assert not _looks_like_international_phone("0737546-2")
+    assert not _looks_like_international_phone("1640")
+    assert not _looks_like_international_phone("2025-01-01-11")
+    assert _looks_like_international_phone("+1 (415) 555-0199")
+
+    # standard mode does not redact FI_BUSINESS_ID — Y-tunnus must stay clear
+    # (not promoted to PHONE via the low-confidence floor)
+    text = "Y-tunnus 0737546-2 on julkinen tunniste."
+    cfg = AnonymizerConfig(mode="standard", lang="fi", use_llm=False)
+    cfg.apply_mode()
+    r = DocumentAnonymizer(cfg).anonymize_text(text, lang_flag="fi")
+    assert "0737546-2" in r.anonymized_text
+    assert not any("0737546-2" in v for v in r.mapping.values())

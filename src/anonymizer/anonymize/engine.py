@@ -468,6 +468,57 @@ def _spacy_ner_results(
     return results
 
 
+# Presidio's context-free international phones often score ~0.4; default
+# score_threshold is 0.5, which silently drops unlabeled +1 / +44 numbers.
+_PHONE_LOW_CONFIDENCE_FLOOR = 0.4
+
+
+def _is_y_tunnus_like_phone_fp(surface: str) -> bool:
+    """Y-tunnus ``1234567-8`` is a common Presidio PHONE false positive."""
+    return bool(re.fullmatch(r"\d{7}-\d", surface.strip()))
+
+
+def _looks_like_international_phone(surface: str) -> bool:
+    """Shape check for low-confidence Presidio PHONE hits (not FI-national)."""
+    s = surface.strip()
+    if not s or _is_y_tunnus_like_phone_fp(s):
+        return False
+    # Date-like runs: 2025-01-01-11
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return False
+    digits = re.sub(r"\D", "", s)
+    if not (10 <= len(digits) <= 15):
+        return False
+    if s.startswith("+"):
+        return True
+    # National-style with separators: (415) 555-0199
+    if re.search(r"[\s\-()./]", s):
+        return True
+    return False
+
+
+def _keep_pattern_result(
+    r: RecognizerResult,
+    text: str,
+    score_threshold: float,
+) -> bool:
+    """Filter Presidio hits; allow validated low-score international phones."""
+    if r.entity_type == "URL":
+        return is_real_web_url(text[r.start : r.end])
+    if r.entity_type != "PHONE_NUMBER":
+        return r.score >= score_threshold
+    surface = text[r.start : r.end]
+    if _is_y_tunnus_like_phone_fp(surface):
+        return False
+    if r.score >= score_threshold:
+        return True
+    # Low-confidence band: only keep plausible international-style numbers
+    return (
+        r.score >= _PHONE_LOW_CONFIDENCE_FLOOR
+        and _looks_like_international_phone(surface)
+    )
+
+
 def _pattern_results(
     text: str,
     entities: list[str],
@@ -494,24 +545,24 @@ def _pattern_results(
         if not ent_list:
             return _standalone_pattern_recognizers(text, entities)
 
+    # Pull phones slightly below the default threshold so unlabeled
+    # international numbers are not dropped; non-phone types are re-filtered.
+    analyze_threshold = score_threshold
+    if "PHONE_NUMBER" in ent_list:
+        analyze_threshold = min(score_threshold, _PHONE_LOW_CONFIDENCE_FLOOR)
+
     try:
         found = analyzer.analyze(
             text=text,
             language="en",
             entities=ent_list,
-            score_threshold=score_threshold,
+            score_threshold=analyze_threshold,
         )
     except Exception as exc:
         logger.warning("Presidio pattern analyze failed: %s", exc)
         found = []
 
-    # Drop Presidio bare-domain "URLs" (christofer.sj, bestcaravan.fi) —
-    # only keep real web links; our WebUrlRecognizer adds http/www hits.
-    found = [
-        r
-        for r in found
-        if r.entity_type != "URL" or is_real_web_url(text[r.start : r.end])
-    ]
+    found = [r for r in found if _keep_pattern_result(r, text, score_threshold)]
 
     # Always run custom patterns (FI IDs, plates, URLs, streets, company suffixes)
     found.extend(_standalone_pattern_recognizers(text, entities))
