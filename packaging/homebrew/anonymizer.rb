@@ -1,14 +1,11 @@
 # Homebrew formula for anonymizer (CLI: anonymize).
 #
-# Homebrew 4+ requires formulae to live in a tap (not a bare path).
+# Public install:
+#   brew tap arcane-tl/anonymizer
+#   brew install anonymizer
 #
-# Quick install from a clone:
-#   brew tap-new arcane-tl/anonymizer   # once, if needed
-#   cp packaging/homebrew/anonymizer.rb "$(brew --repository arcane-tl/anonymizer)/Formula/"
-#   brew install --HEAD arcane-tl/anonymizer/anonymizer
-#
-# After v1.0.0 is tagged and sha256 is set (stable):
-#   brew install arcane-tl/anonymizer/anonymizer
+# Source of truth is mirrored to:
+#   https://github.com/arcane-tl/homebrew-anonymizer
 #
 # Docs: packaging/homebrew/README.md
 
@@ -19,9 +16,8 @@ class Anonymizer < Formula
   homepage "https://github.com/arcane-tl/anonymizer"
   license "MIT"
 
-  # Stable tarball — replace sha256 after `git tag v1.0.0` is pushed to GitHub
   url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "REPLACE_AFTER_TAGGING_V1_0_0"
+  sha256 "952b6dd62ae4f1347e866331df6c390b9c3a799e979dd75c8f876a90477194d9"
   version "1.0.0"
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"

@@ -9,21 +9,14 @@ Local Mac CLI: **PDF / DOCX / text → Markdown**, with optional PII redaction (
 ### Install (macOS) — Homebrew (recommended)
 
 ```bash
-# From a clone: install formula into a local tap, then brew install
-brew tap-new --no-git arcane-tl/anonymizer 2>/dev/null || true
-cp packaging/homebrew/anonymizer.rb \
-  "$(brew --repository arcane-tl/anonymizer)/Formula/anonymizer.rb"
-brew install --HEAD arcane-tl/anonymizer/anonymizer
-
-# After v1.0.0 is tagged and sha256 is set in the formula:
-# brew install arcane-tl/anonymizer/anonymizer
+brew tap arcane-tl/anonymizer
+brew install anonymizer
 
 anonymize doctor
 anonymize --version   # anonymizer 1.0.0
 ```
 
 See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH conflicts, models, and upgrades.
-
 ### Install (macOS) — curl installer (alternative)
 
 ```bash
