@@ -1,6 +1,6 @@
 # anonymizer
 
-Local Mac CLI: **PDF / DOCX / text → Markdown**, with optional PII redaction (English + Finnish). Offline by default.
+Local CLI (**macOS** + **Windows**): **PDF / DOCX / text → Markdown**, with optional PII redaction (English + Finnish). Offline by default.
 
 > **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
 
@@ -24,6 +24,26 @@ curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/i
 # New terminal (or: export PATH="$HOME/.local/bin:$PATH")
 anonymize doctor
 ```
+
+### Install (Windows)
+
+```powershell
+# Download and run (PowerShell)
+irm https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes
+
+# Or from a git clone:
+.\scripts\install.ps1 -Yes -FromSource
+
+anonymize doctor
+anonymize --version
+```
+
+Default install: `%LOCALAPPDATA%\anonymizer` with `anonymize.cmd` on your user PATH.  
+spaCy models default to **sm** (use `-Models lg` for large).  
+Optional OCR: install [Tesseract for Windows](https://github.com/UB-Mannheim/tesseract/wiki) and put it on PATH.
+
+Uninstall: `& "$env:LOCALAPPDATA\anonymizer\scripts\uninstall.ps1" -Yes`
 
 ### Optional Mac GUI
 
@@ -107,6 +127,25 @@ There is **no telemetry** in this application.
 | Structural tokens (e.g. legal form `Oy`, street ending `katu`) as *patterns* | A catalog of real suppliers hard-coded in the app |
 
 The library does **not** ship a search list of real-world companies or people. Versatility comes from patterns, heuristics, models, and optional LLM — plus any denylist you supply.
+
+## Install (Windows)
+
+| Flag | Meaning |
+|------|---------|
+| `-Yes` | Non-interactive |
+| `-FromSource` | Use current clone (editable install) |
+| `-Models sm\|lg` | spaCy model size (default **sm**) |
+| `-WithDev` | Also install pytest |
+| `-Prefix DIR` | Install root (default `%LOCALAPPDATA%\anonymizer`) |
+| `-BinDir DIR` | Launcher dir (default `%LOCALAPPDATA%\anonymizer\bin`) |
+| `-Python PATH` | Specific Python 3.11+ executable |
+
+```powershell
+irm https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes
+```
+
+Requires **Python 3.11+** and **git** on PATH.
 
 ## Install (macOS)
 
