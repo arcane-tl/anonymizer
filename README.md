@@ -6,16 +6,42 @@ Local Mac CLI: **PDF / DOCX / text → Markdown**, with optional PII redaction (
 
 ## Quick start
 
-```bash
-# Install once (macOS)
-curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
+### Install (macOS) — Homebrew (recommended)
 
+```bash
+# From a clone: install formula into a local tap, then brew install
+brew tap-new --no-git arcane-tl/anonymizer 2>/dev/null || true
+cp packaging/homebrew/anonymizer.rb \
+  "$(brew --repository arcane-tl/anonymizer)/Formula/anonymizer.rb"
+brew install --HEAD arcane-tl/anonymizer/anonymizer
+
+# After v1.0.0 is tagged and sha256 is set in the formula:
+# brew install arcane-tl/anonymizer/anonymizer
+
+anonymize doctor
+anonymize --version   # anonymizer 1.0.0
+```
+
+See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH conflicts, models, and upgrades.
+
+### Install (macOS) — curl installer (alternative)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
 # New terminal (or: export PATH="$HOME/.local/bin:$PATH")
 anonymize doctor
+```
 
-# Optional Mac GUI (drag-and-drop; branch feature/macos-gui — see packaging/macos/README.md)
-# ./packaging/macos/install-app.sh
+### Optional Mac GUI
 
+```bash
+# Drag-and-drop app (requires anonymize on PATH — brew or curl install)
+./packaging/macos/install-app.sh
+```
+
+### Use
+
+```bash
 # Full scrub (default) → contract.anonymized.md
 anonymize contract.pdf
 
@@ -91,9 +117,19 @@ The library does **not** ship a search list of real-world companies or people. V
 
 ## Install (macOS)
 
-### One-liner (recommended)
+### Homebrew (recommended)
 
-Installs the app under `~/.local/share/anonymizer`, puts `anonymize` on your PATH (`~/.local/bin`), installs OCR packages via Homebrew when available, and downloads English + Finnish spaCy models.
+See [Quick start](#quick-start) and [packaging/homebrew/README.md](packaging/homebrew/README.md).
+
+From a clone you can also run:
+
+```bash
+./packaging/homebrew/install-local.sh
+```
+
+### curl installer (alternative)
+
+Installs under `~/.local/share/anonymizer`, puts `anonymize` on `~/.local/bin`, optional OCR via Homebrew, spaCy models (default **lg**).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
