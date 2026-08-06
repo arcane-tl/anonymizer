@@ -33,6 +33,7 @@ anonymize --version   # anonymizer 1.0.0
 |---------|-----|
 | No Cask with this name exists | Run `brew tap arcane-tl/anonymizer` first |
 | Refusing to load … from untrusted tap | `brew trust arcane-tl/anonymizer` (note the final **r** — not `anonymize`) |
+| **“Anonymizer is damaged…”** (Gatekeeper) | `brew update && brew reinstall --cask anonymizer` (need notarized cask). Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
 
 See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH, models, and upgrades.
 

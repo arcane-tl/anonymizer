@@ -27,6 +27,10 @@ htmlcov/
 # Local env / secrets
 .env
 .env.*
+AuthKey_*.p8
+**/*.p8
+*.cer
+*.p12
 
 # Tool outputs (may contain residual or mapped PII)
 *.anonymized.md

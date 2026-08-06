@@ -5,10 +5,11 @@
 #   brew install --cask anonymizer       # GUI (this cask)
 #
 # Finder name is always Anonymizer.app — same product as the CLI "anonymize".
+# Release zip should be Developer ID–signed + notarized (see packaging/macos/release-app.sh).
 
 cask "anonymizer" do
-  version "1.0.0"
-  sha256 "c5b7ae96b9a70aa5fccb193a9933570d236ca2226a70901bb6a3f37d43e8dfcf"
+  version "1.0.1"
+  sha256 "cdf5ebfc561843a383de7be33f1f5e8ed72dff21523c1b23c6335443dcdbf6db"
 
   url "https://github.com/arcane-tl/anonymizer/releases/download/v#{version}/Anonymizer-#{version}.zip"
   name "Anonymizer"
@@ -19,6 +20,13 @@ cask "anonymizer" do
   depends_on macos: :catalina
   app "Anonymizer.app"
 
+  # Belt-and-suspenders: clear download quarantine so Gatekeeper uses the
+  # stapled notarization ticket (or local trust) without a false "damaged" dialog.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-cr", "#{appdir}/Anonymizer.app"]
+  end
+
   zap trash: [
     "~/Library/Caches/com.apple.iconservices.store",
   ]
@@ -26,5 +34,10 @@ cask "anonymizer" do
   caveats <<~EOS
     Anonymizer.app calls the anonymize CLI (from: brew install anonymizer).
     Ensure `anonymize` works in Terminal before using drag-and-drop.
+
+    If macOS says the app is "damaged" (old unsigned zip):
+      brew reinstall --cask anonymizer
+    or:
+      xattr -cr /Applications/Anonymizer.app
   EOS
 end

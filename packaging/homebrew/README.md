@@ -43,6 +43,8 @@ Tap repository: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/hom
 | `Refusing to load … from untrusted tap` | `brew trust arcane-tl/anonymizer` (not `…/anonymize` — note the **r**) |
 | Trust formula but cask still fails | Trust whole tap, or also `brew trust --cask arcane-tl/anonymizer/anonymizer` |
 | App already at `/Applications/Anonymizer.app` | `brew reinstall --cask --force anonymizer` |
+| **“Anonymizer is damaged and can't be opened”** | Update cask to a **notarized** build (`brew update && brew reinstall --cask anonymizer`). Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
+| lingua “Failed changing dylib ID” | Harmless wheel linkage warning; ignore if `anonymize --version` works |
 
 ## CLI only
 
@@ -101,18 +103,25 @@ cp packaging/homebrew/Casks/anonymizer.rb \
   "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer.rb"
 ```
 
-Rebuild the app zip for a new version:
+### Rebuild a **notarized** app zip (required for other Macs)
+
+Do **not** ship a raw `install-app.sh` zip — Gatekeeper reports it as “damaged”
+(unsigned / signature broken after icon plist edits).
 
 ```bash
-./packaging/macos/install-app.sh --dest /tmp/anon-stage
-ditto -c -k --sequesterRsrc --keepParent \
-  /tmp/anon-stage/Anonymizer.app /tmp/Anonymizer-VERSION.zip
-shasum -a 256 /tmp/Anonymizer-VERSION.zip
-# upload to GitHub Release; update sha256 in Casks/anonymizer.rb
+# Prerequisites: Developer ID Application in Keychain + notarytool profile
+# (see packaging/macos/README.md → Release)
+
+./packaging/macos/release-app.sh --version 1.0.1
+# → dist/Anonymizer-1.0.1.zip + sha256
+
+# upload dist/Anonymizer-1.0.1.zip to GitHub Release v1.0.1
+# set version + sha256 in Casks/anonymizer.rb, then sync tap (above)
 ```
 
 ## Local GUI without cask
 
 ```bash
 ./packaging/macos/install-app.sh --dest /Applications
+# ad-hoc signed for local dev only — not for distribution
 ```

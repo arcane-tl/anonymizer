@@ -4,19 +4,24 @@
 # Usage:
 #   ./packaging/macos/install-app.sh
 #   ./packaging/macos/install-app.sh --dest /Applications
+#   ./packaging/macos/install-app.sh --dest /tmp/stage --no-sign   # for release-app.sh
+#
+# Production releases (Developer ID + notarization): use release-app.sh instead.
 #
 # Requires: macOS with osacompile (Xcode CLT not required for osacompile).
-# The app calls the anonymize CLI (install that first via scripts/install.sh).
+# The app calls the anonymize CLI (install that first via scripts/install.sh or brew).
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST_DIR="${HOME}/Applications"
 NAME="Anonymizer.app"
+DO_SIGN=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dest) DEST_DIR="$2"; shift 2 ;;
+    --no-sign) DO_SIGN=0; shift ;;
     -h|--help)
       sed -n '1,20p' "$0"
       exit 0
@@ -97,7 +102,22 @@ rm -f "$TARGET/Icon"$'\r' 2>/dev/null || true
 # Clear custom-icon bit in FinderInfo if xattr tools available
 if command -v xattr >/dev/null 2>&1; then
   xattr -d com.apple.FinderInfo "$TARGET" 2>/dev/null || true
-  xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
+  xattr -cr "$TARGET" 2>/dev/null || true
+fi
+
+# IMPORTANT: osacompile signs the bundle; editing Info.plist/.icns above invalidates
+# that signature ("damaged" under Gatekeeper). Re-seal after all mutations.
+# Production: release-app.sh re-signs with Developer ID + notarizes (use --no-sign).
+# Dev default: ad-hoc sign so local installs are at least self-consistent.
+if [[ "$DO_SIGN" -eq 1 ]]; then
+  if command -v codesign >/dev/null 2>&1; then
+    echo "==> Ad-hoc codesign (dev). For distribution use: packaging/macos/release-app.sh"
+    codesign --force --deep --sign - "$TARGET"
+    codesign --verify --deep --strict "$TARGET" 2>/dev/null \
+      || echo "warning: codesign --verify reported issues (dev install may still work)" >&2
+  fi
+else
+  echo "==> Skipping codesign (--no-sign); release-app.sh will seal with Developer ID"
 fi
 
 # Re-register with Launch Services and bust icon caches
