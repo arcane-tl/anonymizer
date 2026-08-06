@@ -37,6 +37,14 @@ Custom icon assets live in `packaging/macos/icons/`:
 
 Theme: document with redacted lines + magnifying glass and lock, **transparent** plate so Finder shows a clean floating icon.
 
+If Finder still shows the default AppleScript “document arrow” icon after install:
+
+```bash
+brew install fileicon   # once
+./packaging/macos/install-app.sh
+# then: open ~/Applications, or log out/in if the Dock caches the old icon
+```
+
 ## Use — one options window
 
 1. Drop files onto **Anonymizer** (or double-click → pick files).
