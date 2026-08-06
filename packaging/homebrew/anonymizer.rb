@@ -48,28 +48,28 @@ class Anonymizer < Formula
 
   def caveats
     <<~EOS
-      Verify the install:
+      Product: Anonymizer
+      CLI command: anonymize
+
+      Verify:
         anonymize doctor
         anonymize --version
 
-      A harmless linkage warning may appear for the lingua language-detection
-      wheel during install; the CLI still runs. Prefer:
-        $(brew --prefix)/opt/anonymizer/bin/anonymize --version
+      Drag-and-drop app (same product, opens in Applications):
+        brew install --cask anonymizer
+      → /Applications/Anonymizer.app
 
-      If `anonymize` still points at ~/.local/bin (curl installer), either
-      put Homebrew first on PATH or run:
+      If `anonymize` is shadowed by ~/.local/bin, put Homebrew first on PATH or:
         brew link --overwrite anonymizer
 
-      spaCy models (installed by default): en_core_web_sm, fi_core_news_sm
-      For higher accuracy (larger download):
+      spaCy models (default): en_core_web_sm, fi_core_news_sm
+      Larger models:
         #{libexec}/bin/python -m spacy download en_core_web_lg
         #{libexec}/bin/python -m spacy download fi_core_news_lg
 
-      Optional OCR (scanned PDFs): brew install tesseract tesseract-lang ocrmypdf
+      Optional OCR: brew install tesseract tesseract-lang ocrmypdf
 
-      Mac drag-and-drop GUI (optional):
-        git clone https://github.com/arcane-tl/anonymizer.git
-        cd anonymizer && ./packaging/macos/install-app.sh
+      A harmless linkage warning for the lingua wheel may appear; the CLI still works.
     EOS
   end
 
