@@ -31,10 +31,11 @@ Custom icon assets live in `packaging/macos/icons/`:
 |------|-----|
 | `Anonymizer.icns` | Installed app icon (applied by `install-app.sh`) |
 | `Anonymizer-1024.png` | Master PNG |
-| `icon-detailed.jpg` | Detailed logo variant (chosen design) |
-| `icon-simple.jpg` | Simpler high-contrast variant |
+| `source-user-choice.png` | Original selected artwork |
+| `icon-polished.jpg` | Professional polish pass used for the app |
+| `icon-small-optimized.jpg` | Stronger contrast variant for tiny sizes |
 
-Theme: document dissolving into an anonymous privacy mask (teal / navy).
+Theme: document with redacted lines + magnifying glass and lock (inspect / protect PII).
 
 ## Use — one options window
 
