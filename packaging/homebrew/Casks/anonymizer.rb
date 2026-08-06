@@ -16,8 +16,7 @@ cask "anonymizer" do
   homepage "https://github.com/arcane-tl/anonymizer"
 
   depends_on formula: "anonymizer"
-  depends_on macos: ">= :catalina"
-
+  depends_on macos: :catalina
   app "Anonymizer.app"
 
   zap trash: [
