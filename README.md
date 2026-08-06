@@ -11,6 +11,7 @@ Local CLI (**macOS** + **Windows**): **PDF / DOCX / text → Markdown**, with op
 One product: **Anonymizer**. Terminal command: **`anonymize`**. Finder app: **`Anonymizer`**.
 
 ```bash
+# Third-party tap is required (not in official homebrew/cask)
 brew tap arcane-tl/anonymizer
 
 # CLI (required)
@@ -21,6 +22,14 @@ brew install --cask anonymizer
 
 anonymize doctor
 anonymize --version   # anonymizer 1.0.0
+```
+
+If you skip the tap, bare `brew install --cask anonymizer` fails with
+“No Cask with this name exists.” Use the tap first, or the fully qualified form
+(which auto-taps):
+
+```bash
+brew install --cask arcane-tl/anonymizer/anonymizer
 ```
 
 See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH, models, and upgrades.

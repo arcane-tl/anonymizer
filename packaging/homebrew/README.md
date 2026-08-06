@@ -22,7 +22,22 @@ anonymize doctor
 open -a Anonymizer
 ```
 
+**Important:** `anonymizer` is **not** in the official Homebrew Cask catalogue.
+You must `brew tap arcane-tl/anonymizer` first, or use a fully qualified install
+(auto-taps):
+
+```bash
+brew install --cask arcane-tl/anonymizer/anonymizer
+```
+
 Tap repository: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/homebrew-anonymizer)
+
+### Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `Cask 'anonymizer' is unavailable: No Cask with this name exists` | Run `brew tap arcane-tl/anonymizer`, then retry; or `brew install --cask arcane-tl/anonymizer/anonymizer` |
+| App already at `/Applications/Anonymizer.app` | `brew reinstall --cask --force anonymizer` |
 
 ## CLI only
 
