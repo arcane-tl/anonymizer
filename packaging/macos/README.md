@@ -38,6 +38,8 @@ Custom icon assets live in `packaging/macos/icons/`:
 Theme: document + magnifying glass + lock on a **dark macOS squircle** plate
 (matches Applications folder neighbors: rounded corners, graphite fill, transparent outside the plate only).
 
+Master artwork: Imagine result `icon-mac-plate-a.jpg` (session `images/11.jpg`) — not the alternate PIL composite.
+
 If Finder still shows the default AppleScript “document arrow” icon after install:
 
 ```bash
