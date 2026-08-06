@@ -35,10 +35,11 @@ Custom icon assets live in `packaging/macos/icons/`:
 | `source-user-choice.png` | Original selected artwork |
 | `icon-small-optimized.jpg` | Small-size optimized source before alpha |
 
-Theme: document + magnifying glass + lock on a **dark macOS squircle** plate
-(matches Applications folder neighbors: rounded corners, graphite fill, transparent outside the plate only).
+Theme: document + magnifying glass + lock on a **full-bleed dark plate**.
 
-Master artwork: Imagine result `icon-mac-plate-a.jpg` (session `images/11.jpg`) — not the alternate PIL composite.
+**Important:** masters are **opaque 1024×1024 squares** (no pre-rounded transparent
+corners). macOS applies the continuous squircle mask itself—pre-rounding caused a
+double-frame look next to App Store / Calculator / Chess.
 
 If Finder still shows the default AppleScript “document arrow” icon after install:
 
