@@ -23,6 +23,19 @@ chmod +x packaging/macos/install-app.sh packaging/macos/run-anonymize.sh
 # → ~/Applications/Anonymizer.app
 ```
 
+### App icon
+
+Custom icon assets live in `packaging/macos/icons/`:
+
+| File | Use |
+|------|-----|
+| `Anonymizer.icns` | Installed app icon (applied by `install-app.sh`) |
+| `Anonymizer-1024.png` | Master PNG |
+| `icon-detailed.jpg` | Detailed logo variant (chosen design) |
+| `icon-simple.jpg` | Simpler high-contrast variant |
+
+Theme: document dissolving into an anonymous privacy mask (teal / navy).
+
 ## Use — one options window
 
 1. Drop files onto **Anonymizer** (or double-click → pick files).

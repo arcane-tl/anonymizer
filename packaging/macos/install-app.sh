@@ -54,8 +54,22 @@ mkdir -p "$RES"
 cp "$HERE/run-anonymize.sh" "$RES/run-anonymize.sh"
 chmod +x "$RES/run-anonymize.sh"
 
-# Optional: keep a copy of the helper next to the script for debugging
-# Bundle identifier-ish via Info.plist tweak is optional for MVP
+# Custom app icon (document → anonymous mask)
+ICNS="$HERE/icons/Anonymizer.icns"
+if [[ -f "$ICNS" ]]; then
+  echo "==> Applying custom icon…"
+  cp "$ICNS" "$RES/Anonymizer.icns"
+  # Replace default droplet icon when present
+  if [[ -f "$RES/droplet.icns" ]]; then
+    cp "$ICNS" "$RES/droplet.icns"
+  fi
+  PLIST="$STAGE/Contents/Info.plist"
+  if [[ -f "$PLIST" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile Anonymizer" "$PLIST" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string Anonymizer" "$PLIST" 2>/dev/null \
+      || true
+  fi
+fi
 
 TARGET="$DEST_DIR/$NAME"
 if [[ -e "$TARGET" ]]; then
@@ -63,6 +77,11 @@ if [[ -e "$TARGET" ]]; then
   rm -rf "$TARGET"
 fi
 mv "$STAGE" "$TARGET"
+
+# Refresh Finder icon cache for the installed app
+if [[ -f "$ICNS" ]] && command -v touch >/dev/null 2>&1; then
+  touch "$TARGET"
+fi
 
 # Clear quarantine if present (user-downloaded repo)
 if command -v xattr >/dev/null 2>&1; then
