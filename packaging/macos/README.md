@@ -30,12 +30,12 @@ Custom icon assets live in `packaging/macos/icons/`:
 | File | Use |
 |------|-----|
 | `Anonymizer.icns` | Installed app icon (applied by `install-app.sh`) |
-| `Anonymizer-1024.png` | Master PNG |
+| `Anonymizer-transparent.png` | Master **RGBA** (transparent background) |
+| `Anonymizer-1024.png` | 1024 master PNG with alpha |
 | `source-user-choice.png` | Original selected artwork |
-| `icon-polished.jpg` | Professional polish pass used for the app |
-| `icon-small-optimized.jpg` | Stronger contrast variant for tiny sizes |
+| `icon-small-optimized.jpg` | Small-size optimized source before alpha |
 
-Theme: document with redacted lines + magnifying glass and lock (inspect / protect PII).
+Theme: document with redacted lines + magnifying glass and lock, **transparent** plate so Finder shows a clean floating icon.
 
 ## Use — one options window
 
