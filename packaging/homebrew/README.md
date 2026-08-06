@@ -15,6 +15,7 @@ Same product, two install mechanisms (Homebrew standard):
 
 ```bash
 brew tap arcane-tl/anonymizer
+brew trust arcane-tl/anonymizer    # Homebrew 6+ required once
 brew install anonymizer
 brew install --cask anonymizer
 
@@ -22,11 +23,13 @@ anonymize doctor
 open -a Anonymizer
 ```
 
-**Important:** `anonymizer` is **not** in the official Homebrew Cask catalogue.
-You must `brew tap arcane-tl/anonymizer` first, or use a fully qualified install
-(auto-taps):
+**Important:** `anonymizer` is **not** in official `homebrew/core` or `homebrew/cask`.
+You must **tap** and **trust** first.
+
+Fully qualified form (auto-taps; still needs trust):
 
 ```bash
+brew trust arcane-tl/anonymizer
 brew install --cask arcane-tl/anonymizer/anonymizer
 ```
 
@@ -36,7 +39,9 @@ Tap repository: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/hom
 
 | Error | Fix |
 |-------|-----|
-| `Cask 'anonymizer' is unavailable: No Cask with this name exists` | Run `brew tap arcane-tl/anonymizer`, then retry; or `brew install --cask arcane-tl/anonymizer/anonymizer` |
+| `No Cask with this name exists` | `brew tap arcane-tl/anonymizer` |
+| `Refusing to load … from untrusted tap` | `brew trust arcane-tl/anonymizer` (not `…/anonymize` — note the **r**) |
+| Trust formula but cask still fails | Trust whole tap, or also `brew trust --cask arcane-tl/anonymizer/anonymizer` |
 | App already at `/Applications/Anonymizer.app` | `brew reinstall --cask --force anonymizer` |
 
 ## CLI only
