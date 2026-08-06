@@ -47,3 +47,4 @@ models/
 # macOS GUI: compile with packaging/macos/install-app.sh (do not commit bundles)
 packaging/macos/*.app/
 **/Anonymizer.app/
+packaging/macos/icons/Anonymizer.iconset/

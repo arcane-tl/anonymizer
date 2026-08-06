@@ -23,6 +23,33 @@ chmod +x packaging/macos/install-app.sh packaging/macos/run-anonymize.sh
 # → ~/Applications/Anonymizer.app
 ```
 
+### App icon
+
+Custom icon assets live in `packaging/macos/icons/`:
+
+| File | Use |
+|------|-----|
+| `Anonymizer.icns` | Installed app icon (applied by `install-app.sh`) |
+| `Anonymizer-transparent.png` | Master **RGBA** (transparent background) |
+| `Anonymizer-1024.png` | 1024 master PNG with alpha |
+| `source-user-choice.png` | Original selected artwork |
+| `icon-small-optimized.jpg` | Small-size optimized source before alpha |
+
+Theme: document + magnifying glass + lock on a **full-bleed dark plate**.
+
+**Important:** masters are **opaque 1024×1024 squares** (no pre-rounded transparent
+corners). macOS applies the continuous squircle mask itself—pre-rounding caused a
+double-frame look next to App Store / Calculator / Chess.
+
+Icons are **bundle `.icns` only** (full-bleed square). macOS applies the
+rounded squircle. Do **not** use `fileicon set` on the app — that draws a
+sharp custom square and breaks size/shape next to other apps.
+
+```bash
+./packaging/macos/install-app.sh
+# If the Dock is stale: remove Anonymizer from Dock, reopen Applications (⌘R)
+```
+
 ## Use — one options window
 
 1. Drop files onto **Anonymizer** (or double-click → pick files).

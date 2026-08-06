@@ -1,6 +1,6 @@
 # anonymizer
 
-Local Mac CLI: **PDF / DOCX / text → Markdown**, with optional PII redaction (English + Finnish). Offline by default.
+Local CLI (**macOS** + **Windows**): **PDF / DOCX / text → Markdown**, with optional PII redaction (English + Finnish). Offline by default.
 
 > **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
 
@@ -8,28 +8,31 @@ Local Mac CLI: **PDF / DOCX / text → Markdown**, with optional PII redaction (
 
 ### Install (macOS) — Homebrew (recommended)
 
+One product: **Anonymizer**. Terminal command: **`anonymize`**. Finder app: **`Anonymizer`**.
+
 ```bash
 brew tap arcane-tl/anonymizer
+
+# CLI (required)
 brew install anonymizer
+
+# Drag-and-drop app → /Applications/Anonymizer.app (optional)
+brew install --cask anonymizer
 
 anonymize doctor
 anonymize --version   # anonymizer 1.0.0
 ```
 
-See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH conflicts, models, and upgrades.
+See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH, models, and upgrades.
+
 ### Install (macOS) — curl installer (alternative)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
 # New terminal (or: export PATH="$HOME/.local/bin:$PATH")
 anonymize doctor
-```
-
-### Optional Mac GUI
-
-```bash
-# Drag-and-drop app (requires anonymize on PATH — brew or curl install)
-./packaging/macos/install-app.sh
+# Optional GUI from a clone:
+# ./packaging/macos/install-app.sh --dest /Applications
 ```
 
 ### Use
