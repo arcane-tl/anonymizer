@@ -54,72 +54,59 @@ mkdir -p "$RES"
 cp "$HERE/run-anonymize.sh" "$RES/run-anonymize.sh"
 chmod +x "$RES/run-anonymize.sh"
 
-# Custom app icon (document + magnifier/lock)
-# Modern macOS prefers CFBundleIconName + Assets.car (default droplet art).
-# Force our .icns to win by replacing every default icon resource.
+# Custom app icon (document + magnifier/lock), full-bleed square .icns.
+# Do NOT use `fileicon set` — Finder custom icons skip the system squircle
+# and look sharp-cornered / wrong size next to real app icons.
 ICNS="$HERE/icons/Anonymizer.icns"
-PNG="$HERE/icons/Anonymizer-transparent.png"
-if [[ ! -f "$PNG" ]]; then
-  PNG="$HERE/icons/Anonymizer-1024.png"
-fi
 if [[ -f "$ICNS" ]]; then
-  echo "==> Applying custom icon…"
+  echo "==> Applying bundle icon (system will apply rounded corners)…"
   cp "$ICNS" "$RES/Anonymizer.icns"
   cp "$ICNS" "$RES/droplet.icns"
   cp "$ICNS" "$RES/applet.icns" 2>/dev/null || true
-  # Asset catalog overrides CFBundleIconFile on recent macOS — remove it
-  rm -f "$RES/Assets.car"
-  # Legacy resource-fork icon from osacompile
-  rm -f "$RES/droplet.rsrc" "$RES/applet.rsrc"
+  # Asset catalog / legacy rsrc override CFBundleIconFile on recent macOS
+  rm -f "$RES/Assets.car" "$RES/droplet.rsrc" "$RES/applet.rsrc"
 
   PLIST="$STAGE/Contents/Info.plist"
   if [[ -f "$PLIST" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile Anonymizer" "$PLIST" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string Anonymizer" "$PLIST" 2>/dev/null \
       || true
-    # Point named icon at our file, not "droplet"
-    /usr/libexec/PlistBuddy -c "Set :CFBundleIconName Anonymizer" "$PLIST" 2>/dev/null \
-      || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string Anonymizer" "$PLIST" 2>/dev/null \
-      || true
+    # Named asset-catalog icons (CFBundleIconName) force "droplet" defaults —
+    # delete so only CFBundleIconFile (.icns) is used.
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" 2>/dev/null || true
   fi
 fi
 
 TARGET="$DEST_DIR/$NAME"
 if [[ -e "$TARGET" ]]; then
   echo "==> Replacing existing $TARGET"
+  # Drop any previous Finder custom icon (Icon\r) so the bundle icon is used
+  if command -v fileicon >/dev/null 2>&1; then
+    fileicon rm "$TARGET" 2>/dev/null || true
+  fi
+  rm -f "$TARGET/Icon"$'\r' 2>/dev/null || true
   rm -rf "$TARGET"
 fi
 mv "$STAGE" "$TARGET"
 
-# Set Finder custom icon (most reliable for osacompile droplets).
-# Bundle .icns alone is often ignored in favor of Assets.car / droplet defaults;
-# `fileicon` writes Icon\r + FinderInfo so Get Info / Dock show our art.
-if [[ -f "$PNG" ]] || [[ -f "$ICNS" ]]; then
-  ICON_SRC="$PNG"
-  [[ -f "$ICON_SRC" ]] || ICON_SRC="$ICNS"
-  echo "==> Registering custom Finder icon…"
-  if command -v fileicon >/dev/null 2>&1; then
-    fileicon set "$TARGET" "$ICON_SRC" || true
-  else
-    echo "    (optional) brew install fileicon  — improves Dock/Finder icon reliability"
-  fi
+# Ensure no Finder custom-icon override on the new bundle
+if command -v fileicon >/dev/null 2>&1; then
+  fileicon rm "$TARGET" 2>/dev/null || true
 fi
-
-# Clear quarantine if present (user-downloaded repo)
+rm -f "$TARGET/Icon"$'\r' 2>/dev/null || true
+# Clear custom-icon bit in FinderInfo if xattr tools available
 if command -v xattr >/dev/null 2>&1; then
+  xattr -d com.apple.FinderInfo "$TARGET" 2>/dev/null || true
   xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
 fi
 
-# Bust icon services cache for this app
-touch "$TARGET"
-touch "$TARGET/Contents/Info.plist"
-if command -v /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister >/dev/null 2>&1; then
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -f "$TARGET" 2>/dev/null || true
+# Re-register with Launch Services and bust icon caches
+touch "$TARGET" "$TARGET/Contents/Info.plist"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [[ -x "$LSREGISTER" ]]; then
+  "$LSREGISTER" -f "$TARGET" 2>/dev/null || true
 fi
-# User-level icon cache (Finder may need a relaunch to refresh)
 rm -rf "${HOME}/Library/Caches/com.apple.iconservices.store" 2>/dev/null || true
-find "${HOME}/Library/Caches/com.apple.iconservices.store" -delete 2>/dev/null || true
 
 echo "✓ Installed: $TARGET"
 echo

@@ -41,12 +41,13 @@ Theme: document + magnifying glass + lock on a **full-bleed dark plate**.
 corners). macOS applies the continuous squircle mask itself—pre-rounding caused a
 double-frame look next to App Store / Calculator / Chess.
 
-If Finder still shows the default AppleScript “document arrow” icon after install:
+Icons are **bundle `.icns` only** (full-bleed square). macOS applies the
+rounded squircle. Do **not** use `fileicon set` on the app — that draws a
+sharp custom square and breaks size/shape next to other apps.
 
 ```bash
-brew install fileicon   # once
 ./packaging/macos/install-app.sh
-# then: open ~/Applications, or log out/in if the Dock caches the old icon
+# If the Dock is stale: remove Anonymizer from Dock, reopen Applications (⌘R)
 ```
 
 ## Use — one options window
