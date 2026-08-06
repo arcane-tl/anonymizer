@@ -35,7 +35,8 @@ Custom icon assets live in `packaging/macos/icons/`:
 | `source-user-choice.png` | Original selected artwork |
 | `icon-small-optimized.jpg` | Small-size optimized source before alpha |
 
-Theme: document with redacted lines + magnifying glass and lock, **transparent** plate so Finder shows a clean floating icon.
+Theme: document + magnifying glass + lock on a **dark macOS squircle** plate
+(matches Applications folder neighbors: rounded corners, graphite fill, transparent outside the plate only).
 
 If Finder still shows the default AppleScript “document arrow” icon after install:
 
