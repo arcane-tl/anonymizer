@@ -21,7 +21,7 @@ anonymize doctor
 Prefer the **cask** (signed + notarized release):
 
 ```bash
-brew install --cask anonymizer
+brew install --cask anonymizer-app
 # → /Applications/Anonymizer.app
 ```
 
@@ -129,7 +129,7 @@ Never commit `.p8` keys, certs, or `dist/*.zip` secrets. `dist/` is gitignored.
 After release:
 
 1. Upload `dist/Anonymizer-VERSION.zip` to the GitHub Release  
-2. Update `sha256` / `version` in `packaging/homebrew/Casks/anonymizer.rb`  
+2. Update `sha256` / `version` in `packaging/homebrew/Casks/anonymizer-app.rb`  
 3. Sync the public tap (`packaging/homebrew/README.md`)
 
 ## Troubleshooting
@@ -137,7 +137,7 @@ After release:
 | Symptom | Fix |
 |---------|-----|
 | can’t find anonymize | Install CLI; `anonymize doctor` |
-| **“Anonymizer is damaged…”** | Old unsigned cask zip: `brew reinstall --cask anonymizer` after updating the tap. Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
+| **“Anonymizer is damaged…”** | `brew reinstall --cask anonymizer-app`. Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
 | quarantine / unidentified developer | Prefer notarized cask; or right-click → Open |
 | Options window empty / crash | Rebuild with `./packaging/macos/install-app.sh` |
 | release-app: 0 identities | Install Developer ID Application cert (see Release section) |
