@@ -1,6 +1,7 @@
--- Anonymizer droplet: single options window after drop (ASObjC + AppKit).
--- Mode is an in-window radio list (not a popup). Checkboxes for review / open.
--- Builds with packaging/macos/install-app.sh (embeds run-anonymize.sh).
+-- Anonymizer droplet: options window after drop (ASObjC + AppKit).
+-- Mode + output style on main panel; allow/deny lists in a separate Lists… dialog.
+-- Lists persist to ~/.config/anonymizer/config.yaml via lists-io.sh on Done.
+-- Builds with packaging/macos/install-app.sh (embeds run-anonymize.sh + lists-io.sh).
 
 use AppleScript version "2.4"
 use framework "Foundation"
@@ -165,7 +166,7 @@ on processFiles(theFiles)
 end processFiles
 
 on defaultAllowlistText()
-	-- Keep in sync with anonymizer.anonymize.config.DEFAULT_ALLOWLIST
+	-- Fallback if lists-io.sh / Python unavailable (keep in sync with DEFAULT_ALLOWLIST)
 	return "Y-tunnus
 Y tunnus
 Hetu
@@ -180,10 +181,98 @@ Phone"
 end defaultAllowlistText
 
 on writeTextToFile(theText, posixPath)
-	set quotedPath to quoted form of posixPath
-	-- Use printf %s for full UTF-8 text without interpreting escapes oddly
-	do shell script "printf '%s' " & quoted form of theText & " > " & quotedPath
+	do shell script "printf '%s' " & quoted form of theText & " > " & quoted form of posixPath
 end writeTextToFile
+
+on countNonEmptyLines(theText)
+	set n to 0
+	if theText is missing value then return 0
+	if theText is "" then return 0
+	set oldDelims to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to {return, linefeed}
+	set parts to text items of theText
+	set AppleScript's text item delimiters to oldDelims
+	repeat with p in parts
+		set s to p as text
+		-- trim leading spaces/tabs
+		repeat while (s starts with " ") or (s starts with tab)
+			if (length of s) < 2 then
+				set s to ""
+				exit repeat
+			end if
+			set s to text 2 thru -1 of s
+		end repeat
+		if s is not "" then
+			if s does not start with "#" then
+				set n to n + 1
+			end if
+		end if
+	end repeat
+	return n
+end countNonEmptyLines
+
+on listsStatusLine(allowText, denyText)
+	set nAllow to countNonEmptyLines(allowText)
+	set nDeny to countNonEmptyLines(denyText)
+	return "Lists: " & (nAllow as text) & " allow, " & (nDeny as text) & " deny (Lists... button; saved under .config/anonymizer)"
+end listsStatusLine
+
+on loadListsFromConfig()
+	-- Returns {allowText:..., denyText:...}
+	try
+		set io to resourcePath("lists-io.sh")
+		set raw to do shell script "bash " & quoted form of io & " print"
+		set allowText to ""
+		set denyText to ""
+		set section to ""
+		set oldDelims to AppleScript's text item delimiters
+		set AppleScript's text item delimiters to {linefeed, return}
+		set linesList to text items of raw
+		set AppleScript's text item delimiters to oldDelims
+		repeat with ln in linesList
+			set t to ln as text
+			if t is "---ALLOW---" then
+				set section to "allow"
+			else if t is "---DENY---" then
+				set section to "deny"
+			else if section is "allow" then
+				if allowText is "" then
+					set allowText to t
+				else
+					set allowText to allowText & return & t
+				end if
+			else if section is "deny" then
+				if denyText is "" then
+					set denyText to t
+				else
+					set denyText to denyText & return & t
+				end if
+			end if
+		end repeat
+		return {allowText:allowText, denyText:denyText}
+	on error
+		return {allowText:defaultAllowlistText(), denyText:""}
+	end try
+end loadListsFromConfig
+
+on saveListsToConfig(allowText, denyText)
+	set allowFile to do shell script "mktemp ${TMPDIR:-/tmp}/anonymizer-allow.XXXXXX"
+	set denyFile to do shell script "mktemp ${TMPDIR:-/tmp}/anonymizer-deny.XXXXXX"
+	writeTextToFile(allowText, allowFile)
+	writeTextToFile(denyText, denyFile)
+	try
+		set io to resourcePath("lists-io.sh")
+		do shell script "bash " & quoted form of io & " save --allow-from " & quoted form of allowFile & " --deny-from " & quoted form of denyFile
+	on error errMsg
+		try
+			do shell script "rm -f " & quoted form of allowFile & " " & quoted form of denyFile
+		end try
+		error errMsg
+	end try
+	try
+		do shell script "rm -f " & quoted form of allowFile & " " & quoted form of denyFile
+	end try
+end saveListsToConfig
 
 on makeLabel(titleText, x, y, w, h)
 	set lab to current application's NSTextField's alloc()'s initWithFrame:{{x, y}, {w, h}}
@@ -201,8 +290,6 @@ on makeScrollText(initialText, x, y, w, h)
 	scroll's setHasHorizontalScroller:false
 	scroll's setAutohidesScrollers:true
 	scroll's setBorderType:(current application's NSBezelBorder)
-	set contentSize to scroll's contentSize()
-	-- contentSize may be a record; use fixed frame for text view
 	set tv to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {w - 4, h - 4}}
 	tv's setString:initialText
 	tv's setFont:(current application's NSFont's systemFontOfSize:11)
@@ -219,133 +306,198 @@ on makeScrollText(initialText, x, y, w, h)
 	return {scroll:scroll, textView:tv}
 end makeScrollText
 
--- Single options window: mode, redaction style, allow/deny, review/open
-on showOptionsPanel(fileNames)
-	set nFiles to count of fileNames
-	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
-	set filesText to fileListSummary(fileNames)
-
+-- Secondary dialog: edit lists; Done saves to ~/.config/anonymizer/config.yaml
+on showListsPanel(allowText, denyText)
 	set alert to current application's NSAlert's alloc()'s init()
-	alert's setMessageText:"Anonymizer"
-	alert's setInformativeText:(header & return & "Choose options, then Start. Output is saved next to each original file.")
-	alert's addButtonWithTitle:"Start"
+	alert's setMessageText:"Allowlist & denylist"
+	alert's setInformativeText:"One string per line. Allow = never redact. Deny = always redact. Done saves to ~/.config/anonymizer/config.yaml."
+	alert's addButtonWithTitle:"Done"
 	alert's addButtonWithTitle:"Cancel"
 
-	-- Accessory layout (AppKit: origin bottom-left). Taller for lists.
-	set panelW to 460
-	set panelH to 520
+	set panelW to 440
+	set panelH to 320
 	set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
 
-	-- File names (top)
-	set filesField to current application's NSTextField's alloc()'s initWithFrame:{{12, 430}, {panelW - 24, 78}}
-	filesField's setStringValue:filesText
-	filesField's setEditable:false
-	filesField's setBezeled:true
-	filesField's setBordered:true
-	filesField's setDrawsBackground:true
-	filesField's setSelectable:true
-	filesField's setFont:(current application's NSFont's systemFontOfSize:11)
-	accessory's addSubview:filesField
-
-	accessory's addSubview:(makeLabel("Mode", 12, 408, panelW - 24, 18))
-
-	set proto to current application's NSButtonCell's alloc()'s init()
-	proto's setButtonType:(current application's NSButtonTypeRadio)
-	proto's setFont:(current application's NSFont's systemFontOfSize:12)
-	proto's setControlSize:(current application's NSControlSizeRegular)
-	proto's setWraps:true
-
-	set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 330}, {panelW - 24, 76}} ¬
-		mode:(current application's NSRadioModeMatrix) ¬
-		prototype:proto ¬
-		numberOfRows:3 ¬
-		numberOfColumns:1
-	matrix's setAutosizesCells:true
-	matrix's setMode:(current application's NSRadioModeMatrix)
-	repeat with i from 0 to 2
-		set cell to matrix's cellAtRow:i column:0
-		cell's setTitle:(item (i + 1) of modeTitles)
-		cell's setTag:i
-	end repeat
-	matrix's selectCellAtRow:0 column:0
-	matrix's setFrame:{{12, 330}, {panelW - 24, 76}}
-	accessory's addSubview:matrix
-
-	accessory's addSubview:(makeLabel("Output style", 12, 308, panelW - 24, 18))
-
-	set styleProto to current application's NSButtonCell's alloc()'s init()
-	styleProto's setButtonType:(current application's NSButtonTypeRadio)
-	styleProto's setFont:(current application's NSFont's systemFontOfSize:12)
-	styleProto's setWraps:true
-	set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 268}, {panelW - 24, 38}} ¬
-		mode:(current application's NSRadioModeMatrix) ¬
-		prototype:styleProto ¬
-		numberOfRows:2 ¬
-		numberOfColumns:1
-	styleMatrix's setAutosizesCells:true
-	(styleMatrix's cellAtRow:0 column:0)'s setTitle:"Replace with tags  [PERSON_1]"
-	(styleMatrix's cellAtRow:0 column:0)'s setTag:0
-	(styleMatrix's cellAtRow:1 column:0)'s setTitle:"Delete text entirely (no tags)"
-	(styleMatrix's cellAtRow:1 column:0)'s setTag:1
-	styleMatrix's selectCellAtRow:0 column:0
-	styleMatrix's setFrame:{{12, 268}, {panelW - 24, 38}}
-	accessory's addSubview:styleMatrix
-
-	accessory's addSubview:(makeLabel("Allowlist — never redact (one per line)", 12, 246, panelW - 24, 18))
-	set allowPair to makeScrollText(defaultAllowlistText(), 12, 168, panelW - 24, 74)
+	accessory's addSubview:(makeLabel("Allowlist — never redact", 12, 294, panelW - 24, 18))
+	set allowPair to makeScrollText(allowText, 12, 168, panelW - 24, 120)
 	accessory's addSubview:(scroll of allowPair)
 
-	accessory's addSubview:(makeLabel("Denylist — always redact (one per line)", 12, 146, panelW - 24, 18))
-	set denyPair to makeScrollText("", 12, 68, panelW - 24, 74)
+	accessory's addSubview:(makeLabel("Denylist — always redact", 12, 144, panelW - 24, 18))
+	set denyPair to makeScrollText(denyText, 12, 12, panelW - 24, 128)
 	accessory's addSubview:(scroll of denyPair)
 
-	set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 36}, {panelW - 24, 26}}
-	reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
-	reviewBox's setTitle:"Review findings before saving (tags only; opens Terminal)"
-	reviewBox's setState:(current application's NSControlStateValueOff)
-	reviewBox's setFont:(current application's NSFont's systemFontOfSize:12)
-	accessory's addSubview:reviewBox
-
-	set openBox to current application's NSButton's alloc()'s initWithFrame:{{12, 10}, {panelW - 24, 26}}
-	openBox's setButtonType:(current application's NSButtonTypeSwitch)
-	openBox's setTitle:"Open result when finished"
-	openBox's setState:(current application's NSControlStateValueOn)
-	openBox's setFont:(current application's NSFont's systemFontOfSize:12)
-	accessory's addSubview:openBox
-
 	alert's setAccessoryView:accessory
-
 	current application's NSApp's activateIgnoringOtherApps:true
 	set response to alert's runModal()
 	if response is not (current application's NSAlertFirstButtonReturn) then
 		return missing value
 	end if
 
-	set selRow to matrix's selectedRow() as integer
-	if selRow < 0 then set selRow to 0
-	if selRow > 2 then set selRow to 0
-	set modeArg to item (selRow + 1) of modeArgs
+	set newAllow to ((textView of allowPair)'s string()) as text
+	set newDeny to ((textView of denyPair)'s string()) as text
+	try
+		saveListsToConfig(newAllow, newDeny)
+	on error errMsg
+		display dialog "Could not save lists to config:" & return & return & errMsg buttons {"OK"} default button 1 with icon caution with title "Anonymizer"
+		-- Still return edited text for this run even if save failed
+	end try
+	return {allowText:newAllow, denyText:newDeny}
+end showListsPanel
 
-	set styleRow to styleMatrix's selectedRow() as integer
-	if styleRow < 0 then set styleRow to 0
-	set redactStyle to "placeholder"
-	if styleRow is 1 then set redactStyle to "remove"
+-- Main options: mode, style, review/open. Lists… opens secondary editor.
+-- Loop until Start or Cancel (Lists… re-shows main with updated list status).
+on showOptionsPanel(fileNames)
+	set nFiles to count of fileNames
+	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
+	set filesText to fileListSummary(fileNames)
 
-	set allowText to ((textView of allowPair)'s string()) as text
-	set denyText to ((textView of denyPair)'s string()) as text
+	set lists to loadListsFromConfig()
+	set allowText to allowText of lists
+	set denyText to denyText of lists
 
-	set wantReview to false
-	if (reviewBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set wantReview to true
-	if (reviewBox's state() as integer) is 1 then set wantReview to true
+	-- Remember last selections when re-showing after Lists…
+	set lastModeRow to 0
+	set lastStyleRow to 0
+	set lastReview to false
+	set lastOpen to true
 
-	set wantOpen to false
-	if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set wantOpen to true
-	if (openBox's state() as integer) is 1 then set wantOpen to true
+	repeat
+		set alert to current application's NSAlert's alloc()'s init()
+		alert's setMessageText:"Anonymizer"
+		alert's setInformativeText:(header & return & "Output is saved next to each original file. Work stays on this Mac.")
+		-- Button order: rightmost is first = default (Start)
+		alert's addButtonWithTitle:"Start"
+		alert's addButtonWithTitle:"Lists…"
+		alert's addButtonWithTitle:"Cancel"
 
-	if modeArg is "extract" then set wantReview to false
-	if redactStyle is "remove" then set wantReview to false
+		set panelW to 440
+		set panelH to 340
+		set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
 
-	return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
+		set filesField to current application's NSTextField's alloc()'s initWithFrame:{{12, 248}, {panelW - 24, 80}}
+		filesField's setStringValue:filesText
+		filesField's setEditable:false
+		filesField's setBezeled:true
+		filesField's setBordered:true
+		filesField's setDrawsBackground:true
+		filesField's setSelectable:true
+		filesField's setFont:(current application's NSFont's systemFontOfSize:11)
+		accessory's addSubview:filesField
+
+		accessory's addSubview:(makeLabel("Mode", 12, 226, panelW - 24, 18))
+
+		set proto to current application's NSButtonCell's alloc()'s init()
+		proto's setButtonType:(current application's NSButtonTypeRadio)
+		proto's setFont:(current application's NSFont's systemFontOfSize:12)
+		proto's setControlSize:(current application's NSControlSizeRegular)
+		proto's setWraps:true
+
+		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 148}, {panelW - 24, 76}} ¬
+			mode:(current application's NSRadioModeMatrix) ¬
+			prototype:proto ¬
+			numberOfRows:3 ¬
+			numberOfColumns:1
+		matrix's setAutosizesCells:true
+		matrix's setMode:(current application's NSRadioModeMatrix)
+		repeat with i from 0 to 2
+			set cell to matrix's cellAtRow:i column:0
+			cell's setTitle:(item (i + 1) of modeTitles)
+			cell's setTag:i
+		end repeat
+		matrix's selectCellAtRow:lastModeRow column:0
+		matrix's setFrame:{{12, 148}, {panelW - 24, 76}}
+		accessory's addSubview:matrix
+
+		accessory's addSubview:(makeLabel("Output style", 12, 126, panelW - 24, 18))
+
+		set styleProto to current application's NSButtonCell's alloc()'s init()
+		styleProto's setButtonType:(current application's NSButtonTypeRadio)
+		styleProto's setFont:(current application's NSFont's systemFontOfSize:12)
+		styleProto's setWraps:true
+		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 86}, {panelW - 24, 38}} ¬
+			mode:(current application's NSRadioModeMatrix) ¬
+			prototype:styleProto ¬
+			numberOfRows:2 ¬
+			numberOfColumns:1
+		styleMatrix's setAutosizesCells:true
+		(styleMatrix's cellAtRow:0 column:0)'s setTitle:"Replace with tags  [PERSON_1]"
+		(styleMatrix's cellAtRow:0 column:0)'s setTag:0
+		(styleMatrix's cellAtRow:1 column:0)'s setTitle:"Delete text entirely (no tags)"
+		(styleMatrix's cellAtRow:1 column:0)'s setTag:1
+		styleMatrix's selectCellAtRow:lastStyleRow column:0
+		styleMatrix's setFrame:{{12, 86}, {panelW - 24, 38}}
+		accessory's addSubview:styleMatrix
+
+		set listsField to current application's NSTextField's alloc()'s initWithFrame:{{12, 60}, {panelW - 24, 22}}
+		listsField's setStringValue:listsStatusLine(allowText, denyText)
+		listsField's setEditable:false
+		listsField's setBezeled:false
+		listsField's setDrawsBackground:false
+		listsField's setFont:(current application's NSFont's systemFontOfSize:11)
+		accessory's addSubview:listsField
+
+		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 34}, {panelW - 24, 24}}
+		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
+		reviewBox's setTitle:"Review findings before saving (tags only; opens Terminal)"
+		if lastReview then
+			reviewBox's setState:(current application's NSControlStateValueOn)
+		else
+			reviewBox's setState:(current application's NSControlStateValueOff)
+		end if
+		reviewBox's setFont:(current application's NSFont's systemFontOfSize:12)
+		accessory's addSubview:reviewBox
+
+		set openBox to current application's NSButton's alloc()'s initWithFrame:{{12, 8}, {panelW - 24, 24}}
+		openBox's setButtonType:(current application's NSButtonTypeSwitch)
+		openBox's setTitle:"Open result when finished"
+		if lastOpen then
+			openBox's setState:(current application's NSControlStateValueOn)
+		else
+			openBox's setState:(current application's NSControlStateValueOff)
+		end if
+		openBox's setFont:(current application's NSFont's systemFontOfSize:12)
+		accessory's addSubview:openBox
+
+		alert's setAccessoryView:accessory
+		current application's NSApp's activateIgnoringOtherApps:true
+		set response to alert's runModal()
+
+		-- Snapshot selections before disposing
+		set lastModeRow to matrix's selectedRow() as integer
+		if lastModeRow < 0 then set lastModeRow to 0
+		if lastModeRow > 2 then set lastModeRow to 0
+		set lastStyleRow to styleMatrix's selectedRow() as integer
+		if lastStyleRow < 0 then set lastStyleRow to 0
+		set lastReview to false
+		if (reviewBox's state() as integer) is 1 then set lastReview to true
+		if (reviewBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastReview to true
+		set lastOpen to false
+		if (openBox's state() as integer) is 1 then set lastOpen to true
+		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
+
+		if response is (current application's NSAlertFirstButtonReturn) then
+			-- Start
+			set modeArg to item (lastModeRow + 1) of modeArgs
+			set redactStyle to "placeholder"
+			if lastStyleRow is 1 then set redactStyle to "remove"
+			set wantReview to lastReview
+			set wantOpen to lastOpen
+			if modeArg is "extract" then set wantReview to false
+			if redactStyle is "remove" then set wantReview to false
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
+		else if response is (current application's NSAlertSecondButtonReturn) then
+			-- Lists…
+			set edited to showListsPanel(allowText, denyText)
+			if edited is not missing value then
+				set allowText to allowText of edited
+				set denyText to denyText of edited
+			end if
+			-- loop → re-show main
+		else
+			-- Cancel
+			return missing value
+		end if
+	end repeat
 end showOptionsPanel
 
 on fileListSummary(names)

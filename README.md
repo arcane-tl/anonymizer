@@ -177,7 +177,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `-o -` | Markdown on stdout (progress stays on stderr) |
 | `--config` | YAML: mode, allowlist, denylist, `redact_style`, … |
 
-**Mac app:** options include output style (tags vs delete) and editable **allowlist** / **denylist** before Start.
+**Mac app:** options include output style (tags vs delete). **Lists…** opens allowlist/denylist in a separate window; **Done** saves to `~/.config/anonymizer/config.yaml`.
 
 ---
 
