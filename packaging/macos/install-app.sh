@@ -73,6 +73,12 @@ fi
 printf '%s' "$APP_VERSION" > "$RES/VERSION"
 echo "==> Bundle version: $APP_VERSION"
 
+# Squircle PNG for dialog title row (README asset). Dock/Finder still use .icns below.
+DIALOG_PNG="$HERE/icons/Anonymizer-readme.png"
+if [[ -f "$DIALOG_PNG" ]]; then
+  cp "$DIALOG_PNG" "$RES/Anonymizer-dialog.png"
+fi
+
 # Custom app icon (document + magnifier/lock), full-bleed square .icns.
 # Do NOT use `fileicon set` — Finder custom icons skip the system squircle
 # and look sharp-cornered / wrong size next to real app icons.
