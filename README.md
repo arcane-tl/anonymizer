@@ -195,7 +195,7 @@ pytest -q
 ```
 
 Regression: `tests/test_contract_templates.py`, `tests/test_realworld_precision.py`, `tests/test_offline_security.py`.  
-See [tests/fixtures/README.md](tests/fixtures/README.md) and [AGENTS.md](AGENTS.md) (local agent notes).
+See [tests/fixtures/README.md](tests/fixtures/README.md).
 
 Mac GUI build: [packaging/macos/README.md](packaging/macos/README.md).
 
