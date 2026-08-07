@@ -78,7 +78,6 @@ on processFiles(theFiles)
 	set allowText to allowText of choices
 	set denyText to denyText of choices
 	if modeArg is "extract" then set wantReview to false
-	if redactStyle is "remove" then set wantReview to false
 
 	set helper to resourcePath("run-anonymize.sh")
 	set fileArgs to my joinSpace(posixFiles)
@@ -484,7 +483,7 @@ on showOptionsPanel(fileNames)
 
 		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 34}, {panelW - 24, 24}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
-		reviewBox's setTitle:"Review findings before saving (tags only; opens Terminal)"
+		reviewBox's setTitle:"Review findings before saving (opens Terminal)"
 		if lastReview then
 			reviewBox's setState:(current application's NSControlStateValueOn)
 		else
@@ -529,7 +528,6 @@ on showOptionsPanel(fileNames)
 			set wantReview to lastReview
 			set wantOpen to lastOpen
 			if modeArg is "extract" then set wantReview to false
-			if redactStyle is "remove" then set wantReview to false
 			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
 		else if response is (current application's NSAlertSecondButtonReturn) then
 			-- Lists…

@@ -172,7 +172,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 |------|------|
 | `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
-| `--redact-style` | `placeholder` (default tags) or `remove` (delete text; no review) |
+| `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
 | `--config` | YAML: mode, allowlist, denylist, `redact_style`, … |

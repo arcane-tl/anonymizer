@@ -242,15 +242,6 @@ if [[ "$REVIEW" -eq 1 && "$MODE" == "extract" ]]; then
   exit 2
 fi
 
-if [[ "$REVIEW" -eq 1 && -n "$REDACT_STYLE" ]]; then
-  case "$(printf '%s' "$REDACT_STYLE" | tr '[:upper:]' '[:lower:]')" in
-    remove|delete|empty|strip)
-      echo "error: --review cannot be used with --redact-style remove" >&2
-      exit 2
-      ;;
-  esac
-fi
-
 if [[ "$REVIEW" -eq 1 && ! -t 0 ]]; then
   echo "error: --review needs an interactive terminal (open via Terminal.app)." >&2
   exit 2

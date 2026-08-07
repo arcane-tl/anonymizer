@@ -63,7 +63,7 @@ sharp custom square and breaks size/shape next to other apps.
    - **Mode** as a visible radio list (all three choices at once — not a menu)  
    - **Output style** — tags `[PERSON_1]` or **delete text entirely**  
    - List summary + **Lists…** button → separate editor for allowlist / denylist  
-   - ☑ **Review findings before saving** (Terminal checklist; tags style only)  
+   - ☑ **Review findings before saving** (Terminal checklist; works with tags and delete)  
    - ☑ **Open result when finished**  
 
 **Allowlist / denylist** open in a second dialog. **Done** saves them to  

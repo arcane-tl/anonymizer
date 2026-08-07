@@ -36,6 +36,7 @@ from anonymizer.anonymize.review import (
     parse_reject_list,
     recount_entities,
     require_tty_for_review,
+    strip_placeholders_in_blocks,
 )
 from anonymizer.extract import extract_document
 from anonymizer.output.markdown import render_from_extracted
@@ -301,14 +302,6 @@ def _run_pipeline(
             "[dim]Note:[/dim] --map is empty in extract mode (nothing redacted)."
         )
 
-    if (review or reject) and cfg.redact_style == "remove":
-        console.print(
-            "[red]Error:[/red] --review / --reject need placeholder tags in the "
-            "output. Use --redact-style placeholder (default), or omit review "
-            "when deleting text entirely."
-        )
-        raise typer.Exit(2)
-
     do_review = review and cfg.mode != "extract"
     if do_review:
         try:
@@ -316,6 +309,11 @@ def _run_pipeline(
         except SystemExit as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
+
+    # Final render style (placeholder tags vs delete). Review always uses tags
+    # first so the checklist works; we strip remaining tags if style is remove.
+    final_redact_style = cfg.redact_style
+    needs_placeholder_review = (do_review or bool(reject)) and cfg.mode != "extract"
 
     try:
         inputs = collect_inputs(path)
@@ -365,11 +363,16 @@ def _run_pipeline(
             continue
 
         block_texts = [b.text for b in doc.blocks]
+        # Findings → review needs placeholders in the working body.
+        saved_style = anonymizer.config.redact_style
+        if needs_placeholder_review:
+            anonymizer.config.redact_style = "placeholder"
         try:
             anon_blocks, result = anonymizer.anonymize_blocks(
                 block_texts, lang_flag=cfg.lang, progress=cb
             )
         except Exception as exc:
+            anonymizer.config.redact_style = saved_style
             console.print(f"[red]Anonymize failed[/red] {input_path}: {exc}")
             console.print(
                 "[dim]Tip:[/dim] run [bold]anonymize doctor[/bold] "
@@ -378,6 +381,11 @@ def _run_pipeline(
             if multi:
                 continue
             raise typer.Exit(1) from exc
+        finally:
+            anonymizer.config.redact_style = saved_style
+
+        # Front matter / result should reflect the user's chosen final style
+        result.redact_style = final_redact_style
 
         # --- Optional review / --reject (restore false positives) ---
         keep_clear: list[str] = []
@@ -426,6 +434,13 @@ def _run_pipeline(
                     console.print(
                         f"[dim]Restored {len(uniq)} tag(s) to clear text.[/dim]"
                     )
+
+        # Final render: delete remaining findings if user chose remove style
+        if final_redact_style == "remove" and result.mapping:
+            progress.substep("Applying delete style…")
+            anon_blocks = strip_placeholders_in_blocks(anon_blocks, result.mapping)
+            result.anonymized_text = "\n\n".join(anon_blocks)
+            result.redact_style = "remove"
 
         progress.substep("Rendering Markdown…")
         md = render_from_extracted(doc, anon_blocks, result)
@@ -799,7 +814,8 @@ def main(
             "--redact-style",
             help=(
                 "How to replace findings: placeholder (default, [PERSON_1] tags) "
-                "or remove (delete the text). Not used with --review."
+                "or remove (delete the text). Review works with both (checklist "
+                "first, then style is applied)."
             ),
             rich_help_panel="Common",
         ),
