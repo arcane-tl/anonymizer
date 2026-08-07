@@ -8,8 +8,8 @@
 # Release zip should be Developer ID–signed + notarized (see packaging/macos/release-app.sh).
 
 cask "anonymizer" do
-  version "1.1.0"
-  sha256 "f8bcd2f613c458d2fce27908b8297078a1c8d670a43aa17ab1ce377d10cb2e6f"
+  version "1.1.1"
+  sha256 "9e59722bdbfcc8147f3596b75d700747a6670884cc88dd73075c5c94b6fca287"
 
   url "https://github.com/arcane-tl/anonymizer/releases/download/v#{version}/Anonymizer-#{version}.zip"
   name "Anonymizer"
