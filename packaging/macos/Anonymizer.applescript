@@ -322,8 +322,8 @@ end textViewContents
 -- Secondary dialog: edit lists; Done saves to ~/.config/anonymizer/config.yaml
 on showListsPanel(allowText, denyText)
 	set alert to current application's NSAlert's alloc()'s init()
-	alert's setMessageText:"Allowlist & denylist"
-	alert's setInformativeText:"One string per line. Allow = never redact. Deny = always redact. Done saves to ~/.config/anonymizer/config.yaml."
+	applyAlertChrome(alert)
+	alert's setInformativeText:"Allowlist & denylist — one string per line. Allow = never redact. Deny = always redact. Done saves to ~/.config/anonymizer/config.yaml."
 	alert's addButtonWithTitle:"Done"
 	alert's addButtonWithTitle:"Cancel"
 
@@ -408,7 +408,7 @@ on showOptionsPanel(fileNames)
 
 	repeat
 		set alert to current application's NSAlert's alloc()'s init()
-		alert's setMessageText:"Anonymizer"
+		applyAlertChrome(alert)
 		alert's setInformativeText:(header & return & "Output is saved next to each original file. Work stays on this Mac.")
 		-- Button order: rightmost is first = default (Start)
 		alert's addButtonWithTitle:"Start"
@@ -600,6 +600,31 @@ on resourcePath(resourceName)
 	end if
 	return (do shell script "dirname " & quoted form of appPosix) & "/" & resourceName
 end resourcePath
+
+on appVersion()
+	-- Written at build time from pyproject.toml into Resources/VERSION
+	try
+		set v to do shell script "tr -d '[:space:]' < " & quoted form of resourcePath("VERSION")
+		if v is not "" then return v
+	end try
+	return "dev"
+end appVersion
+
+on appTitle()
+	return "Anonymizer (version " & appVersion() & ")"
+end appTitle
+
+on applyAlertChrome(alertRef)
+	-- Title includes version; icon sits with the title (system NSAlert layout).
+	alertRef's setMessageText:appTitle()
+	try
+		set iconPath to resourcePath("Anonymizer.icns")
+		set img to current application's NSImage's alloc()'s initByReferencingFile:iconPath
+		if img is not missing value then
+			alertRef's setIcon:img
+		end if
+	end try
+end applyAlertChrome
 
 on joinSpace(lst)
 	set AppleScript's text item delimiters to " "

@@ -56,13 +56,15 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 if [[ -z "$VERSION" ]]; then
-  # Prefer package version if available
-  if [[ -f "$ROOT/pyproject.toml" ]]; then
+  # Canonical: pyproject.toml via scripts/version.sh (ANONYMIZER_VERSION overrides)
+  if [[ -x "$ROOT/scripts/version.sh" ]]; then
+    VERSION="$("$ROOT/scripts/version.sh")"
+  elif [[ -f "$ROOT/pyproject.toml" ]]; then
     VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('$ROOT/pyproject.toml','rb'))['project']['version'])" 2>/dev/null || true)"
   fi
 fi
 if [[ -z "$VERSION" ]]; then
-  echo "error: pass --version X.Y.Z" >&2
+  echo "error: pass --version X.Y.Z or set version in pyproject.toml" >&2
   exit 2
 fi
 

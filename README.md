@@ -58,14 +58,21 @@ One product: **Anonymizer**. Terminal: **`anonymize`**. Finder: **Anonymizer.app
 ```bash
 brew tap arcane-tl/anonymizer
 brew trust arcane-tl/anonymizer    # Homebrew 6+ — once per machine
-brew install anonymizer           # CLI
-brew install --cask anonymizer    # optional drag-and-drop app → /Applications
+brew install --cask anonymizer     # app + CLI (recommended)
+# CLI only: brew install anonymizer
 
 anonymize doctor
-anonymize --version               # anonymizer 1.1.0
+anonymize --version
 ```
 
-More detail (PATH, models, upgrades): [packaging/homebrew/README.md](packaging/homebrew/README.md).
+**Upgrade** (CLI and app are separate packages with the same name):
+
+```bash
+brew update
+brew upgrade anonymizer && brew upgrade --cask anonymizer
+```
+
+More detail (PATH, reinstall, models): [packaging/homebrew/README.md](packaging/homebrew/README.md).
 
 ### Other options
 

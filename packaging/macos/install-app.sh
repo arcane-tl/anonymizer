@@ -63,6 +63,16 @@ if [[ -f "$HERE/lists-io.sh" ]]; then
   chmod +x "$RES/lists-io.sh"
 fi
 
+# Canonical version from pyproject.toml (or ANONYMIZER_VERSION override)
+ROOT="$(cd "$HERE/../.." && pwd)"
+if [[ -x "$ROOT/scripts/version.sh" ]]; then
+  APP_VERSION="$("$ROOT/scripts/version.sh")"
+else
+  APP_VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('$ROOT/pyproject.toml','rb'))['project']['version'])" 2>/dev/null || echo dev)"
+fi
+printf '%s' "$APP_VERSION" > "$RES/VERSION"
+echo "==> Bundle version: $APP_VERSION"
+
 # Custom app icon (document + magnifier/lock), full-bleed square .icns.
 # Do NOT use `fileicon set` — Finder custom icons skip the system squircle
 # and look sharp-cornered / wrong size next to real app icons.

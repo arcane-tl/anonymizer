@@ -51,16 +51,25 @@ class Anonymizer < Formula
       Product: Anonymizer
       CLI command: anonymize
 
+      Install full product (CLI + app):
+        brew install --cask anonymizer
+
+      Upgrade CLI and app separately (same name, two packages):
+        brew update
+        brew upgrade anonymizer
+        brew upgrade --cask anonymizer
+
+      If `anonymize` is missing after upgrade:
+        brew link --overwrite anonymizer && hash -r
+      Ensure $(brew --prefix)/bin is on your PATH.
+
+      If `anonymize` is shadowed by ~/.local/bin:
+        brew link --overwrite anonymizer
+        # or put Homebrew first on PATH
+
       Verify:
         anonymize doctor
         anonymize --version
-
-      Drag-and-drop app (same product, opens in Applications):
-        brew install --cask anonymizer
-      → /Applications/Anonymizer.app
-
-      If `anonymize` is shadowed by ~/.local/bin, put Homebrew first on PATH or:
-        brew link --overwrite anonymizer
 
       spaCy models (default): en_core_web_sm, fi_core_news_sm
       Larger models:

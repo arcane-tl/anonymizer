@@ -32,10 +32,17 @@ cask "anonymizer" do
   ]
 
   caveats <<~EOS
-    Anonymizer.app calls the anonymize CLI (from: brew install anonymizer).
-    Ensure `anonymize` works in Terminal before using drag-and-drop.
+    Anonymizer.app calls the anonymize CLI (formula: brew install anonymizer).
 
-    If macOS says the app is "damaged" (old unsigned zip):
+    CLI and app share the token "anonymizer" but are separate packages.
+    `brew upgrade anonymizer` upgrades the CLI only. To upgrade the app:
+      brew upgrade --cask anonymizer
+
+    Full upgrade (recommended):
+      brew update
+      brew upgrade anonymizer && brew upgrade --cask anonymizer
+
+    If macOS says the app is "damaged":
       brew reinstall --cask anonymizer
     or:
       xattr -cr /Applications/Anonymizer.app

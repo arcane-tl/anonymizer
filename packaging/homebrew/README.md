@@ -16,12 +16,13 @@ Same product, two install mechanisms (Homebrew standard):
 ```bash
 brew tap arcane-tl/anonymizer
 brew trust arcane-tl/anonymizer    # Homebrew 6+ required once
-brew install anonymizer
-brew install --cask anonymizer
+brew install --cask anonymizer     # app + CLI formula as dependency
 
 anonymize doctor
 open -a Anonymizer
 ```
+
+CLI only: `brew install anonymizer`
 
 **Important:** `anonymizer` is **not** in official `homebrew/core` or `homebrew/cask`.
 You must **tap** and **trust** first.
@@ -58,21 +59,39 @@ anonymize --version
 
 The cask **depends on** the formula. The droplet calls `anonymize` on your PATH—install the formula first (or let the cask pull it).
 
-## Upgrade / uninstall
+## Upgrade / reinstall / uninstall
+
+**Important:** formula (CLI) and cask (app) share the name `anonymizer` but are
+**two packages**. Upgrading one does not upgrade the other.
 
 ```bash
 brew update
-brew upgrade anonymizer
-brew upgrade --cask anonymizer
+brew upgrade anonymizer              # CLI only
+brew upgrade --cask anonymizer       # app only — required for GUI updates
+
+# Repair / force
+brew reinstall anonymizer
+brew reinstall --cask anonymizer
+brew link --overwrite anonymizer && hash -r
 
 brew uninstall --cask anonymizer   # removes Anonymizer.app
 brew uninstall anonymizer          # removes CLI
+```
+
+If `anonymize: command not found` after upgrade:
+
+```bash
+brew link --overwrite anonymizer
+hash -r
+ls "$(brew --prefix)/bin/anonymize"
+# ensure $(brew --prefix)/bin is on PATH (Apple Silicon: /opt/homebrew/bin)
 ```
 
 If `~/.local/bin/anonymize` shadows Homebrew:
 
 ```bash
 brew link --overwrite anonymizer
+# or: put Homebrew first on PATH
 ```
 
 ## What the formula does
