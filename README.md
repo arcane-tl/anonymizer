@@ -201,7 +201,8 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 |---------|-----|
 | No Cask with this name | `brew tap arcane-tl/anonymizer` |
 | Untrusted tap (Homebrew 6+) | `brew trust arcane-tl/anonymizer` (note the final **r**) |
-| “Anonymizer is damaged…” | `brew update && brew reinstall --cask anonymizer` (need notarized build) |
+| “Anonymizer is damaged…” | `brew reinstall --cask anonymizer-app` |
+| `anonymize: command not found` / `skipping link` | Uninstall old cask token: `brew uninstall --cask anonymizer`; then `brew install --cask anonymizer-app`; `brew link --overwrite anonymizer && hash -r` |
 
 ---
 
