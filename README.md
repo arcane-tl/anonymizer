@@ -71,10 +71,14 @@ anonymize --version
 brew update && brew upgrade anonymizer anonymizer-app
 ```
 
-If you previously installed the old cask token `anonymizer` (same name as the formula), uninstall it so the CLI can link:
+If you previously installed the old cask token `anonymizer` (same name as the formula), remove it so the CLI can link:
 
 ```bash
-brew uninstall --cask anonymizer
+brew uninstall --cask --force anonymizer
+# if that still errors:
+rm -rf "$(brew --prefix)/Caskroom/anonymizer"
+rm -rf /Applications/Anonymizer.app
+
 brew install --cask anonymizer-app
 brew link --overwrite anonymizer && hash -r
 ```

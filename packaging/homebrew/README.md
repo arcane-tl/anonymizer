@@ -58,10 +58,22 @@ brew uninstall anonymizer
 
 ## Migration from cask token `anonymizer` → `anonymizer-app`
 
+The old cask token is **gone from the tap**. Uninstall may need `--force` or a manual Caskroom cleanup:
+
 ```bash
-brew uninstall --cask anonymizer
+# 1) Remove old cask (try force if plain uninstall errors)
+brew uninstall --cask --force anonymizer
+
+# If you still see errors about Caskroom/.../Anonymizer.app:
+rm -rf "$(brew --prefix)/Caskroom/anonymizer"
+rm -rf /Applications/Anonymizer.app
+
+# 2) Install new cask + ensure CLI is linked
 brew install --cask anonymizer-app
-brew link --overwrite anonymizer && hash -r
+brew reinstall anonymizer          # optional if already installed
+brew link --overwrite anonymizer
+hash -r
+
 anonymize --version
 open -a Anonymizer
 ```
