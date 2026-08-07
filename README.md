@@ -1,12 +1,6 @@
-# Anonymizer
+# <img src="packaging/macos/icons/Anonymizer-256.png" alt="" width="48" height="48" /> Anonymizer
 
-<p align="center">
-  <img src="packaging/macos/icons/Anonymizer-256.png" alt="Anonymizer" width="128" />
-</p>
-
-<p align="center">
-  <strong>Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.</strong>
-</p>
+Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.
 
 **Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text → Markdown**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
 
