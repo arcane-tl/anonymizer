@@ -1,346 +1,210 @@
-# anonymizer
+# Anonymizer
 
-Local CLI (**macOS** + **Windows**): **PDF / DOCX / text → Markdown**, with optional PII redaction (English + Finnish). Offline by default.
+<p align="center">
+  <img src="packaging/macos/icons/Anonymizer-256.png" alt="Anonymizer" width="128" />
+</p>
+
+<p align="center">
+  <strong>Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.</strong>
+</p>
+
+**Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text → Markdown**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
+
+| | |
+|---|---|
+| **CLI** | `anonymize` |
+| **Mac app** | **Anonymizer.app** (drag-and-drop) |
+| **Default** | Offline — document text stays on your computer |
 
 > **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
 
-## Quick start
+---
 
-### Install (macOS) — Homebrew (recommended)
+## Why Anonymizer
 
-One product: **Anonymizer**. Terminal command: **`anonymize`**. Finder app: **`Anonymizer`**.
+- **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM  
+- **Real office formats** — PDF (including OCR for scans), Word (`.docx`), and text/Markdown  
+- **Modes that match the job** — full scrub, identity-only, or plain text extract  
+- **Stable placeholders** — the same person stays `[PERSON_1]` throughout a document  
+- **English + Finnish** — auto language detection, patterns + neural NER  
+- **Human in the loop** — optional review to keep false positives in clear text  
+- **No hard-coded company catalogs** — patterns, models, and *your* allow/deny lists only  
+
+---
+
+## Before → after
+
+Synthetic example only:
+
+**Before**
+
+```text
+Service Agreement between Nordic Widgets Oy and Acme Logistics Ltd.
+Contact: Maija Korhonen <maija.korhonen@nordic-widgets.example.fi>, +358 50 987 6543.
+```
+
+**After** (`anonymize` · strict mode)
+
+```text
+Service Agreement between [ORG_1] and [ORG_2].
+Contact: [PERSON_1] <[EMAIL_1]>, [PHONE_1].
+```
+
+Same entity → same tag within that run. Export an optional map file if you need the reverse lookup later (treat it like the original document — it contains PII).
+
+---
+
+## Install
+
+### macOS — Homebrew (recommended)
+
+One product: **Anonymizer**. Terminal: **`anonymize`**. Finder: **Anonymizer.app**.
 
 ```bash
-# Third-party tap (not in official homebrew/core or homebrew/cask)
 brew tap arcane-tl/anonymizer
-
-# Homebrew 6+: trust the tap once (formula + cask)
-brew trust arcane-tl/anonymizer
-
-# CLI (required)
-brew install anonymizer
-
-# Drag-and-drop app → /Applications/Anonymizer.app (optional)
-brew install --cask anonymizer
+brew trust arcane-tl/anonymizer    # Homebrew 6+ — once per machine
+brew install anonymizer           # CLI
+brew install --cask anonymizer    # optional drag-and-drop app → /Applications
 
 anonymize doctor
-anonymize --version   # anonymizer 1.0.0
+anonymize --version               # anonymizer 1.0.0
 ```
 
-**Common errors**
+More detail (PATH, models, upgrades): [packaging/homebrew/README.md](packaging/homebrew/README.md).
 
-| Message | Fix |
-|---------|-----|
-| No Cask with this name exists | Run `brew tap arcane-tl/anonymizer` first |
-| Refusing to load … from untrusted tap | `brew trust arcane-tl/anonymizer` (note the final **r** — not `anonymize`) |
-| **“Anonymizer is damaged…”** (Gatekeeper) | `brew update && brew reinstall --cask anonymizer` (need notarized cask). Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
+### Other options
 
-See [packaging/homebrew/README.md](packaging/homebrew/README.md) for PATH, models, and upgrades.
+| Platform | How |
+|----------|-----|
+| **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` |
+| **Windows** | PowerShell installer is on branch `feature/windows-install` (`scripts/install.ps1`) — not on `main` yet |
+| **From source** | Python 3.11+, `pip install -e ".[dev]"`, then `python -m spacy download en_core_web_lg` and `fi_core_news_lg` |
 
-### Install (macOS) — curl installer (alternative)
+---
+
+## 60-second tour
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
-# New terminal (or: export PATH="$HOME/.local/bin:$PATH")
+# Health check (models, PATH, optional OCR)
 anonymize doctor
-# Optional GUI from a clone:
-# ./packaging/macos/install-app.sh --dest /Applications
-```
 
-### Use
-
-```bash
 # Full scrub (default) → contract.anonymized.md
 anonymize contract.pdf
 
-# Text only, no redaction → report.md
+# Identity only — keep company names, scrub people & contact details
+anonymize standard sopimus.pdf
+
+# Text only — no redaction
 anonymize extract report.pdf
 
-# Identity PII only (keeps company names)
-anonymize standard sopimus.pdf
+# Review redactions before writing (false positives → keep clear)
+anonymize contract.pdf --review
+# ↑/↓ move · space check · enter confirm
+# Or non-interactive: anonymize contract.pdf --reject ORG_1,PHONE_2
 
 anonymize examples    # more copy-paste commands
 anonymize --help
-
-# Review redactions before writing (optional)
-anonymize contract.pdf --review
-# → checkbox list (all unchecked): ↑/↓ move, space toggle, enter confirm
-#   checked items are kept in clear text (false positives)
-anonymize contract.pdf --reject ORG_1,PHONE_2   # same without a prompt
 ```
 
-| Command | What it does |
-|---------|----------------|
-| `anonymize FILE` | **strict** — full scrub |
-| `anonymize extract FILE` | text only (no redaction) |
-| `anonymize standard FILE` | people / phones / emails / IDs / addresses; keep companies |
-| `anonymize strict FILE` | same as bare `anonymize FILE` |
-| `anonymize doctor` | check PATH, models, OCR |
+**Drag-and-drop (Mac):** open **Anonymizer** from Applications, drop a PDF/DOCX/txt, pick a mode. Needs the CLI on your PATH (`brew install anonymizer`).
 
-Aliases: `text` → extract · `normal` → standard · `scrub` → strict.
+---
 
-## Features
+## Modes
 
-- **Versatile detection** — patterns, heuristics, neural NER (spaCy); optional LLM
-- **No built-in company/person catalogs** — only structural rules + models + your config
-- **English + Finnish**, with **auto language detection**
-- **Stable placeholders**: the same person always becomes `[PERSON_1]`, etc.
-- **OCR** for scanned PDFs (Tesseract + optional ocrmypdf)
-- **Offline by default** — document text is not sent over the network unless you opt into remote LLM
+| Mode | Command | What it does | Default output |
+|------|---------|--------------|----------------|
+| **strict** | `anonymize FILE` | Full scrub — people, companies, addresses, geo, URLs, plates, IDs, … | `FILE.anonymized.md` |
+| **standard** | `anonymize standard FILE` | Identity PII — person, email, phone, hetu, addresses, IBAN, cards, IP. **Keeps** companies, Y-tunnus, VAT, URLs, plates | `FILE.anonymized.md` |
+| **extract** | `anonymize extract FILE` | Markdown only — **no redaction** | `FILE.md` |
 
-## Security & privacy
+Aliases: `text` → extract · `normal` / `pii` → standard · `scrub` / `full` → strict.
+
+---
+
+## Privacy & security
 
 | Mode | Document text leaves this machine? |
 |------|-------------------------------------|
 | Default (`anonymize file.pdf`) | **No** — local extract, spaCy, patterns only |
-| `--llm` / `--llm-provider ollama` | **No**, if Ollama is on localhost (default URL) |
-| `--llm --llm-provider xai` | **Yes** — text is sent to `https://api.x.ai` (requires `XAI_API_KEY`) |
+| `--llm` / `--llm-provider ollama` | **No**, if Ollama is on localhost |
+| `--llm --llm-provider xai` | **Yes** — sent to `https://api.x.ai` (`XAI_API_KEY`) |
 | `--offline` | Blocks remote `xai` even if config enables it |
 
-**Install-time only** network: `pip install`, `spacy download`, Homebrew OCR packages.
+- **No telemetry** in this application  
+- **`--map`** writes placeholder → original JSON (**contains PII**; mode `0600` when possible)  
+- Install-time network only: `pip` / Homebrew / spaCy model download  
 
-**Map files** (`--map`) contain original PII; written with mode `0600` on Unix when possible. Treat them like the source document.
+---
 
-There is **no telemetry** in this application.
+## What gets redacted (strict)
 
-## How detection works
-
-| Layer | What it does | Signals |
-|-------|----------------|---------|
-| **Patterns** | Structural IDs & morphology | Email/URL shape, plate shape, 5-digit postcode with separators, hetu/Y-tunnus checksums, legal-form suffixes (`Oy`/`Ltd`/…) after capitalised name tokens |
-| **Heuristics** | Orthography + POS | Multi-word Title Case / ALL CAPS; full address *shape*; spaCy POS to drop function-word glue |
-| **Neural NER** | spaCy models (EN/FI) | PERSON, ORG, LOCATION (and PRODUCT→ORG) |
-| **Optional LLM** | Surface extraction (`--llm`) | Model proposes entity strings; matched back into the text (`xai` or `ollama`) |
-| **Your config** | Allow/deny lists | Only strings *you* put in YAML |
-
-### Examples vs search lists
-
-| OK | Not OK |
-|----|--------|
-| Synthetic strings in **tests/fixtures** to regression-test behaviour | Searching user docs for a fixed list of company/person names |
-| **Few-shot examples in the LLM prompt** to teach format | Treating those teaching strings as entities to always redact |
-| Structural tokens (e.g. legal form `Oy`, street ending `katu`) as *patterns* | A catalog of real suppliers hard-coded in the app |
-
-The library does **not** ship a search list of real-world companies or people. Versatility comes from patterns, heuristics, models, and optional LLM — plus any denylist you supply.
-
-## Install (macOS)
-
-### Homebrew (recommended)
-
-See [Quick start](#quick-start) and [packaging/homebrew/README.md](packaging/homebrew/README.md).
-
-From a clone you can also run:
-
-```bash
-./packaging/homebrew/install-local.sh
-```
-
-### curl installer (alternative)
-
-Installs under `~/.local/share/anonymizer`, puts `anonymize` on `~/.local/bin`, optional OCR via Homebrew, spaCy models (default **lg**).
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
-```
-
-From a git clone:
-
-```bash
-git clone https://github.com/arcane-tl/anonymizer.git
-cd anonymizer
-./scripts/install.sh --yes
-```
-
-| Flag | Meaning |
-|------|---------|
-| `--yes` | Non-interactive |
-| `--no-ocr` | Skip Homebrew Tesseract/ocrmypdf |
-| `--models sm` | Smaller spaCy models (faster download) |
-| `--models lg` | Large models (default, better accuracy) |
-| `--from-source` | Install into the current clone (dev-style) |
-| `--with-dev` | Also install pytest |
-| `--prefix DIR` | Install location (default `~/.local/share/anonymizer`) |
-
-After install:
-
-```bash
-anonymize doctor
-anonymize extract document.pdf
-anonymize document.pdf -o clean.md
-```
-
-Upgrade:
-
-```bash
-~/.local/share/anonymizer/scripts/install.sh --yes
-```
-
-Uninstall:
-
-```bash
-~/.local/share/anonymizer/scripts/uninstall.sh --yes
-```
-
-### Manual / development install
-
-Requires **Python 3.11+**.
-
-```bash
-# OCR (scanned PDFs)
-brew install tesseract tesseract-lang ocrmypdf
-tesseract --list-langs   # should include eng and fin
-
-cd anonymizer
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-python -m spacy download en_core_web_lg
-python -m spacy download fi_core_news_lg
-```
-
-If large models are unavailable, medium/small variants are tried automatically at runtime.
-
-## Operating modes
-
-| Mode | Command | What it does | Default output |
-|------|---------|--------------|----------------|
-| **strict** | `anonymize FILE` or `anonymize strict FILE` | Full scrub — people, companies, addresses, geo, URLs, plates, Y-tunnus, VAT, … | `FILE.anonymized.md` |
-| **standard** | `anonymize standard FILE` | Identity PII only — person, email, phone, hetu, addresses, IBAN, cards, IP. **Keeps** companies, Y-tunnus, VAT, URLs, countries, plates | `FILE.anonymized.md` |
-| **extract** | `anonymize extract FILE` | Text only — **no redaction**. Images/logos skipped; DOCX headers/footers skipped | `FILE.md` |
-
-Legacy flags still work: `--mode extract|standard|strict` (aliases: `text`/`plain`, `normal`/`pii`, `full`).
-
-`--entities PERSON,EMAIL_ADDRESS,…` **overrides** the mode’s entity list. Config YAML may set `mode:` (see `config.example.yaml`).
-
-## Usage
-
-```bash
-# Auto language detection → <stem>.anonymized.md  (strict mode)
-anonymize report.pdf
-
-# Explicit output
-anonymize contract.docx -o clean.md
-
-# Extract-only Markdown (no placeholders)
-anonymize contract.docx --mode extract -o text.md
-
-# Finnish-only NLP pass
-anonymize sopimus.pdf --lang fi
-
-# Force dual-pass (EN + FI)
-anonymize mixed.pdf --lang en,fi
-
-# Batch a folder
-anonymize ./inbox/ --out-dir ./out/
-
-# Force OCR on a scan
-anonymize scan.pdf --force-ocr
-
-# Export placeholder map (SENSITIVE — contains original PII)
-anonymize report.pdf --map report.map.json
-
-# Config: allowlist / denylist suppliers
-anonymize report.pdf --config config.yaml
-
-anonymize --list-entities
-anonymize --version
-
-# Optional LLM layer (still runs patterns + spaCy; ignored in extract mode)
-anonymize doc.pdf --llm --llm-provider ollama   # fully local if Ollama is running
-anonymize doc.pdf --llm --llm-provider xai      # needs XAI_API_KEY (sends text to API)
-```
-
-Install LLM client for xAI: `pip install -e ".[llm]"`.
-
-### CLI options
-
-| Option | Description |
-|--------|-------------|
-| `-m / --mode` | `extract` \| `standard` \| `strict` (default **strict**) |
-| `--keep-headers` | Keep PDF page headers/footers/page numbers (default: **strip**) |
-| `-r` / `--review` | Checkbox review: space to mark false positives to keep clear |
-| `--no-review` | Skip review (default) |
-| `--reject LIST` | Non-interactive: keep tags clear, e.g. `ORG_1,PHONE_2` |
-| `-o / --output` | Output path, or `-` for stdout (single file) |
-| `--out-dir` | Directory for batch outputs |
-| `--lang` | `auto` (default), `en`, `fi`, or `en,fi` |
-| `--entities` | Comma-separated entity types (**overrides mode**) |
-| `--score-threshold` | Min NER confidence (default `0.5`) |
-| `--include-dates` | Also redact dates (standard/strict) |
-| `--force-ocr` / `--no-ocr` | OCR control for PDFs |
-| `--map` | Write placeholder → original JSON (**PII**) |
-| `--config` | YAML config (see `config.example.yaml`) |
-| `--llm` | Enable optional LLM entity layer (default provider: **ollama**) |
-| `--llm-provider` | `ollama` (local) or `xai` (remote — sends text) |
-| `--llm-model` | Model name override |
-| `--offline` | Forbid remote `xai` LLM |
-| `-q` / `--quiet` | Hide step-by-step progress (stderr) |
-
-Progress (elapsed timer + pipeline steps) is printed to **stderr** so Markdown on stdout (`-o -`) stays clean.
-
-## What gets redacted
-
-Depends on **mode** (see table above). In **strict** (default):
-
-| Type | Placeholder |
+| Kind | Placeholder |
 |------|-------------|
-| Person names | `[PERSON_n]` |
-| Organizations / suppliers / providers | `[ORG_n]` |
-| Email | `[EMAIL_n]` |
-| Phone (incl. Finnish `+358` / `040…`) | `[PHONE_n]` |
-| Street + house (structured) | `[STREET_n]` |
-| City / locality (with postcode pattern) | `[CITY_n]` |
-| Finnish postal code | `[POSTAL_n]` |
-| Other geo (spaCy residual) | `[LOCATION_n]` |
-| Webpage URLs (`https://…`, `www.…`) | `[URL_n]` |
-| Finnish registration plate (`ABC-123`) | `[PLATE_FI_n]` |
-| Vehicle VIN / valmistenumero (17-char, **strict** only) | `[VIN_n]` |
-| Finnish henkilötunnus | `[FI_HETU_n]` |
-| Finnish Y-tunnus | `[FI_BUSINESS_ID_n]` |
-| Finnish ALV / VAT (`FI` + 8 digits) | `[VAT_FI_n]` |
-| Company names (`… Oy`, `… Ltd`, …) | `[ORG_n]` |
-| IBAN, credit card, IP | `[IBAN_n]`, … |
+| Person | `[PERSON_n]` |
+| Organization / brand | `[ORG_n]` |
+| Email / phone | `[EMAIL_n]` / `[PHONE_n]` |
+| Street, city, FI postcode | `[STREET_n]` / `[CITY_n]` / `[POSTAL_n]` |
+| URL | `[URL_n]` |
+| FI plate / hetu / Y-tunnus / VAT | `[PLATE_FI_n]` / `[FI_HETU_n]` / … |
+| IBAN, card, IP, VIN (strict) | `[IBAN_n]`, … |
 
-Dates are **off** by default (`--include-dates` to enable).
+Dates are off by default (`--include-dates` to enable).  
+`--entities …` overrides the mode preset. YAML config: [config.example.yaml](config.example.yaml).
 
-## Language behaviour
+### How detection works (short)
 
-1. Extract text (OCR with `eng+fin` when auto and the PDF text layer is thin).
-2. Detect language with **lingua** (EN + FI only).
-3. Run spaCy/Presidio for `en`, `fi`, or both if mixed / low confidence.
-4. Always run pattern recognizers (email, phone, IBAN, hetu, Y-tunnus).
-5. Replace with stable placeholders; write Markdown + YAML front matter.
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people.
 
-## Privacy
+---
 
-- All processing is local.
-- Do not commit `*.map.json` or real customer documents.
-- The optional `--map` file **contains original PII** — treat it like the source document.
+## Useful options
+
+```bash
+anonymize report.pdf -o clean.md          # explicit output
+anonymize ./inbox/ --out-dir ./out/       # batch folder
+anonymize scan.pdf --force-ocr            # scanned PDF
+anonymize doc.pdf --lang fi               # force Finnish NLP
+anonymize doc.pdf --map report.map.json   # sensitive reverse map
+anonymize doc.pdf --config config.yaml    # allowlist / denylist
+anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
+```
+
+| Flag | Role |
+|------|------|
+| `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
+| `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
+| `--keep-headers` | Keep PDF running headers/footers (default: strip) |
+| `-o -` | Markdown on stdout (progress stays on stderr) |
+
+---
+
+## Troubleshooting
+
+| Message | Fix |
+|---------|-----|
+| No Cask with this name | `brew tap arcane-tl/anonymizer` |
+| Untrusted tap (Homebrew 6+) | `brew trust arcane-tl/anonymizer` (note the final **r**) |
+| “Anonymizer is damaged…” | `brew update && brew reinstall --cask anonymizer` (need notarized build) |
+
+---
 
 ## Development
 
 ```bash
-source .venv/bin/activate
-pytest
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m spacy download en_core_web_lg
+python -m spacy download fi_core_news_lg
+pytest -q
 ```
 
-### Contract & realworld regression
+Regression: `tests/test_contract_templates.py`, `tests/test_realworld_precision.py`, `tests/test_offline_security.py`.  
+See [tests/fixtures/README.md](tests/fixtures/README.md) and [AGENTS.md](AGENTS.md) (local agent notes).
 
-```bash
-# Synthetic contracts (recall: PII must be gone)
-pytest tests/test_contract_templates.py -q
+Mac GUI build: [packaging/macos/README.md](packaging/macos/README.md).
 
-# Realworld-style EN/FI docs (precision: boilerplate must survive)
-pytest tests/test_realworld_precision.py tests/test_offline_security.py -q
-
-# Manual
-anonymize tests/fixtures/contract_en.txt -o /tmp/en.md --lang en
-anonymize tests/fixtures/realworld/fi_sample_sopimus.txt -o /tmp/fi.md --lang fi
-```
-
-See `tests/fixtures/README.md` and `tests/fixtures/realworld/SOURCES.md`.
-
-OCR and spaCy-heavy tests may skip if models or Tesseract are missing.
+---
 
 ## License
 
