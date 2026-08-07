@@ -201,6 +201,14 @@ Mac GUI build: [packaging/macos/README.md](packaging/macos/README.md).
 
 ---
 
+## Support this project
+
+If Anonymizer is useful to you, you can support its development via GitHub Sponsors:
+
+**[Sponsor @arcane-tl on GitHub](https://github.com/sponsors/arcane-tl)**
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
