@@ -13,6 +13,23 @@ property modeTitles : {¬
 	"Remove identity only (keep company names)", ¬
 	"Convert to text only (no privacy scrub)"}
 property modeArgs : {"strict", "standard", "extract"}
+-- Modal result for custom options panel buttons (0=cancel, 1=start, 2=lists)
+property optionsModalCode : 0
+
+on clickOptionsStart_(sender)
+	set optionsModalCode to 1
+	current application's NSApp's stopModal()
+end clickOptionsStart_
+
+on clickOptionsLists_(sender)
+	set optionsModalCode to 2
+	current application's NSApp's stopModal()
+end clickOptionsLists_
+
+on clickOptionsCancel_(sender)
+	set optionsModalCode to 0
+	current application's NSApp's stopModal()
+end clickOptionsCancel_
 
 on run
 	try
@@ -213,7 +230,7 @@ end countNonEmptyLines
 on listsStatusLine(allowText, denyText)
 	set nAllow to countNonEmptyLines(allowText)
 	set nDeny to countNonEmptyLines(denyText)
-	return "Lists: " & (nAllow as text) & " allow, " & (nDeny as text) & " deny (Lists... button; saved under .config/anonymizer)"
+	return "Allowlist " & (nAllow as text) & "  ·  Denylist " & (nDeny as text) & "  —  edit with Lists…"
 end listsStatusLine
 
 on loadListsFromConfig()
@@ -273,15 +290,47 @@ on saveListsToConfig(allowText, denyText)
 	end try
 end saveListsToConfig
 
+-- Section header: readable primary label (Mode, Output style, …)
 on makeLabel(titleText, x, y, w, h)
 	set lab to current application's NSTextField's alloc()'s initWithFrame:{{x, y}, {w, h}}
 	lab's setStringValue:titleText
 	lab's setEditable:false
 	lab's setBezeled:false
 	lab's setDrawsBackground:false
-	lab's setFont:(current application's NSFont's boldSystemFontOfSize:12)
+	lab's setFont:(current application's NSFont's boldSystemFontOfSize:13)
+	try
+		lab's setTextColor:(current application's NSColor's labelColor())
+	end try
 	return lab
 end makeLabel
+
+-- Supporting copy: secondary, slightly smaller
+on makeCaption(titleText, x, y, w, h)
+	set lab to current application's NSTextField's alloc()'s initWithFrame:{{x, y}, {w, h}}
+	lab's setStringValue:titleText
+	lab's setEditable:false
+	lab's setBezeled:false
+	lab's setDrawsBackground:false
+	lab's setFont:(current application's NSFont's systemFontOfSize:12)
+	try
+		lab's setTextColor:(current application's NSColor's secondaryLabelColor())
+	end try
+	return lab
+end makeCaption
+
+-- Fine print under lists / file meta
+on makeFinePrint(titleText, x, y, w, h)
+	set lab to current application's NSTextField's alloc()'s initWithFrame:{{x, y}, {w, h}}
+	lab's setStringValue:titleText
+	lab's setEditable:false
+	lab's setBezeled:false
+	lab's setDrawsBackground:false
+	lab's setFont:(current application's NSFont's systemFontOfSize:11)
+	try
+		lab's setTextColor:(current application's NSColor's tertiaryLabelColor())
+	end try
+	return lab
+end makeFinePrint
 
 on makeScrollText(initialText, x, y, w, h)
 	set scroll to current application's NSScrollView's alloc()'s initWithFrame:{{x, y}, {w, h}}
@@ -323,58 +372,62 @@ end textViewContents
 on showListsPanel(allowText, denyText)
 	set alert to current application's NSAlert's alloc()'s init()
 	applyAlertChrome(alert)
+	alert's setInformativeText:"One phrase per line. Allowlist is never redacted; denylist is always redacted. Done saves to ~/.config/anonymizer/config.yaml."
 	alert's addButtonWithTitle:"Done"
 	alert's addButtonWithTitle:"Cancel"
 
-	set panelW to 440
-	set thr to titleRowHeight()
-	set panelH to 320 + thr
+	-- Match main-panel margins and type scale
+	set margin to 16
+	set gapLabel to 6
+	set gapSection to 18
+	set panelW to 460
+	set labelH to 18
+	set allowBoxH to 112
+	set denyBoxH to 112
+	set panelH to margin + labelH + gapLabel + allowBoxH + gapSection + labelH + gapLabel + denyBoxH + margin
 	set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
-	addTitleRow(accessory, panelW, panelH - thr)
+	set innerW to panelW - margin * 2
 
-	set sub to current application's NSTextField's alloc()'s initWithFrame:{{12, panelH - thr - 36}, {panelW - 24, 32}}
-	sub's setStringValue:"One string per line. Allow = never redact. Deny = always redact. Done saves to ~/.config/anonymizer/config.yaml."
-	sub's setEditable:false
-	sub's setBezeled:false
-	sub's setDrawsBackground:false
-	sub's setFont:(current application's NSFont's systemFontOfSize:11)
-	accessory's addSubview:sub
-
-	accessory's addSubview:(makeLabel("Allowlist — never redact", 12, 250, panelW - 24, 18))
-	-- Keep direct refs to NSTextView (do not rely on record property chains after runModal)
-	set allowScroll to current application's NSScrollView's alloc()'s initWithFrame:{{12, 140}, {panelW - 24, 106}}
+	set y to panelH - margin - labelH
+	accessory's addSubview:(makeLabel("Allowlist — never redact", margin, y, innerW, labelH))
+	set y to y - gapLabel - allowBoxH
+	set allowScroll to current application's NSScrollView's alloc()'s initWithFrame:{{margin, y}, {innerW, allowBoxH}}
 	allowScroll's setHasVerticalScroller:true
 	allowScroll's setHasHorizontalScroller:false
 	allowScroll's setAutohidesScrollers:true
 	allowScroll's setBorderType:(current application's NSBezelBorder)
-	set allowTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {panelW - 28, 102}}
+	set allowTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {innerW - 4, allowBoxH - 4}}
 	allowTV's setString:allowText
-	allowTV's setFont:(current application's NSFont's systemFontOfSize:11)
+	allowTV's setFont:(current application's NSFont's systemFontOfSize:12)
 	allowTV's setRichText:false
 	allowTV's setImportsGraphics:false
 	allowTV's setEditable:true
 	allowTV's setSelectable:true
 	allowTV's setVerticallyResizable:true
 	allowTV's setHorizontallyResizable:false
+	allowTV's textContainer()'s setContainerSize:{innerW - 16, 1.0E+7}
 	allowTV's textContainer()'s setWidthTracksTextView:true
 	allowScroll's setDocumentView:allowTV
 	accessory's addSubview:allowScroll
 
-	accessory's addSubview:(makeLabel("Denylist — always redact", 12, 118, panelW - 24, 18))
-	set denyScroll to current application's NSScrollView's alloc()'s initWithFrame:{{12, 12}, {panelW - 24, 102}}
+	set y to y - gapSection - labelH
+	accessory's addSubview:(makeLabel("Denylist — always redact", margin, y, innerW, labelH))
+	set y to y - gapLabel - denyBoxH
+	set denyScroll to current application's NSScrollView's alloc()'s initWithFrame:{{margin, y}, {innerW, denyBoxH}}
 	denyScroll's setHasVerticalScroller:true
 	denyScroll's setHasHorizontalScroller:false
 	denyScroll's setAutohidesScrollers:true
 	denyScroll's setBorderType:(current application's NSBezelBorder)
-	set denyTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {panelW - 28, 98}}
+	set denyTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {innerW - 4, denyBoxH - 4}}
 	denyTV's setString:denyText
-	denyTV's setFont:(current application's NSFont's systemFontOfSize:11)
+	denyTV's setFont:(current application's NSFont's systemFontOfSize:12)
 	denyTV's setRichText:false
 	denyTV's setImportsGraphics:false
 	denyTV's setEditable:true
 	denyTV's setSelectable:true
 	denyTV's setVerticallyResizable:true
 	denyTV's setHorizontallyResizable:false
+	denyTV's textContainer()'s setContainerSize:{innerW - 16, 1.0E+7}
 	denyTV's textContainer()'s setWidthTracksTextView:true
 	denyScroll's setDocumentView:denyTV
 	accessory's addSubview:denyScroll
@@ -392,118 +445,149 @@ on showListsPanel(allowText, denyText)
 		saveListsToConfig(newAllow, newDeny)
 	on error errMsg
 		display dialog "Could not save lists to config:" & return & return & errMsg buttons {"OK"} default button 1 with icon caution with title "Anonymizer"
-		-- Still return edited text for this run even if save failed
 	end try
 	return {allowText:newAllow, denyText:newDeny}
 end showListsPanel
 
--- Main options: mode, style, review/open. Lists… opens secondary editor.
--- Loop until Start or Cancel (Lists… re-shows main with updated list status).
+-- Main options panel: clear hierarchy, breathing room, HIG action bar
 on showOptionsPanel(fileNames)
 	set nFiles to count of fileNames
 	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
 	set filesText to fileListSummary(fileNames)
 
-	-- Note: never name a variable "lists" — AppleScript treats it as class plural ("every list").
 	set listState to loadListsFromConfig()
 	set allowText to allowText of listState
 	set denyText to denyText of listState
 
-	-- Remember last selections when re-showing after Lists…
 	set lastModeRow to 0
 	set lastStyleRow to 0
 	set lastReview to false
 	set lastOpen to true
 
+	-- Design scale (comfortable, not sparse)
+	set margin to 24
+	set gapXs to 6 -- label → control
+	set gapSm to 10 -- related controls
+	set gapMd to 16 -- within a section cluster
+	set gapLg to 22 -- between major sections
+	set gapXl to 28 -- before action bar
+	set panelW to 500
+	set iconSize to 44
+	set titleRowH to iconSize
+	set subH to 18
+	set filesLabelH to 18
+	set filesH to 72
+	set modeLabelH to 18
+	set modeMatrixH to 90 -- 3 radio rows with room to breathe
+	set styleLabelH to 18
+	set styleMatrixH to 54 -- 2 radio rows
+	set listsLabelH to 18
+	set listsStatusH to 16
+	set checkH to 22
+	set btnH to 32
+	set btnW to 96
+	set btnGap to 10
+
+	-- Exact height: sum of blocks + gaps (top → bottom)
+	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + modeMatrixH + gapLg + styleLabelH + gapXs + styleMatrixH + gapLg + listsLabelH + gapXs + listsStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+
 	repeat
-		set alert to current application's NSAlert's alloc()'s init()
-		applyAlertChrome(alert)
-		-- Button order: rightmost is first = default (Start)
-		alert's addButtonWithTitle:"Start"
-		alert's addButtonWithTitle:"Lists…"
-		alert's addButtonWithTitle:"Cancel"
+		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
+		set thePanel to (current application's NSPanel's alloc())
+		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
+		thePanel's setTitle:""
+		thePanel's setLevel:8
+		thePanel's |center|()
 
-		set panelW to 440
-		set thr to titleRowHeight()
-		-- Grow panel upward for title + subtitle; keep original content Y coords (bottom-anchored)
-		set subH to 40
-		set panelH to 340 + thr + subH
-		set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
-		-- Title at the very top (highest Y)
-		addTitleRow(accessory, panelW, panelH - thr)
-		-- Subtitle just under title
-		set sub to current application's NSTextField's alloc()'s initWithFrame:{{12, panelH - thr - subH}, {panelW - 24, subH - 4}}
-		sub's setStringValue:(header & return & "Output is saved next to each original file. Work stays on this Mac.")
-		sub's setEditable:false
-		sub's setBezeled:false
-		sub's setDrawsBackground:false
-		sub's setFont:(current application's NSFont's systemFontOfSize:11)
-		accessory's addSubview:sub
+		set content to thePanel's contentView()
+		set innerW to panelW - margin * 2
 
-		-- Original content stack (y 8…328) — below subtitle (subtitle bottom = 340)
-		set filesField to current application's NSTextField's alloc()'s initWithFrame:{{12, 248}, {panelW - 24, 80}}
+		-- Top-down cursor (AppKit Y grows upward; y is BOTTOM of each block)
+		set y to panelH - margin - titleRowH
+		addTitleRow(content, panelW, y)
+
+		set y to y - gapSm - subH
+		content's addSubview:(makeCaption(header & "  ·  Saves next to original  ·  Private on this Mac", margin, y, innerW, subH))
+
+		set y to y - gapLg - filesLabelH
+		content's addSubview:(makeLabel("Files", margin, y, innerW, filesLabelH))
+
+		set y to y - gapXs - filesH
+		set filesField to current application's NSTextField's alloc()'s initWithFrame:{{margin, y}, {innerW, filesH}}
 		filesField's setStringValue:filesText
 		filesField's setEditable:false
 		filesField's setBezeled:true
 		filesField's setBordered:true
 		filesField's setDrawsBackground:true
 		filesField's setSelectable:true
-		filesField's setFont:(current application's NSFont's systemFontOfSize:11)
-		accessory's addSubview:filesField
+		filesField's setFont:(current application's NSFont's systemFontOfSize:12)
+		try
+			filesField's setTextColor:(current application's NSColor's labelColor())
+			filesField's setBackgroundColor:(current application's NSColor's controlBackgroundColor())
+		end try
+		content's addSubview:filesField
 
-		accessory's addSubview:(makeLabel("Mode", 12, 226, panelW - 24, 18))
+		set y to y - gapLg - modeLabelH
+		content's addSubview:(makeLabel("Mode", margin, y, innerW, modeLabelH))
 
+		set y to y - gapXs - modeMatrixH
 		set proto to current application's NSButtonCell's alloc()'s init()
 		proto's setButtonType:(current application's NSButtonTypeRadio)
-		proto's setFont:(current application's NSFont's systemFontOfSize:12)
+		proto's setFont:(current application's NSFont's systemFontOfSize:13)
 		proto's setControlSize:(current application's NSControlSizeRegular)
 		proto's setWraps:true
 
-		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 148}, {panelW - 24, 76}} ¬
+		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{margin, y}, {innerW, modeMatrixH}} ¬
 			mode:(current application's NSRadioModeMatrix) ¬
 			prototype:proto ¬
 			numberOfRows:3 ¬
 			numberOfColumns:1
 		matrix's setAutosizesCells:true
 		matrix's setMode:(current application's NSRadioModeMatrix)
+		try
+			matrix's setIntercellSpacing:{0, 4}
+		end try
 		repeat with i from 0 to 2
 			set cell to matrix's cellAtRow:i column:0
 			cell's setTitle:(item (i + 1) of modeTitles)
 			cell's setTag:i
 		end repeat
 		matrix's selectCellAtRow:lastModeRow column:0
-		matrix's setFrame:{{12, 148}, {panelW - 24, 76}}
-		accessory's addSubview:matrix
+		matrix's setFrame:{{margin, y}, {innerW, modeMatrixH}}
+		content's addSubview:matrix
 
-		accessory's addSubview:(makeLabel("Output style", 12, 126, panelW - 24, 18))
+		set y to y - gapLg - styleLabelH
+		content's addSubview:(makeLabel("Output style", margin, y, innerW, styleLabelH))
 
+		set y to y - gapXs - styleMatrixH
 		set styleProto to current application's NSButtonCell's alloc()'s init()
 		styleProto's setButtonType:(current application's NSButtonTypeRadio)
-		styleProto's setFont:(current application's NSFont's systemFontOfSize:12)
+		styleProto's setFont:(current application's NSFont's systemFontOfSize:13)
 		styleProto's setWraps:true
-		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 86}, {panelW - 24, 38}} ¬
+		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{margin, y}, {innerW, styleMatrixH}} ¬
 			mode:(current application's NSRadioModeMatrix) ¬
 			prototype:styleProto ¬
 			numberOfRows:2 ¬
 			numberOfColumns:1
 		styleMatrix's setAutosizesCells:true
+		try
+			styleMatrix's setIntercellSpacing:{0, 4}
+		end try
 		(styleMatrix's cellAtRow:0 column:0)'s setTitle:"Replace with tags  [PERSON_1]"
 		(styleMatrix's cellAtRow:0 column:0)'s setTag:0
 		(styleMatrix's cellAtRow:1 column:0)'s setTitle:"Delete text entirely (no tags)"
 		(styleMatrix's cellAtRow:1 column:0)'s setTag:1
 		styleMatrix's selectCellAtRow:lastStyleRow column:0
-		styleMatrix's setFrame:{{12, 86}, {panelW - 24, 38}}
-		accessory's addSubview:styleMatrix
+		styleMatrix's setFrame:{{margin, y}, {innerW, styleMatrixH}}
+		content's addSubview:styleMatrix
 
-		set listsField to current application's NSTextField's alloc()'s initWithFrame:{{12, 60}, {panelW - 24, 22}}
-		listsField's setStringValue:listsStatusLine(allowText, denyText)
-		listsField's setEditable:false
-		listsField's setBezeled:false
-		listsField's setDrawsBackground:false
-		listsField's setFont:(current application's NSFont's systemFontOfSize:11)
-		accessory's addSubview:listsField
+		set y to y - gapLg - listsLabelH
+		content's addSubview:(makeLabel("Custom lists", margin, y, innerW, listsLabelH))
+		set y to y - gapXs - listsStatusH
+		content's addSubview:(makeFinePrint(listsStatusLine(allowText, denyText), margin, y, innerW, listsStatusH))
 
-		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 34}, {panelW - 24, 24}}
+		set y to y - gapMd - checkH
+		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
 		reviewBox's setTitle:"Review findings before saving (opens Terminal)"
 		if lastReview then
@@ -511,10 +595,11 @@ on showOptionsPanel(fileNames)
 		else
 			reviewBox's setState:(current application's NSControlStateValueOff)
 		end if
-		reviewBox's setFont:(current application's NSFont's systemFontOfSize:12)
-		accessory's addSubview:reviewBox
+		reviewBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:reviewBox
 
-		set openBox to current application's NSButton's alloc()'s initWithFrame:{{12, 8}, {panelW - 24, 24}}
+		set y to y - gapSm - checkH
+		set openBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		openBox's setButtonType:(current application's NSButtonTypeSwitch)
 		openBox's setTitle:"Open result when finished"
 		if lastOpen then
@@ -522,14 +607,34 @@ on showOptionsPanel(fileNames)
 		else
 			openBox's setState:(current application's NSControlStateValueOff)
 		end if
-		openBox's setFont:(current application's NSFont's systemFontOfSize:12)
-		accessory's addSubview:openBox
+		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:openBox
 
-		alert's setAccessoryView:accessory
+		-- Action bar (HIG): Cancel left · Lists… + Start right
+		set y to margin
+		set cancelBtn to makeDialogButton("Cancel", margin, y, btnW, btnH, "clickOptionsCancel:")
+		try
+			cancelBtn's setKeyEquivalent:(ASCII character 27)
+		end try
+		set startX to margin + innerW - btnW
+		set listsX to startX - btnGap - btnW
+		set listsBtn to makeDialogButton("Lists…", listsX, y, btnW, btnH, "clickOptionsLists:")
+		set startBtn to makeDialogButton("Start", startX, y, btnW, btnH, "clickOptionsStart:")
+		startBtn's setKeyEquivalent:return
+		try
+			-- Emphasize primary action (blue when focused)
+			startBtn's setKeyEquivalentModifierMask:0
+		end try
+		content's addSubview:cancelBtn
+		content's addSubview:listsBtn
+		content's addSubview:startBtn
+
+		set optionsModalCode to -1
 		current application's NSApp's activateIgnoringOtherApps:true
-		set response to alert's runModal()
+		thePanel's makeKeyAndOrderFront_(missing value)
+		current application's NSApp's runModalForWindow_(thePanel)
+		set response to optionsModalCode
 
-		-- Snapshot selections before disposing
 		set lastModeRow to matrix's selectedRow() as integer
 		if lastModeRow < 0 then set lastModeRow to 0
 		if lastModeRow > 2 then set lastModeRow to 0
@@ -542,8 +647,9 @@ on showOptionsPanel(fileNames)
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
 
-		if response is (current application's NSAlertFirstButtonReturn) then
-			-- Start
+		thePanel's orderOut_(missing value)
+
+		if response is 1 then
 			set modeArg to item (lastModeRow + 1) of modeArgs
 			set redactStyle to "placeholder"
 			if lastStyleRow is 1 then set redactStyle to "remove"
@@ -551,16 +657,13 @@ on showOptionsPanel(fileNames)
 			set wantOpen to lastOpen
 			if modeArg is "extract" then set wantReview to false
 			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
-		else if response is (current application's NSAlertSecondButtonReturn) then
-			-- Lists…
+		else if response is 2 then
 			set edited to showListsPanel(allowText, denyText)
 			if edited is not missing value then
 				set allowText to allowText of edited
 				set denyText to denyText of edited
 			end if
-			-- loop → re-show main
 		else
-			-- Cancel
 			return missing value
 		end if
 	end repeat
@@ -636,54 +739,68 @@ on appTitle()
 	return "Anonymizer (version " & appVersion() & ")"
 end appTitle
 
-on applyAlertChrome(alertRef)
-	-- Empty system title/icon — custom title row (squircle + version) lives in accessory.
-	alertRef's setMessageText:""
-	alertRef's setInformativeText:""
-	try
-		-- Hide default caution icon with a 1×1 clear image if needed
-		set emptyImg to current application's NSImage's alloc()'s initWithSize:{1, 1}
-		alertRef's setIcon:emptyImg
-	end try
-end applyAlertChrome
-
--- Title row height (icon 48 + padding). Used to size accessories.
-on titleRowHeight()
-	return 56
-end titleRowHeight
-
--- Draw squircle icon + "Anonymizer (version X)" on one vertically centered row.
--- yTop is the top edge of the title row in accessory coords (origin bottom-left).
-on addTitleRow(parentView, panelW, yBottom)
-	set iconSize to 48
-	set pad to 4
-	-- yBottom is bottom of the title row
-	set iconY to yBottom + pad
-	set titleH to 24
-	set titleY to yBottom + pad + ((iconSize - titleH) / 2)
-
+on dialogIconImage()
 	try
 		set iconPath to resourcePath("Anonymizer-dialog.png")
 		set img to current application's NSImage's alloc()'s initByReferencingFile:iconPath
-		if img is missing value then error "no dialog png"
-		set iv to current application's NSImageView's alloc()'s initWithFrame:{{12, iconY}, {iconSize, iconSize}}
+		if img is missing value then return missing value
+		return img
+	on error
+		return missing value
+	end try
+end dialogIconImage
+
+-- Compact chrome for secondary NSAlert (Lists): squircle icon + title on system title line
+on applyAlertChrome(alertRef)
+	alertRef's setMessageText:appTitle()
+	set img to dialogIconImage()
+	if img is not missing value then alertRef's setIcon:img
+end applyAlertChrome
+
+-- Title strip: squircle + version, vertically centered. yBottom = bottom of row.
+-- Returns row height used (for layout math). Keep margin in sync with showOptionsPanel.
+on addTitleRow(parentView, panelW, yBottom)
+	set margin to 24
+	set iconSize to 44
+	set iconGap to 14
+	set titleH to 22
+	set rowH to iconSize
+	set iconY to yBottom
+	set titleY to yBottom + ((iconSize - titleH) / 2)
+
+	set img to dialogIconImage()
+	if img is not missing value then
+		set iv to current application's NSImageView's alloc()'s initWithFrame:{{margin, iconY}, {iconSize, iconSize}}
 		iv's setImage:img
 		iv's setImageScaling:(current application's NSImageScaleProportionallyUpOrDown)
 		iv's setEditable:false
 		parentView's addSubview:iv
-	on error
-		-- Fallback: no icon
-	end try
+	end if
 
-	set titleField to current application's NSTextField's alloc()'s initWithFrame:{{12 + iconSize + 10, titleY}, {panelW - 12 - iconSize - 22, titleH}}
+	set titleField to current application's NSTextField's alloc()'s initWithFrame:{{margin + iconSize + iconGap, titleY}, {panelW - margin * 2 - iconSize - iconGap, titleH}}
 	titleField's setStringValue:appTitle()
 	titleField's setEditable:false
 	titleField's setBezeled:false
 	titleField's setDrawsBackground:false
-	titleField's setFont:(current application's NSFont's boldSystemFontOfSize:16)
+	titleField's setFont:(current application's NSFont's boldSystemFontOfSize:17)
 	titleField's setSelectable:false
+	try
+		titleField's setTextColor:(current application's NSColor's labelColor())
+	end try
 	parentView's addSubview:titleField
+	return rowH
 end addTitleRow
+
+on makeDialogButton(titleText, x, y, w, h, actionName)
+	set btn to current application's NSButton's alloc()'s initWithFrame:{{x, y}, {w, h}}
+	btn's setTitle:titleText
+	btn's setBezelStyle:(current application's NSBezelStyleRounded)
+	btn's setControlSize:(current application's NSControlSizeRegular)
+	btn's setFont:(current application's NSFont's systemFontOfSize:13)
+	btn's setTarget:me
+	btn's setAction:actionName
+	return btn
+end makeDialogButton
 
 on joinSpace(lst)
 	set AppleScript's text item delimiters to " "
