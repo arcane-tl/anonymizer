@@ -306,6 +306,20 @@ on makeScrollText(initialText, x, y, w, h)
 	return {scroll:scroll, textView:tv}
 end makeScrollText
 
+-- Read NSTextView contents. Must use |string|() — bare string() is an AppleScript keyword.
+on textViewContents(tv)
+	try
+		set s to (tv's |string|()) as text
+		return s
+	on error
+		try
+			return (tv's stringValue() as text)
+		on error
+			return ""
+		end try
+	end try
+end textViewContents
+
 -- Secondary dialog: edit lists; Done saves to ~/.config/anonymizer/config.yaml
 on showListsPanel(allowText, denyText)
 	set alert to current application's NSAlert's alloc()'s init()
@@ -319,12 +333,43 @@ on showListsPanel(allowText, denyText)
 	set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
 
 	accessory's addSubview:(makeLabel("Allowlist — never redact", 12, 294, panelW - 24, 18))
-	set allowPair to makeScrollText(allowText, 12, 168, panelW - 24, 120)
-	accessory's addSubview:(scroll of allowPair)
+	-- Keep direct refs to NSTextView (do not rely on record property chains after runModal)
+	set allowScroll to current application's NSScrollView's alloc()'s initWithFrame:{{12, 168}, {panelW - 24, 120}}
+	allowScroll's setHasVerticalScroller:true
+	allowScroll's setHasHorizontalScroller:false
+	allowScroll's setAutohidesScrollers:true
+	allowScroll's setBorderType:(current application's NSBezelBorder)
+	set allowTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {panelW - 28, 116}}
+	allowTV's setString:allowText
+	allowTV's setFont:(current application's NSFont's systemFontOfSize:11)
+	allowTV's setRichText:false
+	allowTV's setImportsGraphics:false
+	allowTV's setEditable:true
+	allowTV's setSelectable:true
+	allowTV's setVerticallyResizable:true
+	allowTV's setHorizontallyResizable:false
+	allowTV's textContainer()'s setWidthTracksTextView:true
+	allowScroll's setDocumentView:allowTV
+	accessory's addSubview:allowScroll
 
 	accessory's addSubview:(makeLabel("Denylist — always redact", 12, 144, panelW - 24, 18))
-	set denyPair to makeScrollText(denyText, 12, 12, panelW - 24, 128)
-	accessory's addSubview:(scroll of denyPair)
+	set denyScroll to current application's NSScrollView's alloc()'s initWithFrame:{{12, 12}, {panelW - 24, 128}}
+	denyScroll's setHasVerticalScroller:true
+	denyScroll's setHasHorizontalScroller:false
+	denyScroll's setAutohidesScrollers:true
+	denyScroll's setBorderType:(current application's NSBezelBorder)
+	set denyTV to current application's NSTextView's alloc()'s initWithFrame:{{0, 0}, {panelW - 28, 124}}
+	denyTV's setString:denyText
+	denyTV's setFont:(current application's NSFont's systemFontOfSize:11)
+	denyTV's setRichText:false
+	denyTV's setImportsGraphics:false
+	denyTV's setEditable:true
+	denyTV's setSelectable:true
+	denyTV's setVerticallyResizable:true
+	denyTV's setHorizontallyResizable:false
+	denyTV's textContainer()'s setWidthTracksTextView:true
+	denyScroll's setDocumentView:denyTV
+	accessory's addSubview:denyScroll
 
 	alert's setAccessoryView:accessory
 	current application's NSApp's activateIgnoringOtherApps:true
@@ -333,8 +378,8 @@ on showListsPanel(allowText, denyText)
 		return missing value
 	end if
 
-	set newAllow to ((textView of allowPair)'s string()) as text
-	set newDeny to ((textView of denyPair)'s string()) as text
+	set newAllow to textViewContents(allowTV)
+	set newDeny to textViewContents(denyTV)
 	try
 		saveListsToConfig(newAllow, newDeny)
 	on error errMsg
