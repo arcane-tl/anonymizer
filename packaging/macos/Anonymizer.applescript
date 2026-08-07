@@ -31,23 +31,59 @@ on clickOptionsCancel_(sender)
 	current application's NSApp's stopModal()
 end clickOptionsCancel_
 
+-- Red traffic-light (×) must end the modal session (same as Cancel).
+-- Without stopModal, runModalForWindow_ never returns and the droplet zombies.
+on windowShouldClose_(sender)
+	set optionsModalCode to 0
+	current application's NSApp's stopModal()
+	return true
+end windowShouldClose_
+
+-- Allow ⌘Q while the options panel is modal.
+on applicationShouldTerminate_(sender)
+	try
+		current application's NSApp's stopModal()
+	end try
+	set optionsModalCode to 0
+	return current application's NSTerminateNow
+end applicationShouldTerminate_
+
+on quitAnonymizerApp()
+	-- Droplets can linger after AppKit modal; exit once open/run is done.
+	try
+		current application's NSApp's terminate_(missing value)
+	on error
+		try
+			tell me to quit
+		end try
+	end try
+end quitAnonymizerApp
+
 on run
 	try
 		set theFiles to choose file with prompt "Choose documents to anonymize" with multiple selections allowed
 		processFiles(normalizeFileList(theFiles))
 	on error errMsg number errNum
-		if errNum is -128 then return
+		if errNum is -128 then
+			quitAnonymizerApp()
+			return
+		end if
 		display dialog "Anonymizer: " & errMsg buttons {"OK"} default button 1 with icon stop
 	end try
+	quitAnonymizerApp()
 end run
 
 on open theFiles
 	try
 		processFiles(normalizeFileList(theFiles))
 	on error errMsg number errNum
-		if errNum is -128 then return
+		if errNum is -128 then
+			quitAnonymizerApp()
+			return
+		end if
 		display dialog "Anonymizer: " & errMsg buttons {"OK"} default button 1 with icon stop
 	end try
+	quitAnonymizerApp()
 end open
 
 on normalizeFileList(theFiles)
@@ -497,6 +533,12 @@ on showOptionsPanel(fileNames)
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
 		thePanel's setTitle:""
 		thePanel's setLevel:8
+		thePanel's setDelegate:me
+		thePanel's setReleasedWhenClosed:false
+		try
+			-- So ⌘Q is not blocked while runModalForWindow_ is active
+			thePanel's setPreventsApplicationTerminationWhenModal:false
+		end try
 		thePanel's |center|()
 
 		set content to thePanel's contentView()
