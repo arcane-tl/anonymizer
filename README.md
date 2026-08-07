@@ -7,11 +7,9 @@ Turn contracts, reports, and scans into shareable Markdown — on your machine, 
 
 **Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text → Markdown**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
 
-| | |
-|---|---|
-| **CLI** | `anonymize` |
-| **Mac app** | **Anonymizer.app** (drag-and-drop) |
-| **Default** | Offline — document text stays on your computer |
+- **CLI:** `anonymize`
+- **Mac app:** **Anonymizer.app** (drag-and-drop)
+- **Default:** Offline — document text stays on your computer
 
 > **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
 
