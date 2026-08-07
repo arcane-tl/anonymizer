@@ -40,7 +40,8 @@ cask "anonymizer-app" do
       brew upgrade anonymizer anonymizer-app
 
     Migrating from the old cask token "anonymizer":
-      brew uninstall --cask anonymizer
+      brew uninstall --cask --force anonymizer
+      # if still stuck: rm -rf "$(brew --prefix)/Caskroom/anonymizer"
       brew install --cask anonymizer-app
       brew link --overwrite anonymizer && hash -r
 

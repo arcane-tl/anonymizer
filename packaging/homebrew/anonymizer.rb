@@ -59,7 +59,10 @@ class Anonymizer < Formula
         brew update && brew upgrade anonymizer anonymizer-app
 
       Migrating from the old cask token "anonymizer" (same name blocked CLI link):
-        brew uninstall --cask anonymizer
+        brew uninstall --cask --force anonymizer
+        # if uninstall still errors:
+        #   rm -rf "$(brew --prefix)/Caskroom/anonymizer"
+        #   rm -rf /Applications/Anonymizer.app
         brew install --cask anonymizer-app
         brew link --overwrite anonymizer && hash -r
 
