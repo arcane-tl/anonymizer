@@ -351,9 +351,10 @@ on showOptionsPanel(fileNames)
 	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
 	set filesText to fileListSummary(fileNames)
 
-	set lists to loadListsFromConfig()
-	set allowText to allowText of lists
-	set denyText to denyText of lists
+	-- Note: never name a variable "lists" — AppleScript treats it as class plural ("every list").
+	set listState to loadListsFromConfig()
+	set allowText to allowText of listState
+	set denyText to denyText of listState
 
 	-- Remember last selections when re-showing after Lists…
 	set lastModeRow to 0
