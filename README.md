@@ -62,7 +62,7 @@ brew install anonymizer           # CLI
 brew install --cask anonymizer    # optional drag-and-drop app → /Applications
 
 anonymize doctor
-anonymize --version               # anonymizer 1.0.0
+anonymize --version               # anonymizer 1.1.0
 ```
 
 More detail (PATH, models, upgrades): [packaging/homebrew/README.md](packaging/homebrew/README.md).
