@@ -425,13 +425,14 @@ on showOptionsPanel(fileNames)
 
 		set panelW to 440
 		set thr to titleRowHeight()
-		-- Extra band under title for subtitle
-		set dy to thr + 44
-		set panelH to 340 + dy
+		-- Grow panel upward for title + subtitle; keep original content Y coords (bottom-anchored)
+		set subH to 40
+		set panelH to 340 + thr + subH
 		set accessory to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {panelW, panelH}}
+		-- Title at the very top (highest Y)
 		addTitleRow(accessory, panelW, panelH - thr)
-
-		set sub to current application's NSTextField's alloc()'s initWithFrame:{{12, panelH - thr - 40}, {panelW - 24, 36}}
+		-- Subtitle just under title
+		set sub to current application's NSTextField's alloc()'s initWithFrame:{{12, panelH - thr - subH}, {panelW - 24, subH - 4}}
 		sub's setStringValue:(header & return & "Output is saved next to each original file. Work stays on this Mac.")
 		sub's setEditable:false
 		sub's setBezeled:false
@@ -439,8 +440,8 @@ on showOptionsPanel(fileNames)
 		sub's setFont:(current application's NSFont's systemFontOfSize:11)
 		accessory's addSubview:sub
 
-		-- Content layout shifted up by dy (title + subtitle)
-		set filesField to current application's NSTextField's alloc()'s initWithFrame:{{12, 248 + dy}, {panelW - 24, 80}}
+		-- Original content stack (y 8…328) — below subtitle (subtitle bottom = 340)
+		set filesField to current application's NSTextField's alloc()'s initWithFrame:{{12, 248}, {panelW - 24, 80}}
 		filesField's setStringValue:filesText
 		filesField's setEditable:false
 		filesField's setBezeled:true
@@ -450,7 +451,7 @@ on showOptionsPanel(fileNames)
 		filesField's setFont:(current application's NSFont's systemFontOfSize:11)
 		accessory's addSubview:filesField
 
-		accessory's addSubview:(makeLabel("Mode", 12, 226 + dy, panelW - 24, 18))
+		accessory's addSubview:(makeLabel("Mode", 12, 226, panelW - 24, 18))
 
 		set proto to current application's NSButtonCell's alloc()'s init()
 		proto's setButtonType:(current application's NSButtonTypeRadio)
@@ -458,7 +459,7 @@ on showOptionsPanel(fileNames)
 		proto's setControlSize:(current application's NSControlSizeRegular)
 		proto's setWraps:true
 
-		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 148 + dy}, {panelW - 24, 76}} ¬
+		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 148}, {panelW - 24, 76}} ¬
 			mode:(current application's NSRadioModeMatrix) ¬
 			prototype:proto ¬
 			numberOfRows:3 ¬
@@ -471,16 +472,16 @@ on showOptionsPanel(fileNames)
 			cell's setTag:i
 		end repeat
 		matrix's selectCellAtRow:lastModeRow column:0
-		matrix's setFrame:{{12, 148 + dy}, {panelW - 24, 76}}
+		matrix's setFrame:{{12, 148}, {panelW - 24, 76}}
 		accessory's addSubview:matrix
 
-		accessory's addSubview:(makeLabel("Output style", 12, 126 + dy, panelW - 24, 18))
+		accessory's addSubview:(makeLabel("Output style", 12, 126, panelW - 24, 18))
 
 		set styleProto to current application's NSButtonCell's alloc()'s init()
 		styleProto's setButtonType:(current application's NSButtonTypeRadio)
 		styleProto's setFont:(current application's NSFont's systemFontOfSize:12)
 		styleProto's setWraps:true
-		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 86 + dy}, {panelW - 24, 38}} ¬
+		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{12, 86}, {panelW - 24, 38}} ¬
 			mode:(current application's NSRadioModeMatrix) ¬
 			prototype:styleProto ¬
 			numberOfRows:2 ¬
@@ -491,10 +492,10 @@ on showOptionsPanel(fileNames)
 		(styleMatrix's cellAtRow:1 column:0)'s setTitle:"Delete text entirely (no tags)"
 		(styleMatrix's cellAtRow:1 column:0)'s setTag:1
 		styleMatrix's selectCellAtRow:lastStyleRow column:0
-		styleMatrix's setFrame:{{12, 86 + dy}, {panelW - 24, 38}}
+		styleMatrix's setFrame:{{12, 86}, {panelW - 24, 38}}
 		accessory's addSubview:styleMatrix
 
-		set listsField to current application's NSTextField's alloc()'s initWithFrame:{{12, 60 + dy}, {panelW - 24, 22}}
+		set listsField to current application's NSTextField's alloc()'s initWithFrame:{{12, 60}, {panelW - 24, 22}}
 		listsField's setStringValue:listsStatusLine(allowText, denyText)
 		listsField's setEditable:false
 		listsField's setBezeled:false
@@ -502,7 +503,7 @@ on showOptionsPanel(fileNames)
 		listsField's setFont:(current application's NSFont's systemFontOfSize:11)
 		accessory's addSubview:listsField
 
-		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 34 + dy}, {panelW - 24, 24}}
+		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{12, 34}, {panelW - 24, 24}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
 		reviewBox's setTitle:"Review findings before saving (opens Terminal)"
 		if lastReview then
@@ -513,7 +514,7 @@ on showOptionsPanel(fileNames)
 		reviewBox's setFont:(current application's NSFont's systemFontOfSize:12)
 		accessory's addSubview:reviewBox
 
-		set openBox to current application's NSButton's alloc()'s initWithFrame:{{12, 8 + dy}, {panelW - 24, 24}}
+		set openBox to current application's NSButton's alloc()'s initWithFrame:{{12, 8}, {panelW - 24, 24}}
 		openBox's setButtonType:(current application's NSButtonTypeSwitch)
 		openBox's setTitle:"Open result when finished"
 		if lastOpen then
