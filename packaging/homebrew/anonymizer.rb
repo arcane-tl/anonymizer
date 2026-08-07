@@ -49,23 +49,26 @@ class Anonymizer < Formula
   def caveats
     <<~EOS
       Product: Anonymizer
-      CLI command: anonymize
+      CLI command: anonymize (this formula)
+      GUI cask: anonymizer-app → /Applications/Anonymizer.app
 
-      Install full product (CLI + app):
-        brew install --cask anonymizer
+      Full product (one command — installs this formula + app):
+        brew install --cask anonymizer-app
 
-      Upgrade CLI and app separately (same name, two packages):
-        brew update
-        brew upgrade anonymizer
-        brew upgrade --cask anonymizer
+      Upgrade both (one command):
+        brew update && brew upgrade anonymizer anonymizer-app
 
-      If `anonymize` is missing after upgrade:
+      Migrating from the old cask token "anonymizer" (same name blocked CLI link):
+        brew uninstall --cask anonymizer
+        brew install --cask anonymizer-app
         brew link --overwrite anonymizer && hash -r
-      Ensure $(brew --prefix)/bin is on your PATH.
 
-      If `anonymize` is shadowed by ~/.local/bin:
+      If `anonymize` is missing:
+        brew link --overwrite anonymizer && hash -r
+      Ensure $(brew --prefix)/bin is on PATH.
+
+      If `~/.local/bin/anonymize` shadows Homebrew, put Homebrew first on PATH or:
         brew link --overwrite anonymizer
-        # or put Homebrew first on PATH
 
       Verify:
         anonymize doctor

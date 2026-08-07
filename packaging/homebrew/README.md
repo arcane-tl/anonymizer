@@ -1,146 +1,94 @@
 # Homebrew (formula + cask)
 
-**Product name:** Anonymizer  
+**Product name (Finder):** Anonymizer.app  
 **CLI command:** `anonymize`  
-**Finder app:** `Anonymizer.app`  
 
-Same product, two install mechanisms (Homebrew standard):
+| Package | Token | What you get |
+|---------|--------|----------------|
+| Formula | `anonymizer` | CLI on PATH |
+| Cask | `anonymizer-app` | **Anonymizer.app** in `/Applications` |
 
-| Install | What you get |
-|---------|----------------|
-| `brew install anonymizer` | CLI on PATH |
-| `brew install --cask anonymizer` | **Anonymizer** in `/Applications` |
+Different tokens on purpose: if formula and cask share a name, Homebrew **skips linking** the CLI (`cask is installed, skipping link`).
 
-## Full Mac install (recommended)
+## Full Mac install (one command)
 
 ```bash
 brew tap arcane-tl/anonymizer
 brew trust arcane-tl/anonymizer    # Homebrew 6+ required once
-brew install --cask anonymizer     # app + CLI formula as dependency
+brew install --cask anonymizer-app # pulls formula + installs app
 
 anonymize doctor
 open -a Anonymizer
 ```
 
-CLI only: `brew install anonymizer`
+**Important:** not in official `homebrew/core` / `homebrew/cask` — tap + trust first.
 
-**Important:** `anonymizer` is **not** in official `homebrew/core` or `homebrew/cask`.
-You must **tap** and **trust** first.
-
-Fully qualified form (auto-taps; still needs trust):
-
-```bash
-brew trust arcane-tl/anonymizer
-brew install --cask arcane-tl/anonymizer/anonymizer
-```
-
-Tap repository: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/homebrew-anonymizer)
+Tap: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/homebrew-anonymizer)
 
 ### Troubleshooting
 
-| Error | Fix |
-|-------|-----|
+| Error / symptom | Fix |
+|-----------------|-----|
 | `No Cask with this name exists` | `brew tap arcane-tl/anonymizer` |
-| `Refusing to load … from untrusted tap` | `brew trust arcane-tl/anonymizer` (not `…/anonymize` — note the **r**) |
-| Trust formula but cask still fails | Trust whole tap, or also `brew trust --cask arcane-tl/anonymizer/anonymizer` |
-| App already at `/Applications/Anonymizer.app` | `brew reinstall --cask --force anonymizer` |
-| **“Anonymizer is damaged and can't be opened”** | Update cask to a **notarized** build (`brew update && brew reinstall --cask anonymizer`). Interim: `xattr -cr /Applications/Anonymizer.app` then right-click → Open |
-| lingua “Failed changing dylib ID” | Harmless wheel linkage warning; ignore if `anonymize --version` works |
+| Untrusted tap | `brew trust arcane-tl/anonymizer` |
+| `command not found: anonymize` after cask install | Old cask token conflict: see migration below |
+| `anonymizer cask is installed, skipping link` | `brew uninstall --cask anonymizer` then `brew link --overwrite anonymizer` |
+| App “damaged” | `brew reinstall --cask anonymizer-app` or `xattr -cr /Applications/Anonymizer.app` |
+| lingua dylib ID warning | Harmless; ignore if CLI works |
 
 ## CLI only
 
 ```bash
-brew tap arcane-tl/anonymizer
 brew install anonymizer
 anonymize --version
 ```
 
-## GUI only note
-
-The cask **depends on** the formula. The droplet calls `anonymize` on your PATH—install the formula first (or let the cask pull it).
-
 ## Upgrade / reinstall / uninstall
-
-**Important:** formula (CLI) and cask (app) share the name `anonymizer` but are
-**two packages**. Upgrading one does not upgrade the other.
 
 ```bash
 brew update
-brew upgrade anonymizer              # CLI only
-brew upgrade --cask anonymizer       # app only — required for GUI updates
+brew upgrade anonymizer anonymizer-app
 
-# Repair / force
-brew reinstall anonymizer
-brew reinstall --cask anonymizer
+brew reinstall anonymizer anonymizer-app
 brew link --overwrite anonymizer && hash -r
 
-brew uninstall --cask anonymizer   # removes Anonymizer.app
-brew uninstall anonymizer          # removes CLI
+brew uninstall --cask anonymizer-app
+brew uninstall anonymizer
 ```
 
-If `anonymize: command not found` after upgrade:
+## Migration from cask token `anonymizer` → `anonymizer-app`
 
 ```bash
-brew link --overwrite anonymizer
-hash -r
-ls "$(brew --prefix)/bin/anonymize"
-# ensure $(brew --prefix)/bin is on PATH (Apple Silicon: /opt/homebrew/bin)
+brew uninstall --cask anonymizer
+brew install --cask anonymizer-app
+brew link --overwrite anonymizer && hash -r
+anonymize --version
+open -a Anonymizer
 ```
 
-If `~/.local/bin/anonymize` shadows Homebrew:
+## Developer: sync monorepo → tap
 
 ```bash
-brew link --overwrite anonymizer
-# or: put Homebrew first on PATH
-```
-
-## What the formula does
-
-| Step | Behavior |
-|------|----------|
-| Depends | `python@3.12`; `tesseract` recommended |
-| Install | venv + `pip install` + **sm** spaCy models |
-| Binary | `anonymize` |
-
-Larger models:
-
-```bash
-"$(brew --prefix anonymizer)/libexec/bin/python" -m spacy download en_core_web_lg
-"$(brew --prefix anonymizer)/libexec/bin/python" -m spacy download fi_core_news_lg
-```
-
-## Developer: sync this repo → tap
-
-```bash
-# Formula
 cp packaging/homebrew/anonymizer.rb \
   "$(brew --repository arcane-tl/anonymizer)/Formula/anonymizer.rb"
-
-# Cask
 mkdir -p "$(brew --repository arcane-tl/anonymizer)/Casks"
-cp packaging/homebrew/Casks/anonymizer.rb \
-  "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer.rb"
+cp packaging/homebrew/Casks/anonymizer-app.rb \
+  "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer-app.rb"
+# remove obsolete same-name cask if present:
+rm -f "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer.rb"
 ```
 
-### Rebuild a **notarized** app zip (required for other Macs)
-
-Do **not** ship a raw `install-app.sh` zip — Gatekeeper reports it as “damaged”
-(unsigned / signature broken after icon plist edits).
+Release helper:
 
 ```bash
-# Prerequisites: Developer ID Application in Keychain + notarytool profile
-# (see packaging/macos/README.md → Release)
-
-./packaging/macos/release-app.sh --version 1.0.1
-# → dist/Anonymizer-1.0.1.zip + sha256
-
-# upload dist/Anonymizer-1.0.1.zip to GitHub Release v1.0.1
-# set version + sha256 in Casks/anonymizer.rb, then sync tap (above)
+./packaging/homebrew/update-for-release.sh \
+  --version X.Y.Z \
+  --source-sha <tarball> \
+  --cask-sha <Anonymizer-X.Y.Z.zip>
 ```
 
 ## Local GUI without cask
 
 ```bash
 ./packaging/macos/install-app.sh --dest /Applications
-# ad-hoc signed for local dev only — not for distribution
 ```

@@ -37,7 +37,7 @@ if [[ -z "$SOURCE_SHA" || -z "$CASK_SHA" ]]; then
 fi
 
 FORMULA="$ROOT/packaging/homebrew/anonymizer.rb"
-CASK="$ROOT/packaging/homebrew/Casks/anonymizer.rb"
+CASK="$ROOT/packaging/homebrew/Casks/anonymizer-app.rb"
 
 python3 - <<PY
 from pathlib import Path
