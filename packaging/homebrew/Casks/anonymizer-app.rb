@@ -10,8 +10,8 @@
 # Release zip: packaging/macos/release-app.sh (Developer ID + notarized).
 
 cask "anonymizer-app" do
-  version "1.1.3"
-  sha256 "0a5cbb1228dc397eda20d06a0e0d6526f416bbeef3b2b263794a6482eab20271"
+  version "1.1.4"
+  sha256 "e961bf796919b0aa2ceb90a4b724377798e5383049ff5d3b6d148bb32d8a4871"
 
   url "https://github.com/arcane-tl/anonymizer/releases/download/v#{version}/Anonymizer-#{version}.zip"
   name "Anonymizer"
