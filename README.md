@@ -1,4 +1,7 @@
-# <img src="packaging/macos/icons/Anonymizer-256.png" alt="" width="48" height="48" /> Anonymizer
+<h1 align="center">
+  <img src="packaging/macos/icons/Anonymizer-readme.png" alt="" width="56" height="56" align="absmiddle" />
+  Anonymizer
+</h1>
 
 Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.
 
