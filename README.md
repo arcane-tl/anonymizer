@@ -97,6 +97,9 @@ anonymize contract.pdf --review
 # ↑/↓ move · space check · enter confirm
 # Or non-interactive: anonymize contract.pdf --reject ORG_1,PHONE_2
 
+# Delete findings instead of [PERSON_1] tags
+anonymize contract.pdf --redact-style remove
+
 anonymize examples    # more copy-paste commands
 anonymize --help
 ```
@@ -169,8 +172,12 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 |------|------|
 | `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
+| `--redact-style` | `placeholder` (default tags) or `remove` (delete text; no review) |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
+| `--config` | YAML: mode, allowlist, denylist, `redact_style`, … |
+
+**Mac app:** options include output style (tags vs delete) and editable **allowlist** / **denylist** before Start.
 
 ---
 

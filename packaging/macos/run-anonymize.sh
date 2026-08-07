@@ -2,12 +2,18 @@
 # run-anonymize.sh — Resolve the anonymize CLI and process one or more files.
 #
 # Usage:
-#   run-anonymize.sh [--review] [mode] file [file ...]
+#   run-anonymize.sh [options] [mode] file [file ...]
 #   mode: strict | standard | extract   (default: strict)
+#
+# Options:
+#   --review              Interactive redaction review (requires a real terminal)
+#   --redact-style STYLE  placeholder (default) | remove
+#   --config PATH         YAML config (allowlist, denylist, …)
+#   --allow-from PATH     One allowlist string per line → temp config merge
+#   --deny-from PATH      One denylist string per line → temp config merge
 #
 # On success, prints one line per written Markdown file to stdout:
 #   OUTPUT:/absolute/path/to/file.md
-# (so the Mac droplet can offer to open them)
 #
 # --review needs an interactive terminal (checkbox UI). Use Terminal.app
 # for that path; plain do shell script has no TTY.
@@ -21,11 +27,15 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: run-anonymize.sh [--review] [mode] file [file ...]
+Usage: run-anonymize.sh [options] [mode] file [file ...]
 
-  --review   Interactive redaction review (requires a real terminal)
-  mode       strict (default) | standard | extract
-  file       PDF, DOCX, or text path(s)
+  --review              Interactive redaction review (requires a real terminal)
+  --redact-style STYLE  placeholder | remove (default: placeholder)
+  --config PATH         YAML config file
+  --allow-from PATH     Allowlist file (one string per line)
+  --deny-from PATH      Denylist file (one string per line)
+  mode                  strict (default) | standard | extract
+  file                  PDF, DOCX, or text path(s)
 
 Stdout (success): one OUTPUT:/abs/path line per written Markdown file.
 
@@ -96,7 +106,6 @@ expected_output_path() {
     name="${stem}.md"
     in_abs="${dir}/${base}"
     out_abs="${dir}/${name}"
-    # Never overwrite a .md source in extract mode
     if [[ "$in_abs" == "$out_abs" ]]; then
       name="${stem}.extracted.md"
     fi
@@ -106,11 +115,107 @@ expected_output_path() {
   printf '%s/%s\n' "$dir" "$name"
 }
 
+# Build a temp YAML config from optional --config, --allow-from, --deny-from, style.
+# Prints path to temp file (caller should not delete until process ends).
+build_merged_config() {
+  local base_config="${1:-}"
+  local allow_from="${2:-}"
+  local deny_from="${3:-}"
+  local style="${4:-}"
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/anonymizer-gui-XXXXXX.yaml")"
+
+  {
+    if [[ -n "$base_config" && -f "$base_config" ]]; then
+      # Start from user config (mode may still be overridden by CLI verb)
+      cat "$base_config"
+      echo
+    fi
+    if [[ -n "$style" ]]; then
+      echo "redact_style: $(printf '%s' "$style" | sed 's/:/\\:/g')"
+    fi
+    if [[ -n "$allow_from" && -f "$allow_from" ]]; then
+      echo "allowlist:"
+      local any_allow=0
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        any_allow=1
+        esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '  - "%s"\n' "$esc"
+      done <"$allow_from"
+      # Explicit empty list replaces engine defaults
+      if [[ "$any_allow" -eq 0 ]]; then
+        echo "  []"
+      fi
+    fi
+    if [[ -n "$deny_from" && -f "$deny_from" ]]; then
+      echo "denylist:"
+      local any_deny=0
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        any_deny=1
+        esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '  - text: "%s"\n' "$esc"
+        printf '    entity_type: ORG\n'
+      done <"$deny_from"
+      if [[ "$any_deny" -eq 0 ]]; then
+        echo "  []"
+      fi
+    fi
+  } >"$tmp"
+  printf '%s\n' "$tmp"
+}
+
 REVIEW=0
-if [[ $# -ge 1 && "$1" == "--review" ]]; then
-  REVIEW=1
-  shift
-fi
+REDACT_STYLE=""
+CONFIG_PATH=""
+ALLOW_FROM=""
+DENY_FROM=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --review)
+      REVIEW=1
+      shift
+      ;;
+    --redact-style)
+      REDACT_STYLE="${2:-}"
+      shift 2
+      ;;
+    --config)
+      CONFIG_PATH="${2:-}"
+      shift 2
+      ;;
+    --allow-from)
+      ALLOW_FROM="${2:-}"
+      shift 2
+      ;;
+    --deny-from)
+      DENY_FROM="${2:-}"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "error: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if [[ $# -lt 1 ]]; then
   usage >&2
@@ -137,12 +242,42 @@ if [[ "$REVIEW" -eq 1 && "$MODE" == "extract" ]]; then
   exit 2
 fi
 
+if [[ "$REVIEW" -eq 1 && -n "$REDACT_STYLE" ]]; then
+  case "$(printf '%s' "$REDACT_STYLE" | tr '[:upper:]' '[:lower:]')" in
+    remove|delete|empty|strip)
+      echo "error: --review cannot be used with --redact-style remove" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 if [[ "$REVIEW" -eq 1 && ! -t 0 ]]; then
   echo "error: --review needs an interactive terminal (open via Terminal.app)." >&2
   exit 2
 fi
 
 BIN="$(find_anonymize)" || exit 2
+
+MERGED_CONFIG=""
+EXTRA_ARGS=()
+if [[ -n "$CONFIG_PATH" || -n "$ALLOW_FROM" || -n "$DENY_FROM" || -n "$REDACT_STYLE" ]]; then
+  if [[ -n "$ALLOW_FROM" || -n "$DENY_FROM" || ( -n "$REDACT_STYLE" && -n "$CONFIG_PATH" ) ]]; then
+    MERGED_CONFIG="$(build_merged_config "$CONFIG_PATH" "$ALLOW_FROM" "$DENY_FROM" "$REDACT_STYLE")"
+    EXTRA_ARGS+=(--config "$MERGED_CONFIG")
+  elif [[ -n "$CONFIG_PATH" ]]; then
+    EXTRA_ARGS+=(--config "$CONFIG_PATH")
+  fi
+  if [[ -n "$REDACT_STYLE" ]]; then
+    # CLI flag wins over YAML when both present
+    EXTRA_ARGS+=(--redact-style "$REDACT_STYLE")
+  fi
+fi
+cleanup_config() {
+  if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
+    rm -f "$MERGED_CONFIG"
+  fi
+}
+trap cleanup_config EXIT
 
 ok=0
 fail=0
@@ -154,7 +289,6 @@ for f in "$@"; do
     fail=$((fail + 1))
     continue
   fi
-  # Prefer absolute input path for stable default output location
   if command -v realpath >/dev/null 2>&1; then
     f_abs=$(realpath "$f")
   else
@@ -162,8 +296,7 @@ for f in "$@"; do
   fi
 
   if [[ "$REVIEW" -eq 1 ]]; then
-    # Real TTY: show progress + checkbox review (no --quiet)
-    if "$BIN" "$MODE" "$f_abs" --review; then
+    if "$BIN" "$MODE" "$f_abs" --review "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
       out_path=$(expected_output_path "$f_abs" "$MODE")
       if [[ -f "$out_path" ]]; then
         printf 'OUTPUT:%s\n' "$out_path"
@@ -175,7 +308,7 @@ for f in "$@"; do
       fail=$((fail + 1))
     fi
   else
-    if "$BIN" "$MODE" "$f_abs" --quiet; then
+    if "$BIN" "$MODE" "$f_abs" --quiet "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
       out_path=$(expected_output_path "$f_abs" "$MODE")
       if [[ -f "$out_path" ]]; then
         printf 'OUTPUT:%s\n' "$out_path"
@@ -197,10 +330,6 @@ if [[ "$fail" -gt 0 ]]; then
 fi
 echo "done: $ok file(s) ok (mode=$MODE)" >&2
 
-# Open policy (droplet sets this up front so we never ask twice):
-#   ANONYMIZER_OPEN=1|y|yes  → open outputs, no prompt
-#   ANONYMIZER_OPEN=0|n|no   → never open, no prompt
-#   unset + --review + TTY   → prompt once (CLI / Terminal without droplet)
 want_open="${ANONYMIZER_OPEN:-}"
 if [[ ${#outputs[@]} -gt 0 ]]; then
   case "$(printf '%s' "$want_open" | tr '[:upper:]' '[:lower:]')" in

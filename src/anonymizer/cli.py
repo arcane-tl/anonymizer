@@ -27,6 +27,7 @@ from anonymizer.anonymize.config import (
     entities_for_mode,
     load_config,
     normalize_mode,
+    normalize_redact_style,
 )
 from anonymizer.anonymize.engine import DocumentAnonymizer
 from anonymizer.anonymize.review import (
@@ -90,6 +91,8 @@ _OPTS_WITH_VALUE = frozenset(
         "--score-threshold",
         "--llm-provider",
         "--llm-model",
+        "--reject",
+        "--redact-style",
     }
 )
 
@@ -180,6 +183,7 @@ def _build_config(
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
+    redact_style: str | None,
 ) -> AnonymizerConfig:
     cfg = load_config(config)
     cfg.mode = normalize_mode(mode)
@@ -198,6 +202,10 @@ def _build_config(
         cfg.llm_provider = llm_provider
     if llm_model:
         cfg.llm_model = llm_model
+    if redact_style is not None:
+        cfg.redact_style = normalize_redact_style(redact_style)
+    else:
+        cfg.redact_style = normalize_redact_style(cfg.redact_style)
     if cfg.mode == "extract" and cfg.use_llm:
         console.print(
             "[dim]Note:[/dim] --llm is ignored in extract mode (no redaction)."
@@ -223,6 +231,7 @@ def _run_pipeline(
     keep_headers: bool,
     review: bool,
     reject: str | None,
+    redact_style: str | None,
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
@@ -263,8 +272,9 @@ def _run_pipeline(
             llm=llm,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            redact_style=redact_style,
         )
-    except ConfigError as exc:
+    except (ConfigError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(2) from exc
     # CLI flag wins over config default
@@ -290,6 +300,14 @@ def _run_pipeline(
         console.print(
             "[dim]Note:[/dim] --map is empty in extract mode (nothing redacted)."
         )
+
+    if (review or reject) and cfg.redact_style == "remove":
+        console.print(
+            "[red]Error:[/red] --review / --reject need placeholder tags in the "
+            "output. Use --redact-style placeholder (default), or omit review "
+            "when deleting text entirely."
+        )
+        raise typer.Exit(2)
 
     do_review = review and cfg.mode != "extract"
     if do_review:
@@ -775,6 +793,17 @@ def main(
             rich_help_panel="Common",
         ),
     ] = None,
+    redact_style: Annotated[
+        Optional[str],
+        typer.Option(
+            "--redact-style",
+            help=(
+                "How to replace findings: placeholder (default, [PERSON_1] tags) "
+                "or remove (delete the text). Not used with --review."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = None,
     entities: Annotated[
         Optional[str],
         typer.Option(
@@ -892,6 +921,7 @@ def main(
         keep_headers=keep_headers,
         review=review,
         reject=reject,
+        redact_style=redact_style,
         llm=llm,
         llm_provider=llm_provider,
         llm_model=llm_model,

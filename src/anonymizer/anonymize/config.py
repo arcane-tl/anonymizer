@@ -55,6 +55,19 @@ DEFAULT_ENTITIES: list[str] = list(STRICT_ENTITIES)
 
 VALID_MODES: tuple[str, ...] = ("extract", "standard", "strict")
 
+# How to replace detected spans in the output body
+VALID_REDACT_STYLES: tuple[str, ...] = ("placeholder", "remove")
+_REDACT_STYLE_ALIASES: dict[str, str] = {
+    "placeholder": "placeholder",
+    "placeholders": "placeholder",
+    "tags": "placeholder",
+    "tag": "placeholder",
+    "remove": "remove",
+    "delete": "remove",
+    "empty": "remove",
+    "strip": "remove",
+}
+
 # Optional aliases accepted on CLI / YAML
 _MODE_ALIASES: dict[str, str] = {
     "extract": "extract",
@@ -123,6 +136,20 @@ def normalize_mode(mode: str | None) -> str:
     return _MODE_ALIASES[key]
 
 
+def normalize_redact_style(style: str | None) -> str:
+    """Map user redaction style to placeholder | remove."""
+    if not style:
+        return "placeholder"
+    key = style.strip().casefold()
+    if key not in _REDACT_STYLE_ALIASES:
+        raise ValueError(
+            f"Unknown redact style {style!r}. Expected one of: "
+            f"{', '.join(VALID_REDACT_STYLES)} "
+            f"(aliases: tags→placeholder, delete/empty/strip→remove)."
+        )
+    return _REDACT_STYLE_ALIASES[key]
+
+
 def entities_for_mode(mode: str) -> list[str]:
     """Return a copy of the entity list for a canonical mode."""
     canonical = normalize_mode(mode)
@@ -149,6 +176,8 @@ class AnonymizerConfig:
     ollama_url: str = "http://127.0.0.1:11434"
     # Keep PDF running headers/footers/page marks (default: strip them)
     keep_headers: bool = False
+    # placeholder = [PERSON_1] tags (default); remove = delete the span
+    redact_style: str = "placeholder"
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -253,6 +282,8 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.ollama_url = str(data["ollama_url"])
         if "keep_headers" in data:
             cfg.keep_headers = bool(data["keep_headers"])
+        if "redact_style" in data and data["redact_style"]:
+            cfg.redact_style = normalize_redact_style(str(data["redact_style"]))
     except ConfigError:
         raise
     except (TypeError, ValueError) as exc:
@@ -261,4 +292,6 @@ def load_config(path: Path | None) -> AnonymizerConfig:
     # Apply mode preset when entities were not explicitly listed
     if not cfg.entities_explicit:
         cfg.entities = entities_for_mode(cfg.mode)
+    # Normalize style even if default
+    cfg.redact_style = normalize_redact_style(cfg.redact_style)
     return cfg

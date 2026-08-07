@@ -42,6 +42,7 @@ def render_markdown(
         "tool": "anonymizer",
         "tool_version": __version__,
         "mode": result.mode,
+        "redact_style": result.redact_style,
         "lang_mode": result.language.mode,
         "detected_languages": result.language.detected,
         "nlp_passes": result.language.nlp_passes,

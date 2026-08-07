@@ -61,7 +61,9 @@ sharp custom square and breaks size/shape next to other apps.
 2. A **single window** shows:
    - File list  
    - **Mode** as a visible radio list (all three choices at once — not a menu)  
-   - ☑ **Review findings before saving** (Terminal checklist; off for text-only)  
+   - **Output style** — tags `[PERSON_1]` or **delete text entirely**  
+   - **Allowlist** / **denylist** (editable, one string per line)  
+   - ☑ **Review findings before saving** (Terminal checklist; tags style only)  
    - ☑ **Open result when finished**  
 3. Click **Start** (or Cancel).
 4. When finished (no review path):

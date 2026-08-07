@@ -33,6 +33,11 @@ denylist:
   # - text: "Your Supplier Name Here"
   #   entity_type: ORG
 
+# How to replace findings in the Markdown body:
+#   placeholder (default) — [PERSON_1], [EMAIL_1], …
+#   remove — delete the text entirely (no tags; --review not available)
+# redact_style: placeholder
+
 # lang: auto
 
 # Optional LLM layer (off by default). Prefer ollama (local).
