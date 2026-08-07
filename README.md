@@ -9,7 +9,7 @@ Turn contracts, reports, and scans into shareable Markdown — on your machine, 
 
 - **CLI:** `anonymize`
 - **Mac app:** **Anonymizer.app** (drag-and-drop)
-- **Default:** Offline — document text stays on your computer
+- **Default:** Offline — Everything stays on your computer unless you choose to use an API for local or cloud processing
 
 > **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
 
