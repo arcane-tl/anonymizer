@@ -115,6 +115,32 @@ def apply_review_to_blocks(
     return new_blocks, new_map
 
 
+def strip_placeholders(text: str, mapping: dict[str, str]) -> str:
+    """Remove remaining placeholder tags from text (delete-style final render).
+
+    Map keys are left unchanged for --map; only the body is stripped.
+    Longest tags first; collapse horizontal whitespace left by deletions.
+    """
+    if not mapping or not text:
+        return text
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+    out = text
+    for ph in keys:
+        out = out.replace(ph, "")
+    # Collapse spaces/tabs only (keep newlines)
+    out = re.sub(r"[^\S\n]{2,}", " ", out)
+    return out
+
+
+def strip_placeholders_in_blocks(
+    blocks: list[str], mapping: dict[str, str]
+) -> list[str]:
+    """Apply :func:`strip_placeholders` to each block."""
+    if not mapping:
+        return list(blocks)
+    return [strip_placeholders(b, mapping) for b in blocks]
+
+
 def recount_entities(mapping: dict[str, str]) -> dict[str, int]:
     """Approximate entity_counts from remaining placeholders."""
     counts: dict[str, int] = {}

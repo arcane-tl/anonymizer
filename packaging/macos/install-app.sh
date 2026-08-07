@@ -58,6 +58,10 @@ RES="$STAGE/Contents/Resources"
 mkdir -p "$RES"
 cp "$HERE/run-anonymize.sh" "$RES/run-anonymize.sh"
 chmod +x "$RES/run-anonymize.sh"
+if [[ -f "$HERE/lists-io.sh" ]]; then
+  cp "$HERE/lists-io.sh" "$RES/lists-io.sh"
+  chmod +x "$RES/lists-io.sh"
+fi
 
 # Custom app icon (document + magnifier/lock), full-bleed square .icns.
 # Do NOT use `fileicon set` — Finder custom icons skip the system squircle

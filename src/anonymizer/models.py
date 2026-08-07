@@ -67,3 +67,5 @@ class AnonymizeResult:
     hits: list[EntityHit] = field(default_factory=list)
     # Operating mode: extract | standard | strict
     mode: str = "strict"
+    # placeholder | remove — how spans were replaced in the body
+    redact_style: str = "placeholder"

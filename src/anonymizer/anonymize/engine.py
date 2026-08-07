@@ -856,12 +856,22 @@ def apply_stable_placeholders(
     text: str,
     results: list[RecognizerResult],
     entity_map: EntityMap | None = None,
+    *,
+    style: str = "placeholder",
 ) -> tuple[str, EntityMap, list[EntityHit]]:
-    """Replace spans with stable placeholders.
+    """Replace spans with stable placeholders or delete them.
 
-    Indices follow first appearance (left-to-right); string mutation is
-    applied right-to-left so character offsets remain valid.
+    ``style``:
+      - ``placeholder`` (default): insert ``[TYPE_n]`` tags
+      - ``remove``: delete the span (empty replacement)
+
+    Map keys remain placeholder tags either way (for ``--map`` / counts).
+    Indices follow first appearance (left-to-right); mutation is applied
+    right-to-left so character offsets remain valid.
     """
+    from anonymizer.anonymize.config import normalize_redact_style
+
+    style = normalize_redact_style(style)
     entity_map = entity_map or EntityMap()
     forward = sorted(results, key=lambda r: (r.start, r.end))
     planned: list[tuple[RecognizerResult, str, str]] = []
@@ -883,8 +893,13 @@ def apply_stable_placeholders(
     for r, _surface, placeholder in sorted(
         planned, key=lambda item: item[0].start, reverse=True
     ):
-        chars[r.start : r.end] = list(placeholder)
-    return "".join(chars), entity_map, hits
+        replacement = "" if style == "remove" else placeholder
+        chars[r.start : r.end] = list(replacement)
+    out = "".join(chars)
+    if style == "remove":
+        # Collapse runs of spaces/tabs left by deletions (keep newlines).
+        out = re.sub(r"[^\S\n]{2,}", " ", out)
+    return out, entity_map, hits
 
 
 class DocumentAnonymizer:
@@ -1011,8 +1026,10 @@ class DocumentAnonymizer:
             text, lang_flag=lang_flag, progress=progress
         )
         if progress:
-            progress("Applying placeholders…")
-        anonymized, entity_map, hits = apply_stable_placeholders(text, results)
+            progress("Applying redactions…")
+        anonymized, entity_map, hits = apply_stable_placeholders(
+            text, results, style=self.config.redact_style
+        )
         type_counts: dict[str, int] = {}
         seen_keys: set[tuple[str, str]] = set()
         for h in hits:
@@ -1029,6 +1046,7 @@ class DocumentAnonymizer:
             language=decision,
             hits=hits,
             mode=self.config.mode,
+            redact_style=self.config.redact_style,
         )
 
     def anonymize_blocks(
@@ -1087,7 +1105,12 @@ class DocumentAnonymizer:
             report_phases=True,
         )
 
-        _p("Applying placeholders…")
+        style = self.config.redact_style
+        _p(
+            "Applying redactions…"
+            if style == "remove"
+            else "Applying placeholders…"
+        )
         entity_map = EntityMap()
         all_hits: list[EntityHit] = []
         out_blocks: list[str] = []
@@ -1100,7 +1123,7 @@ class DocumentAnonymizer:
                 continue
             local = _project_results_to_block(results, b_start, b_end)
             anon, entity_map, hits = apply_stable_placeholders(
-                block, local, entity_map=entity_map
+                block, local, entity_map=entity_map, style=style
             )
             out_blocks.append(anon)
             for h in hits:
@@ -1118,5 +1141,6 @@ class DocumentAnonymizer:
             language=decision,
             hits=all_hits,
             mode=self.config.mode,
+            redact_style=style,
         )
         return out_blocks, summary

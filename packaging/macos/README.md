@@ -61,8 +61,14 @@ sharp custom square and breaks size/shape next to other apps.
 2. A **single window** shows:
    - File list  
    - **Mode** as a visible radio list (all three choices at once — not a menu)  
-   - ☑ **Review findings before saving** (Terminal checklist; off for text-only)  
+   - **Output style** — tags `[PERSON_1]` or **delete text entirely**  
+   - List summary + **Lists…** button → separate editor for allowlist / denylist  
+   - ☑ **Review findings before saving** (Terminal checklist; works with tags and delete)  
    - ☑ **Open result when finished**  
+
+**Allowlist / denylist** open in a second dialog. **Done** saves them to  
+`~/.config/anonymizer/config.yaml` (merged; other keys kept). Same file works with  
+`anonymize --config ~/.config/anonymizer/config.yaml`.
 3. Click **Start** (or Cancel).
 4. When finished (no review path):
    - **Open** checked → file opens; no extra Finder/OK popup (notification only)

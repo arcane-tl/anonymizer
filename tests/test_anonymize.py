@@ -21,6 +21,50 @@ def test_apply_stable_placeholders_order():
     assert len(hits) == 3
 
 
+def test_apply_redact_style_remove():
+    text = "Alice met Alice and Bob."
+    results = [
+        RecognizerResult(entity_type="PERSON", start=0, end=5, score=0.9),
+        RecognizerResult(entity_type="PERSON", start=10, end=15, score=0.9),
+        RecognizerResult(entity_type="PERSON", start=20, end=23, score=0.9),
+    ]
+    out, emap, hits = apply_stable_placeholders(text, results, style="remove")
+    assert "Alice" not in out
+    assert "Bob" not in out
+    assert "[PERSON_" not in out
+    assert emap.reverse["[PERSON_1]"] == "Alice"
+    assert emap.reverse["[PERSON_2]"] == "Bob"
+    assert len(hits) == 3
+    # Double spaces from deletions collapsed
+    assert "  " not in out
+
+
+def test_strip_placeholders_after_review_path():
+    """Findings → placeholders → optional un-redact → strip remaining (delete style)."""
+    from anonymizer.anonymize.review import (
+        apply_review_to_blocks,
+        strip_placeholders_in_blocks,
+    )
+
+    text = "Alice met Bob."
+    results = [
+        RecognizerResult(entity_type="PERSON", start=0, end=5, score=0.9),
+        RecognizerResult(entity_type="PERSON", start=10, end=13, score=0.9),
+    ]
+    tagged, emap, _ = apply_stable_placeholders(text, results, style="placeholder")
+    assert tagged == "[PERSON_1] met [PERSON_2]."
+    # User keeps PERSON_1 (Alice) clear as false positive
+    blocks, new_map = apply_review_to_blocks(
+        [tagged], emap.reverse, ["[PERSON_1]"]
+    )
+    assert "Alice" in blocks[0]
+    assert "[PERSON_2]" in blocks[0]
+    final = strip_placeholders_in_blocks(blocks, new_map)
+    assert final[0].strip() == "Alice met ."
+    assert "[PERSON_" not in final[0]
+    assert "Bob" not in final[0]
+
+
 def test_email_like_manual_result():
     text = "Contact jane.doe@example.com today."
     # simulate email span
@@ -59,4 +103,5 @@ def test_render_markdown_front_matter():
     )
     assert md.startswith("---\n")
     assert "lang_mode: auto" in md
+    assert "redact_style: placeholder" in md
     assert "Hello [PERSON_1]" in md
