@@ -50,8 +50,9 @@ denylist:
 
 # lang: auto
 
-# Optional LLM layer (off by default). Prefer ollama (local).
+# Optional LLM layer. CLI requires --llm even if use_llm is true here
+# (prevents surprise remote sends from shared configs).
 # use_llm: false
 # llm_provider: ollama   # or xai (remote — sends document text to api.x.ai)
 # llm_model: llama3.2
-# ollama_url: http://127.0.0.1:11434
+# ollama_url: http://127.0.0.1:11434   # non-loopback warned; blocked with --offline

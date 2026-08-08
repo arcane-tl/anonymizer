@@ -28,6 +28,8 @@ param(
     [ValidateSet("sm", "lg")]
     [string] $Models = "sm",
     [string] $EmbedPythonVersion = "3.12.10",
+    # Optional SHA256 of python-*-embed-amd64.zip (verify at https://www.python.org/downloads/)
+    [string] $EmbedPythonSha256 = "",
     [switch] $SkipInstaller,
     [switch] $SkipGuiFreeze
 )
@@ -88,17 +90,28 @@ $EmbedZip = Join-Path $Cache $EmbedZipName
 $GetPip = Join-Path $Cache "get-pip.py"
 $GetPipUrl = "https://bootstrap.pypa.io/get-pip.py"
 
-function Get-WebFile([string] $Url, [string] $OutFile) {
+function Get-WebFile([string] $Url, [string] $OutFile, [string] $ExpectedSha256 = "") {
     if (Test-Path $OutFile) {
         $len = (Get-Item $OutFile).Length
         if ($len -gt 10000) {
-            Write-Info "Using cached $(Split-Path $OutFile -Leaf) ($len bytes)"
-            return
+            if ($ExpectedSha256) {
+                $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutFile).Hash.ToLowerInvariant()
+                if ($hash -ne $ExpectedSha256.ToLowerInvariant()) {
+                    Write-Info "Cache hash mismatch for $(Split-Path $OutFile -Leaf); re-downloading"
+                    Remove-Item -Force $OutFile
+                } else {
+                    Write-Info "Using cached $(Split-Path $OutFile -Leaf) (sha256 ok)"
+                    return
+                }
+            } else {
+                Write-Info "Using cached $(Split-Path $OutFile -Leaf) ($len bytes)"
+                return
+            }
+        } else {
+            Remove-Item -Force $OutFile
         }
-        Remove-Item -Force $OutFile
     }
     Write-Info "Downloading $Url"
-    # Prefer curl.exe (HTTP/2, better TLS); fall back to Invoke-WebRequest
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
         & curl.exe -fsSL -o $OutFile $Url
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $OutFile)) {
@@ -107,10 +120,19 @@ function Get-WebFile([string] $Url, [string] $OutFile) {
     } else {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
     }
+    if ($ExpectedSha256) {
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutFile).Hash.ToLowerInvariant()
+        if ($hash -ne $ExpectedSha256.ToLowerInvariant()) {
+            Remove-Item -Force $OutFile -ErrorAction SilentlyContinue
+            Die "SHA256 mismatch for $OutFile`n  expected $ExpectedSha256`n  got      $hash"
+        }
+        Write-Ok "SHA256 verified for $(Split-Path $OutFile -Leaf)"
+    }
 }
 
 Write-Info "Preparing embeddable CPython $EmbedTag runtime at $Runtime"
-Get-WebFile $EmbedUrl $EmbedZip
+Get-WebFile $EmbedUrl $EmbedZip $EmbedPythonSha256
+# get-pip.py hash changes frequently; TLS + official host only (no pin)
 Get-WebFile $GetPipUrl $GetPip
 
 New-Item -ItemType Directory -Force -Path $Runtime | Out-Null

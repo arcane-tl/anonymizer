@@ -221,7 +221,8 @@ on processFiles(theFiles)
 end processFiles
 
 on defaultAllowlistText()
-	-- Fallback if lists-io.sh / Python unavailable (keep in sync with DEFAULT_ALLOWLIST)
+	-- Fallback if lists-io.sh / Python unavailable.
+	-- Prefer domain_lexicon seeds; keep short form labels if Python is down.
 	return "Y-tunnus
 Y tunnus
 Hetu
@@ -231,8 +232,30 @@ ALV numero
 ALV
 VAT
 IBAN
+BIC
+SWIFT
 Email
-Phone"
+E-mail
+Sähköposti
+Phone
+Puhelin
+Address
+Osoite
+Postinumero
+Name
+Nimi
+Asiakas
+Myyjä
+Ostaja
+Toimittaja
+Tilaaja
+Osapuoli
+Client
+Customer
+Supplier
+Force Majeure
+Letter of Intent
+Green Card"
 end defaultAllowlistText
 
 on writeTextToFile(theText, posixPath)

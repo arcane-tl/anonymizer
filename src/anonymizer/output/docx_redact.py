@@ -122,6 +122,30 @@ def redact_docx(
             stats.surfaces_missed += 1
             stats.missed.append(surface.clear)
 
+    # Best-effort document property scrub (Author, Title, …)
+    try:
+        props = doc.core_properties
+        for attr in (
+            "author",
+            "category",
+            "comments",
+            "content_status",
+            "identifier",
+            "keywords",
+            "last_modified_by",
+            "subject",
+            "title",
+        ):
+            try:
+                setattr(props, attr, None)
+            except (AttributeError, ValueError, TypeError):
+                try:
+                    setattr(props, attr, "")
+                except (AttributeError, ValueError, TypeError):
+                    pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("core_properties scrub failed: %s", exc)
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest))
     stats.output_path = str(dest)

@@ -4,10 +4,10 @@
   Remove an anonymizer install created by install.ps1 on Windows.
 
 .PARAMETER Prefix
-  Install root (default: %LOCALAPPDATA%\anonymizer)
+  Install root (default: %LOCALAPPDATA%\Anonymizer)
 
 .PARAMETER BinDir
-  Launcher directory (default: %LOCALAPPDATA%\anonymizer\bin)
+  Launcher directory (default: %LOCALAPPDATA%\Anonymizer\bin)
 
 .PARAMETER KeepFiles
   Only remove the launcher; leave the install prefix on disk
@@ -17,8 +17,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Prefix = $(if ($env:ANONYMIZER_PREFIX) { $env:ANONYMIZER_PREFIX } else { Join-Path $env:LOCALAPPDATA "anonymizer" }),
-    [string] $BinDir = $(if ($env:ANONYMIZER_BIN_DIR) { $env:ANONYMIZER_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "anonymizer\bin" }),
+    [string] $Prefix = $(if ($env:ANONYMIZER_PREFIX) { $env:ANONYMIZER_PREFIX } else { Join-Path $env:LOCALAPPDATA "Anonymizer" }),
+    [string] $BinDir = $(if ($env:ANONYMIZER_BIN_DIR) { $env:ANONYMIZER_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Anonymizer\bin" }),
     [switch] $KeepFiles,
     [switch] $Yes
 )

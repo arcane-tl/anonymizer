@@ -176,6 +176,17 @@ def _call_xai(prompt: str, model: str) -> str:
     return resp.choices[0].message.content or "[]"
 
 
+def is_loopback_url(url: str) -> bool:
+    """True if URL host is localhost / 127.0.0.1 / ::1 (offline-safe Ollama)."""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
 def _call_ollama(prompt: str, model: str, base_url: str) -> str:
     import urllib.request
 
@@ -203,14 +214,14 @@ def llm_entity_results(
     text: str,
     entity_types: list[str],
     *,
-    provider: str = "xai",
+    provider: str = "ollama",
     model: str | None = None,
     ollama_url: str = "http://127.0.0.1:11434",
 ) -> list[RecognizerResult]:
     """Run optional LLM entity extraction and map surfaces back to offsets."""
     if not text.strip():
         return []
-    provider = (provider or "xai").lower().strip()
+    provider = (provider or "ollama").lower().strip()
     if provider in {"off", "none", "false", "0"}:
         return []
 

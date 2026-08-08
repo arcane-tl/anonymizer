@@ -438,12 +438,12 @@ class OptionsApp(tk.Tk):
         try:
             for fpath in self.files:
                 cmd = [*cli, mode, str(fpath), *common_flags]
-                _log(f"RUN: {cmd}")
+                _log(f"RUN: {cli[0] if cli else '?'} {mode} <file>")
                 proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode != 0:
                     err = (proc.stderr or proc.stdout or "error").strip()
                     errors.append(f"{fpath.name}: {err}")
-                    _log(f"FAIL {fpath}: {err}")
+                    _log(f"FAIL {fpath.name}: exit {proc.returncode}")
                     continue
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs:
@@ -504,7 +504,11 @@ class OptionsApp(tk.Tk):
     def _write_temp_config(self, style: str, allow_path: str, deny_path: str) -> Path:
         import yaml
 
-        cfg_path = Path(tempfile.mkstemp(suffix=".yaml", prefix="anonymizer-gui-")[1])
+        fd, cfg_name = tempfile.mkstemp(suffix=".yaml", prefix="anonymizer-gui-")
+        import os as _os
+
+        _os.close(fd)
+        cfg_path = Path(cfg_name)
         allow_lines = [
             ln.strip()
             for ln in Path(allow_path).read_text(encoding="utf-8").splitlines()

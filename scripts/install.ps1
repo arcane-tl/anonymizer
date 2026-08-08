@@ -9,10 +9,10 @@
   user PATH.
 
 .PARAMETER Prefix
-  Install root (default: %LOCALAPPDATA%\anonymizer)
+  Install root (default: %LOCALAPPDATA%\Anonymizer)
 
 .PARAMETER BinDir
-  Directory for anonymize.cmd (default: %LOCALAPPDATA%\anonymizer\bin)
+  Directory for anonymize.cmd (default: %LOCALAPPDATA%\Anonymizer\bin)
 
 .PARAMETER FromSource
   Install from the current git clone (editable) instead of cloning GitHub
@@ -46,8 +46,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Prefix = $(if ($env:ANONYMIZER_PREFIX) { $env:ANONYMIZER_PREFIX } else { Join-Path $env:LOCALAPPDATA "anonymizer" }),
-    [string] $BinDir = $(if ($env:ANONYMIZER_BIN_DIR) { $env:ANONYMIZER_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "anonymizer\bin" }),
+    [string] $Prefix = $(if ($env:ANONYMIZER_PREFIX) { $env:ANONYMIZER_PREFIX } else { Join-Path $env:LOCALAPPDATA "Anonymizer" }),
+    [string] $BinDir = $(if ($env:ANONYMIZER_BIN_DIR) { $env:ANONYMIZER_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Anonymizer\bin" }),
     [switch] $FromSource,
     [string] $Repo = $(if ($env:ANONYMIZER_REPO) { $env:ANONYMIZER_REPO } else { "https://github.com/arcane-tl/anonymizer.git" }),
     [string] $Branch = $(if ($env:ANONYMIZER_BRANCH) { $env:ANONYMIZER_BRANCH } else { "main" }),

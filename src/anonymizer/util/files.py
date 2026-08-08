@@ -32,8 +32,21 @@ def collect_inputs(path: Path) -> list[Path]:
         return [path]
     if path.is_dir():
         files: list[Path] = []
+        root_resolved = path.resolve()
         for p in sorted(path.rglob("*")):
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
+            # Skip symlink files/dirs (avoid following planted links outside root)
+            try:
+                if p.is_symlink():
+                    continue
+                if not p.is_file():
+                    continue
+                # Ensure resolved path stays under the requested directory
+                resolved = p.resolve()
+                if not resolved.is_relative_to(root_resolved):
+                    continue
+            except (OSError, ValueError):
+                continue
+            if p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 files.append(p)
         if not files:
             raise ValueError(

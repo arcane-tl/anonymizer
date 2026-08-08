@@ -32,8 +32,12 @@ function Find-Anonymize {
     }
     $cmd = Get-Command anonymize -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $local = Join-Path $env:LOCALAPPDATA "anonymizer\bin\anonymize.cmd"
-    if (Test-Path -LiteralPath $local) { return $local }
+    foreach ($name in @("Anonymizer", "anonymizer")) {
+        $local = Join-Path $env:LOCALAPPDATA "$name\bin\anonymize.cmd"
+        if (Test-Path -LiteralPath $local) { return $local }
+        $rt = Join-Path $env:LOCALAPPDATA "$name\runtime\Scripts\anonymize.exe"
+        if (Test-Path -LiteralPath $rt) { return $rt }
+    }
     $venv = Join-Path $PSScriptRoot "..\..\.venv\Scripts\anonymize.exe"
     if (Test-Path -LiteralPath $venv) { return (Resolve-Path $venv).Path }
     throw "could not find anonymize CLI. Install with scripts\install.ps1 first."

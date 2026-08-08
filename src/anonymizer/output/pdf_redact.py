@@ -24,6 +24,8 @@ def redact_pdf(
     text is removed from the content stream (not merely covered).
 
     Soft-wrapped or hyphenated names may miss — caller should report match rate.
+    Does **not** scrub image-only text, all form widgets, or embedded files;
+    document metadata is cleared best-effort.
     """
     import fitz
 
@@ -62,6 +64,35 @@ def redact_pdf(
             else:
                 stats.surfaces_missed += 1
                 stats.missed.append(surface.clear)
+
+        # Best-effort metadata scrub (Author, Title, Keywords, …)
+        try:
+            doc.set_metadata(
+                {
+                    "title": "",
+                    "author": "",
+                    "subject": "",
+                    "keywords": "",
+                    "creator": "",
+                    "producer": "anonymizer",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("set_metadata failed: %s", exc)
+        try:
+            # Drop XML metadata stream when present
+            doc.del_xml_metadata()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            doc.embfile_names()  # type: ignore[attr-defined]
+            for name in list(doc.embfile_names()):  # type: ignore[attr-defined]
+                try:
+                    doc.embfile_del(name)  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         doc.save(dest, garbage=4, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)

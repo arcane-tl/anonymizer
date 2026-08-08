@@ -195,7 +195,8 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
 | `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
-| `--format` | `md` (default), `source` (redacted PDF/DOCX), or `both`. PDF = black boxes; DOCX = tags/delete. Best-effort on OCR / soft wraps. |
+| `--format` | `md` (default), `source` (redacted PDF/DOCX), or `both`. PDF = black boxes + metadata scrub; DOCX = tags/delete + property scrub. **Best-effort** (not forensic): images, some forms/comments, wrap misses may remain. |
+| `--llm` | Opt-in LLM layer only (YAML `use_llm` alone is ignored). `--offline` blocks remote xAI and non-local Ollama URLs. |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
 | `--config` | YAML: mode, allowlist, denylist, `redact_style`, `format`, … |

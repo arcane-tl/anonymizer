@@ -144,6 +144,39 @@ def _abs_display_path(path: Path) -> str:
     return str(expand_user_path(path).resolve())
 
 
+def _write_sensitive_text(path: Path, text: str) -> None:
+    """Write file with mode 0o600 when the OS supports it (map JSON = PII)."""
+    import os
+
+    path = Path(path)
+    data = text.encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError:
+        path.write_bytes(data)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        return
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def _report_write_success(
     *,
     quiet: bool,
@@ -213,8 +246,11 @@ def _build_config(
     cfg.include_dates = include_dates or cfg.include_dates
     if score_threshold is not None:
         cfg.score_threshold = score_threshold
+    # Explicit CLI opt-in: without --llm, force LLM off even if YAML enables it.
     if llm:
         cfg.use_llm = True
+    else:
+        cfg.use_llm = False
     if llm_provider:
         cfg.llm_provider = llm_provider
     if llm_model:
@@ -283,6 +319,13 @@ def _run_pipeline(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(2) from exc
 
+    yaml_wanted_llm = False
+    if config is not None:
+        try:
+            yaml_wanted_llm = bool(load_config(config).use_llm)
+        except (ConfigError, ValueError, OSError):
+            yaml_wanted_llm = False
+
     try:
         cfg = _build_config(
             mode=mode,
@@ -300,9 +343,14 @@ def _run_pipeline(
     except (ConfigError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(2) from exc
-    # CLI flag wins over config default
     if keep_headers:
         cfg.keep_headers = True
+
+    if yaml_wanted_llm and not llm and not quiet:
+        console.print(
+            "[dim]Note:[/dim] config has use_llm: true but --llm was not passed; "
+            "LLM layer stays off (explicit opt-in required)."
+        )
 
     out_fmt = cfg.output_format
     write_md = wants_markdown(out_fmt)
@@ -322,12 +370,22 @@ def _run_pipeline(
         write_native = False
         out_fmt = "md"
 
-    if offline and cfg.use_llm and cfg.llm_provider.lower() == "xai":
-        console.print(
-            "[red]Error:[/red] --offline forbids remote LLM provider 'xai'. "
-            "Use --llm-provider ollama or omit --llm."
-        )
-        raise typer.Exit(2)
+    if offline and cfg.use_llm:
+        from anonymizer.anonymize.llm import is_loopback_url
+
+        prov = cfg.llm_provider.lower()
+        if prov == "xai":
+            console.print(
+                "[red]Error:[/red] --offline forbids remote LLM provider 'xai'. "
+                "Use --llm-provider ollama on localhost or omit --llm."
+            )
+            raise typer.Exit(2)
+        if prov == "ollama" and not is_loopback_url(cfg.ollama_url):
+            console.print(
+                "[red]Error:[/red] --offline forbids non-local ollama_url "
+                f"({cfg.ollama_url}). Use http://127.0.0.1:11434 or omit --llm."
+            )
+            raise typer.Exit(2)
 
     if cfg.use_llm and cfg.llm_provider.lower() == "xai":
         console.print(
@@ -335,7 +393,15 @@ def _run_pipeline(
             "Document text will be sent to https://api.x.ai — not offline."
         )
     elif cfg.use_llm and cfg.llm_provider.lower() == "ollama":
-        console.print(f"[dim]LLM via local Ollama ({cfg.ollama_url})[/dim]")
+        from anonymizer.anonymize.llm import is_loopback_url
+
+        if not is_loopback_url(cfg.ollama_url):
+            console.print(
+                f"[yellow]Warning:[/yellow] Ollama URL is not loopback "
+                f"({cfg.ollama_url}) — document text will leave this machine."
+            )
+        else:
+            console.print(f"[dim]LLM via local Ollama ({cfg.ollama_url})[/dim]")
 
     if map_path is not None and cfg.mode == "extract":
         console.print(
@@ -590,14 +656,10 @@ def _run_pipeline(
                 mp = map_path
             mp.parent.mkdir(parents=True, exist_ok=True)
             progress.substep(f"Writing entity map {mp.name} (contains PII)…")
-            mp.write_text(
+            _write_sensitive_text(
+                mp,
                 json.dumps(result.mapping, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
             )
-            try:
-                mp.chmod(0o600)
-            except OSError:
-                pass
             written_map = mp
 
         counts = (
@@ -939,8 +1001,8 @@ def main(
             "--format",
             help=(
                 "Output format: md (default Markdown), source (redacted PDF/DOCX), "
-                "or both. Native PDF uses black-box redaction; DOCX uses tags or "
-                "delete per --redact-style. Text inputs stay Markdown-only."
+                "or both. Native is best-effort (text-layer search; metadata scrubbed; "
+                "images/forms/comments may remain). Text inputs stay Markdown-only."
             ),
             rich_help_panel="Common",
         ),
@@ -973,7 +1035,10 @@ def main(
         bool,
         typer.Option(
             "--llm",
-            help="Enable optional LLM entity layer (default: local ollama).",
+            help=(
+                "Enable optional LLM entity layer (required even if config sets "
+                "use_llm). Default provider is ollama; xai is remote."
+            ),
             rich_help_panel="Advanced",
         ),
     ] = False,

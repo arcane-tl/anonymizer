@@ -14,9 +14,21 @@ function Section([string]$Title) {
 }
 
 $log = Join-Path $env:TEMP "anonymizer-gui.log"
-$prefix = Join-Path $env:LOCALAPPDATA "anonymizer"
+# Prefer Setup layout (Anonymizer); fall back to legacy lowercase install.ps1 path
+$prefix = $null
+foreach ($name in @("Anonymizer", "anonymizer")) {
+    $cand = Join-Path $env:LOCALAPPDATA $name
+    if (Test-Path $cand) { $prefix = $cand; break }
+}
+if (-not $prefix) { $prefix = Join-Path $env:LOCALAPPDATA "Anonymizer" }
 $venvPy = Join-Path $prefix ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) {
+    $venvPy = Join-Path $prefix "runtime\Scripts\python.exe"
+}
 $guiCmd = Join-Path $prefix "bin\anonymize-gui.cmd"
+if (-not (Test-Path $guiCmd)) {
+    $guiCmd = Join-Path $prefix "Anonymizer.exe"
+}
 $anonCmd = Join-Path $prefix "bin\anonymize.cmd"
 
 Section "Environment"

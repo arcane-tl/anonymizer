@@ -1,5 +1,8 @@
 .PHONY: install install-dev uninstall test
 
+# macOS: ./scripts/install.sh
+# Windows: see packaging/windows/README.md (Setup.exe / install.ps1 / build-release.ps1)
+
 install:
 	./scripts/install.sh --yes
 

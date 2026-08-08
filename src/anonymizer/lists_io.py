@@ -25,13 +25,18 @@ def default_config_path() -> Path:
 
 
 def load_lists(path: Path | None = None) -> tuple[list[str], list[str]]:
-    """Return (allow_lines, deny_lines). Defaults when no config file."""
+    """Return (allow_lines, deny_lines).
+
+    Defaults apply only when **no config file** exists. An explicit empty
+    ``allowlist: []`` in YAML is preserved (does not restore defaults).
+    """
     cfg_path = path or default_config_path()
     if cfg_path.is_file():
         cfg = load_config(cfg_path)
+        allow = list(cfg.allowlist)
     else:
         cfg = load_config(None)
-    allow = list(cfg.allowlist) if cfg.allowlist else list(DEFAULT_ALLOWLIST)
+        allow = list(DEFAULT_ALLOWLIST)
     deny = [e.text for e in cfg.denylist if e.text]
     return allow, deny
 
@@ -74,6 +79,10 @@ def save_lists(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
+    try:
+        cfg_path.chmod(0o600)
+    except OSError:
+        pass
     load_config(cfg_path)  # validate
     return cfg_path
 
