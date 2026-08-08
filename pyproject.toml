@@ -43,6 +43,7 @@ llm = [
 
 [project.scripts]
 anonymize = "anonymizer.cli:run"
+anonymize-gui = "anonymizer.gui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anonymizer"]
