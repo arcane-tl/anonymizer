@@ -16,9 +16,9 @@ class Anonymizer < Formula
   homepage "https://github.com/arcane-tl/anonymizer"
   license "MIT"
 
-  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.1.4.tar.gz"
-  sha256 "b4e5d18a69d3f7bc451d43d7334e5eaa018cb57aa9d4f751ecedc3f413011bee"
-  version "1.1.4"
+  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.2.0.tar.gz"
+  sha256 "a02518d25146d0d60453b5f90c548101362bf80ef4af361af5ad701add5aa256"
+  version "1.2.0"
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 
