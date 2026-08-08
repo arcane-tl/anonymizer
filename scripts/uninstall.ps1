@@ -43,13 +43,13 @@ function Confirm-Step([string] $Prompt) {
     return ($ans -eq "y" -or $ans -eq "Y" -or $ans -eq "yes")
 }
 
-function Remove-Launcher([string] $Path, [string] $InstallPrefix) {
-    if (-not (Test-Path -LiteralPath $Path)) {
+function Remove-Launcher([string] $LauncherPath, [string] $InstallPrefix) {
+    if (-not (Test-Path -LiteralPath $LauncherPath)) {
         return
     }
     $text = ""
     try {
-        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        $text = Get-Content -LiteralPath $LauncherPath -Raw -ErrorAction SilentlyContinue
         if ($null -eq $text) { $text = "" }
     } catch {
         $text = ""
@@ -59,12 +59,13 @@ function Remove-Launcher([string] $Path, [string] $InstallPrefix) {
                  ($text -like "*\runtime\Scripts\*") -or
                  ($text -like "*anonymizer*")
     if (-not $looksOurs) {
-        Write-Warn "Launcher $Path does not look like this install — leaving it alone"
+        Write-Warn "Launcher ${LauncherPath} does not look like this install — leaving it alone"
         return
     }
-    if (Confirm-Step "Remove launcher $Path?") {
-        Remove-Item -LiteralPath $Path -Force
-        Write-Ok "Removed $Path"
+    # Use ${var} so "?" is not part of the variable name under StrictMode
+    if (Confirm-Step "Remove launcher ${LauncherPath}?") {
+        Remove-Item -LiteralPath $LauncherPath -Force
+        Write-Ok "Removed ${LauncherPath}"
     }
 }
 
@@ -81,13 +82,13 @@ foreach ($dir in $binDirs) {
     if (-not $dir) { continue }
     foreach ($name in @("anonymize.cmd", "anonymize-gui.cmd", "Anonymizer.cmd")) {
         $launcherPath = Join-Path $dir $name
-        Remove-Launcher -Path $launcherPath -InstallPrefix $Prefix
+        Remove-Launcher -LauncherPath $launcherPath -InstallPrefix $Prefix
     }
 }
 
 $startMenuLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Anonymizer.lnk"
 if (Test-Path -LiteralPath $startMenuLnk) {
-    if (Confirm-Step "Remove Start Menu shortcut $startMenuLnk?") {
+    if (Confirm-Step "Remove Start Menu shortcut ${startMenuLnk}?") {
         Remove-Item -LiteralPath $startMenuLnk -Force
         Write-Ok "Removed Start Menu shortcut"
     }
@@ -116,18 +117,18 @@ foreach ($p in $prefixes) {
     if ($isRepo -and $resolvedPrefix -and $resolvedRepo -and ($resolvedPrefix -eq $resolvedRepo)) {
         $venv = Join-Path $repoRoot ".venv"
         if (Test-Path -LiteralPath $venv) {
-            if (Confirm-Step "Remove virtualenv $venv?") {
+            if (Confirm-Step "Remove virtualenv ${venv}?") {
                 Remove-Item -LiteralPath $venv -Recurse -Force
-                Write-Ok "Removed $venv"
+                Write-Ok "Removed ${venv}"
             }
         }
         continue
     }
 
     if (-not $KeepFiles) {
-        if (Confirm-Step "Remove install directory $p?") {
+        if (Confirm-Step "Remove install directory ${p}?") {
             Remove-Item -LiteralPath $p -Recurse -Force
-            Write-Ok "Removed $p"
+            Write-Ok "Removed ${p}"
         }
     }
 }
@@ -144,7 +145,7 @@ if ($userPath) {
     # Only rewrite PATH if something was removed AND user confirmed full uninstall
     $newPath = ($parts -join ";").TrimEnd(";")
     if ($newPath -ne $userPath.TrimEnd(";")) {
-        if (Confirm-Step "Remove Anonymizer bin folders from user PATH?") {
+        if (Confirm-Step "Remove Anonymizer bin folders from user PATH (y/N)?") {
             [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
             Write-Ok "Updated user PATH"
         }
