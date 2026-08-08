@@ -120,11 +120,24 @@ anonymize-gui
 On a **Windows** machine (or `windows-latest` CI):
 
 ```powershell
-# Prerequisites: Python 3.11+, optional Inno Setup 6
-#   https://jrsoftware.org/isinfo.php
+# Prerequisites:
+#   - Python 3.11+ on the *build host* (for PyInstaller + wheel build)
+#   - Inno Setup 6 for Setup.exe (optional; zip still builds without it)
+#       winget install --id JRSoftware.InnoSetup -e
+#       https://jrsoftware.org/isinfo.php
+# Network required once: downloads embeddable CPython 3.12 + spaCy models.
 
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
 ```
+
+What the build produces under `dist\windows-stage\`:
+
+| Piece | Role |
+|-------|------|
+| `Anonymizer.exe` | Frozen GUI only (PyInstaller; no spaCy) |
+| `runtime\` | **Embeddable CPython 3.12** + package + spaCy `sm` models (relocatable; end users need **no** system Python) |
+| `bin\anonymize.cmd` | CLI: `runtime\python.exe -m anonymizer.cli` |
+| `bin\Anonymizer.cmd` | Launches GUI |
 
 Outputs:
 
@@ -132,16 +145,51 @@ Outputs:
 |----------|------|
 | Stage (GUI + runtime + models) | `dist\windows-stage\` |
 | Portable zip | `dist\Anonymizer-<ver>-windows.zip` |
-| Setup wizard | `dist\Anonymizer-Setup-<ver>.exe` (if ISCC installed) |
+| Setup wizard | `dist\Anonymizer-Setup-<ver>.exe` (if ISCC found) |
 
-GitHub Actions: `.github/workflows/windows-release.yml` (workflow_dispatch or tag `v*`).
+Install target (Setup): `%LOCALAPPDATA%\Anonymizer` (per-user, no admin). Optional task adds `bin\` to the user PATH.
 
-Code signing (recommended before wide release):
+### Smoke-check a local build
+
+```powershell
+# CLI (portable stage)
+.\dist\windows-stage\bin\anonymize.cmd doctor
+.\dist\windows-stage\bin\anonymize.cmd --mode standard tests\fixtures\sample_en.pdf `
+  -o $env:TEMP\smoke.md --format both
+
+# GUI (needs runtime\ next to Anonymizer.exe)
+Start-Process .\dist\windows-stage\Anonymizer.exe
+# Log if needed:  $env:TEMP\anonymizer-gui.log
+```
+
+### GitHub Actions / Release
+
+1. Copy the template into the live workflows tree (not done automatically):
+
+   ```text
+   packaging/windows/ci/windows-release.yml  →  .github/workflows/windows-release.yml
+   ```
+
+2. On tag `v*` or `workflow_dispatch`, CI builds zip + Setup and uploads artifacts.
+
+3. Attach `Anonymizer-Setup-<ver>.exe` and `Anonymizer-<ver>-windows.zip` to the GitHub Release.
+
+### Code signing (recommended before wide release)
+
+Unsigned builds trigger SmartScreen (“More info” → “Run anyway”). For public releases:
 
 ```powershell
 signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
   dist\Anonymizer-Setup-*.exe dist\windows-stage\Anonymizer.exe
 ```
+
+Requires a code-signing certificate (not included in the repo).
+
+### Notes
+
+- **Host Python** may be 3.11–3.13; **runtime** is always embeddable **3.12.x** (pinned in `build-release.ps1`).
+- Deep worktree paths: the build script may create a short junction (`C:\anon-stage`) so Inno Setup does not abort on long paths.
+- `scripts\install.ps1` remains the **developer** path (user venv under `%LOCALAPPDATA%\anonymizer`).
 
 ## Parity notes
 

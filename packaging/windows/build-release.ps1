@@ -6,15 +6,17 @@
 .DESCRIPTION
   Creates dist/windows-stage/ with:
     Anonymizer.exe   (frozen GUI via PyInstaller)
-    runtime/         (venv: anonymizer + spaCy sm models)
+    runtime/         (embeddable CPython + anonymizer + spaCy sm models)
     bin/anonymize.cmd
     bin/Anonymizer.cmd
 
-  If ISCC (Inno Setup) is on PATH, also builds:
+  runtime/ uses the official Windows embeddable package (not a venv) so the
+  install is relocatable and does not require system Python on the user PC.
+
+  If ISCC (Inno Setup) is found, also builds:
     dist/Anonymizer-Setup-<version>.exe
 
 .EXAMPLE
-  # On a Windows machine / CI (Python 3.11+ required for the build host):
   powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
 
 .NOTES
@@ -25,6 +27,7 @@ param(
     [string] $Python = "",
     [ValidateSet("sm", "lg")]
     [string] $Models = "sm",
+    [string] $EmbedPythonVersion = "3.12.10",
     [switch] $SkipInstaller,
     [switch] $SkipGuiFreeze
 )
@@ -34,6 +37,7 @@ $ErrorActionPreference = "Stop"
 
 function Write-Info([string] $m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok([string] $m)   { Write-Host "OK  $m" -ForegroundColor Green }
+function Write-Warn([string] $m) { Write-Host "!   $m" -ForegroundColor Yellow }
 function Die([string] $m) { Write-Host "error: $m" -ForegroundColor Red; exit 1 }
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -56,32 +60,120 @@ function Find-Python {
         }
     }
     if (Get-Command python -ErrorAction SilentlyContinue) {
-        return (Get-Command python).Source
+        $src = (Get-Command python).Source
+        # Ignore Windows Store alias stubs
+        if ($src -notmatch "WindowsApps") { return $src }
     }
-    Die "Python 3.11+ required on the build machine"
+    Die "Python 3.11+ required on the build machine (host for PyInstaller)"
 }
 
 $Py = Find-Python
-Write-Ok "Build Python: $Py"
+Write-Ok "Build host Python: $Py"
 
 $Stage = Join-Path $Root "dist\windows-stage"
 $Dist = Join-Path $Root "dist"
+$Cache = Join-Path $Dist "cache"
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
+New-Item -ItemType Directory -Force -Path $Cache | Out-Null
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage "bin") | Out-Null
 
-# --- runtime venv with package + models ---
+# --- embeddable CPython runtime (relocatable; no system Python on user PC) ---
 $Runtime = Join-Path $Stage "runtime"
-Write-Info "Creating runtime venv at $Runtime"
-& $Py -m venv $Runtime
-$Pip = Join-Path $Runtime "Scripts\pip.exe"
-$PyV = Join-Path $Runtime "Scripts\python.exe"
-& $PyV -m pip install --upgrade pip setuptools wheel | Out-Null
+$EmbedTag = $EmbedPythonVersion
+$EmbedZipName = "python-$EmbedTag-embed-amd64.zip"
+$EmbedUrl = "https://www.python.org/ftp/python/$EmbedTag/$EmbedZipName"
+$EmbedZip = Join-Path $Cache $EmbedZipName
+$GetPip = Join-Path $Cache "get-pip.py"
+$GetPipUrl = "https://bootstrap.pypa.io/get-pip.py"
 
-Write-Info "Installing anonymizer into runtime..."
-& $Pip install "$Root"
-if ($LASTEXITCODE -ne 0) { Die "pip install failed" }
+function Get-WebFile([string] $Url, [string] $OutFile) {
+    if (Test-Path $OutFile) {
+        $len = (Get-Item $OutFile).Length
+        if ($len -gt 10000) {
+            Write-Info "Using cached $(Split-Path $OutFile -Leaf) ($len bytes)"
+            return
+        }
+        Remove-Item -Force $OutFile
+    }
+    Write-Info "Downloading $Url"
+    # Prefer curl.exe (HTTP/2, better TLS); fall back to Invoke-WebRequest
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+        & curl.exe -fsSL -o $OutFile $Url
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $OutFile)) {
+            Die "download failed: $Url"
+        }
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+    }
+}
+
+Write-Info "Preparing embeddable CPython $EmbedTag runtime at $Runtime"
+Get-WebFile $EmbedUrl $EmbedZip
+Get-WebFile $GetPipUrl $GetPip
+
+New-Item -ItemType Directory -Force -Path $Runtime | Out-Null
+Expand-Archive -Path $EmbedZip -DestinationPath $Runtime -Force
+
+$PyEmbed = Join-Path $Runtime "python.exe"
+if (-not (Test-Path $PyEmbed)) { Die "embeddable python.exe missing after extract" }
+
+# Enable site-packages (._pth ships with import site commented out)
+$pthFiles = Get-ChildItem -Path $Runtime -Filter "python*._pth" -ErrorAction SilentlyContinue
+if (-not $pthFiles) { Die "python*._pth not found in embeddable package" }
+foreach ($pth in $pthFiles) {
+    $lines = Get-Content -LiteralPath $pth.FullName
+    $out = New-Object System.Collections.Generic.List[string]
+    $hasSitePackages = $false
+    $hasImportSite = $false
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if ($t -eq "Lib\\site-packages" -or $t -eq "Lib/site-packages") {
+            $hasSitePackages = $true
+            $out.Add("Lib\\site-packages")
+            continue
+        }
+        if ($t -match '^#\s*import\s+site\s*$' -or $t -eq "import site") {
+            $hasImportSite = $true
+            $out.Add("import site")
+            continue
+        }
+        $out.Add($line)
+    }
+    if (-not $hasSitePackages) {
+        # Insert before import site if present, else append
+        $idx = $out.IndexOf("import site")
+        if ($idx -ge 0) { $out.Insert($idx, "Lib\\site-packages") }
+        else { $out.Add("Lib\\site-packages") }
+    }
+    if (-not $hasImportSite) { $out.Add("import site") }
+    # Write UTF-8 without BOM
+    [System.IO.File]::WriteAllLines($pth.FullName, $out)
+    Write-Ok "Patched $($pth.Name) for site-packages"
+}
+
+Write-Info "Bootstrapping pip into embeddable runtime..."
+& $PyEmbed $GetPip --no-warn-script-location
+if ($LASTEXITCODE -ne 0) { Die "get-pip.py failed" }
+
+# Build the package wheel on the host (hatchling needs a full stdlib).
+# Embeddable pip then installs the wheel + pure binary deps from PyPI.
+$WheelDir = Join-Path $Cache "wheels"
+if (Test-Path $WheelDir) { Remove-Item -Recurse -Force $WheelDir }
+New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
+Write-Info "Building anonymizer wheel on host..."
+& $Py -m pip install -q "build>=1.0" "hatchling"
+if ($LASTEXITCODE -ne 0) { Die "pip install build/hatchling failed" }
+& $Py -m build --wheel --outdir $WheelDir "$Root"
+if ($LASTEXITCODE -ne 0) { Die "python -m build failed" }
+$wheel = Get-ChildItem -Path $WheelDir -Filter "anonymizer-*.whl" | Select-Object -First 1
+if (-not $wheel) { Die "anonymizer wheel not produced in $WheelDir" }
+Write-Ok "Wheel: $($wheel.Name)"
+
+Write-Info "Installing anonymizer wheel into runtime..."
+& $PyEmbed -m pip install --no-warn-script-location $wheel.FullName
+if ($LASTEXITCODE -ne 0) { Die "pip install anonymizer wheel failed" }
 
 if ($Models -eq "lg") {
     $en = "en_core_web_lg"; $fi = "fi_core_news_lg"
@@ -89,18 +181,21 @@ if ($Models -eq "lg") {
     $en = "en_core_web_sm"; $fi = "fi_core_news_sm"
 }
 Write-Info "Downloading spaCy models ($Models)..."
-& $PyV -m spacy download $en
+& $PyEmbed -m spacy download $en
 if ($LASTEXITCODE -ne 0) { Die "spacy download $en failed" }
-& $PyV -m spacy download $fi
+& $PyEmbed -m spacy download $fi
 if ($LASTEXITCODE -ne 0) { Die "spacy download $fi failed" }
 
-# CLI launcher
-$anonExe = Join-Path $Runtime "Scripts\anonymize.exe"
-if (-not (Test-Path $anonExe)) { Die "anonymize.exe missing after install" }
+# Sanity: package imports without host Python
+& $PyEmbed -c "import anonymizer, spacy; print('runtime ok', anonymizer.__version__)"
+if ($LASTEXITCODE -ne 0) { Die "runtime import check failed" }
+Write-Ok "Embeddable runtime ready"
+
+# CLI launcher - module form is relocatable (no hardcoded Scripts\*.exe paths)
 $cmd = @"
 @echo off
-REM Anonymizer CLI — installed by Setup / build-release.ps1
-"%~dp0..\runtime\Scripts\anonymize.exe" %*
+REM Anonymizer CLI - installed by Setup / build-release.ps1
+"%~dp0..\runtime\python.exe" -m anonymizer.cli %*
 exit /b %ERRORLEVEL%
 "@
 Set-Content -Path (Join-Path $Stage "bin\anonymize.cmd") -Value $cmd -Encoding ASCII
@@ -108,20 +203,19 @@ Write-Ok "bin\anonymize.cmd"
 
 # --- freeze GUI ---
 if (-not $SkipGuiFreeze) {
-    Write-Info "Installing PyInstaller into build env..."
+    Write-Info "Installing PyInstaller into build host env..."
     & $Py -m pip install -q "pyinstaller>=6.0"
+    if ($LASTEXITCODE -ne 0) { Die "pip install pyinstaller failed" }
     Write-Info "Freezing Anonymizer.exe (GUI only)..."
     $spec = Join-Path $Root "packaging\windows\Anonymizer.spec"
     & $Py -m PyInstaller --noconfirm --clean --distpath (Join-Path $Stage "app") --workpath (Join-Path $Dist "pyi-work") $spec
     if ($LASTEXITCODE -ne 0) { Die "PyInstaller failed" }
     $guiExe = Join-Path $Stage "app\Anonymizer.exe"
     if (-not (Test-Path $guiExe)) {
-        # onefile may land directly under app/
         $alt = Get-ChildItem -Path (Join-Path $Stage "app") -Filter "Anonymizer.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($alt) { $guiExe = $alt.FullName }
     }
     if (-not (Test-Path $guiExe)) { Die "Anonymizer.exe not produced" }
-    # Promote to stage root for simple shortcuts
     Copy-Item -Force $guiExe (Join-Path $Stage "Anonymizer.exe")
     Write-Ok "Anonymizer.exe"
 
@@ -134,7 +228,8 @@ start `"`" "%~dp0..\Anonymizer.exe" %*
     Write-Info "SkipGuiFreeze: writing pythonw launcher instead"
     $guiCmd = @"
 @echo off
-"%~dp0..\runtime\Scripts\pythonw.exe" -m anonymizer.gui %*
+REM Dev fallback - requires runtime python with tkinter (embeddable may lack it)
+"%~dp0..\runtime\python.exe" -m anonymizer.gui %*
 "@
     Set-Content -Path (Join-Path $Stage "bin\Anonymizer.cmd") -Value $guiCmd -Encoding ASCII
     Copy-Item (Join-Path $Stage "bin\Anonymizer.cmd") (Join-Path $Stage "Anonymizer.cmd")
@@ -142,6 +237,13 @@ start `"`" "%~dp0..\Anonymizer.exe" %*
 
 # Version stamp
 Set-Content -Path (Join-Path $Stage "VERSION") -Value $Version -Encoding ASCII -NoNewline
+
+# Drop bytecode before packaging (smaller zip/Setup; avoids long-path ISCC aborts)
+Write-Info "Cleaning __pycache__ / *.pyc from stage..."
+Get-ChildItem -Path $Stage -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path $Stage -Recurse -Include "*.pyc", "*.pyo" -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Zip portable stage
 $zip = Join-Path $Dist "Anonymizer-$Version-windows.zip"
@@ -152,7 +254,7 @@ Write-Ok $zip
 
 # --- Inno Setup ---
 if ($SkipInstaller) {
-    Write-Info "SkipInstaller set — stage + zip only"
+    Write-Info "SkipInstaller set - stage + zip only"
     exit 0
 }
 
@@ -160,28 +262,48 @@ $iscc = $null
 foreach ($c in @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     (Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
 )) {
     if ($c -and (Test-Path $c)) { $iscc = $c; break }
 }
 if (-not $iscc) {
-    Write-Host "!   Inno Setup (ISCC.exe) not found — install from https://jrsoftware.org/isinfo.php" -ForegroundColor Yellow
-    Write-Host "    Stage is ready at $Stage; zip at $zip" -ForegroundColor Yellow
+    Write-Warn "Inno Setup (ISCC.exe) not found - install from https://jrsoftware.org/isinfo.php"
+    Write-Warn "Stage is ready at $Stage; zip at $zip"
     exit 0
+}
+
+# Deep repo paths can exceed MAX_PATH during ISCC compress; feed a short junction.
+$StageForIscc = $Stage
+$ShortJunction = "C:\anon-stage"
+if ($Stage.Length -gt 80) {
+    Write-Info "Creating short junction $ShortJunction -> stage (ISCC path length)"
+    if (Test-Path $ShortJunction) {
+        cmd /c "rmdir `"$ShortJunction`"" | Out-Null
+    }
+    cmd /c "mklink /J `"$ShortJunction`" `"$Stage`"" | Out-Null
+    if (Test-Path $ShortJunction) {
+        $StageForIscc = $ShortJunction
+    } else {
+        Write-Warn "Could not create junction; using full stage path"
+    }
 }
 
 $iss = Join-Path $Root "packaging\windows\installer\anonymizer.iss"
 Write-Info "Compiling installer with $iscc"
-& $iscc /DMyAppVersion=$Version /DMyStageDir="$Stage" $iss
-if ($LASTEXITCODE -ne 0) { Die "ISCC failed" }
+& $iscc "/DMyAppVersion=$Version" "/DMyStageDir=$StageForIscc" $iss
+$isccCode = $LASTEXITCODE
+if ($StageForIscc -eq $ShortJunction -and (Test-Path $ShortJunction)) {
+    cmd /c "rmdir `"$ShortJunction`"" | Out-Null
+}
+if ($isccCode -ne 0) { Die "ISCC failed" }
 $setup = Join-Path $Dist "Anonymizer-Setup-$Version.exe"
 if (Test-Path $setup) {
     Write-Ok "Installer: $setup"
 } else {
-    # Inno may write next to iss OutputDir
     $found = Get-ChildItem -Path $Dist -Filter "Anonymizer-Setup*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($found) { Write-Ok "Installer: $($found.FullName)" }
-    else { Write-Host "!   Setup exe not found in dist\ — check Inno OutputDir" -ForegroundColor Yellow }
+    else { Write-Warn 'Setup exe not found in dist\ - check Inno OutputDir' }
 }
 
 Write-Ok "Windows release build finished"

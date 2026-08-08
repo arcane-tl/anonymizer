@@ -83,7 +83,6 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Path, AppBin, NewPath: string;
-  P: Integer;
 begin
   if CurUninstallStep <> usPostUninstall then
     exit;

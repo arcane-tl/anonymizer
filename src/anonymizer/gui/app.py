@@ -90,15 +90,64 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _find_anonymize() -> str | None:
+def _cli_prefix_for_path(path: str | Path) -> list[str]:
+    """Build argv prefix for a discovered CLI path.
+
+    Prefer ``python -m anonymizer.cli`` for embeddable runtime (relocatable).
+    Wrap ``.cmd`` launchers with ``cmd /c`` so CreateProcess can run them.
+    """
+    p = Path(path)
+    name = p.name.lower()
+    if name in {"python.exe", "python", "pythonw.exe"}:
+        return [str(p), "-m", "anonymizer.cli"]
+    if name.endswith(".cmd") or name.endswith(".bat"):
+        return ["cmd", "/c", str(p)]
+    return [str(p)]
+
+
+def _probe_cli_base(base: Path) -> list[str] | None:
+    """Look for CLI under an install/stage prefix."""
+    if not base:
+        return None
+    # Embeddable / frozen stage: runtime\python.exe -m anonymizer.cli
+    for rel in (
+        "runtime/python.exe",
+        "runtime/Scripts/python.exe",
+        ".venv/Scripts/python.exe",
+        ".venv/bin/python",
+    ):
+        cand = base / rel
+        if cand.is_file():
+            return _cli_prefix_for_path(cand)
+    for rel in (
+        "bin/anonymize.cmd",
+        "bin/anonymize.exe",
+        "runtime/Scripts/anonymize.exe",
+        "runtime/Scripts/anonymize",
+        ".venv/Scripts/anonymize.exe",
+        ".venv/Scripts/anonymize",
+        ".venv/bin/anonymize",
+    ):
+        cand = base / rel
+        if cand.is_file():
+            return _cli_prefix_for_path(cand)
+    return None
+
+
+def _find_anonymize() -> list[str] | None:
+    """Return argv prefix for the anonymize CLI, or None if not found."""
     env = os.environ.get("ANONYMIZER_BIN")
     if env and Path(env).is_file():
-        return env
-    which = shutil.which("anonymize")
-    if which:
-        return which
+        return _cli_prefix_for_path(env)
 
-    # Install / stage layouts (Setup.exe and install.ps1)
+    # Frozen Setup/portable layout: always prefer runtime next to Anonymizer.exe
+    # over PATH (PATH may point at a broken/partial install.ps1 bin).
+    if getattr(sys, "frozen", False):
+        found = _probe_cli_base(_app_dir()) or _probe_cli_base(_app_dir().parent)
+        if found:
+            return found
+
+    # Install prefixes (Setup.exe → %LOCALAPPDATA%\Anonymizer, install.ps1 → anonymizer)
     local_app = Path(os.environ.get("LOCALAPPDATA", ""))
     for base in (
         local_app / "Anonymizer",
@@ -106,22 +155,22 @@ def _find_anonymize() -> str | None:
         _app_dir(),
         _app_dir().parent,
     ):
-        for rel in (
-            "bin/anonymize.cmd",
-            "bin/anonymize.exe",
-            "runtime/Scripts/anonymize.exe",
-            "runtime/Scripts/anonymize",
-            ".venv/Scripts/anonymize.exe",
-            ".venv/Scripts/anonymize",
-            ".venv/bin/anonymize",
-        ):
-            cand = base / rel
-            if cand.is_file():
-                return str(cand)
+        found = _probe_cli_base(base)
+        if found:
+            return found
+
+    which = shutil.which("anonymize")
+    if which:
+        return _cli_prefix_for_path(which)
 
     here = Path(__file__).resolve()
     for root in (here.parents[3], here.parents[2], Path.cwd()):
+        found = _probe_cli_base(root)
+        if found:
+            return found
         for rel in (
+            ".venv/Scripts/python.exe",
+            ".venv/bin/python",
             ".venv/bin/anonymize",
             ".venv/Scripts/anonymize.exe",
             ".venv/Scripts/anonymize",
@@ -129,7 +178,7 @@ def _find_anonymize() -> str | None:
         ):
             cand = root / rel
             if cand.is_file():
-                return str(cand)
+                return _cli_prefix_for_path(cand)
     return None
 
 
@@ -339,13 +388,13 @@ class OptionsApp(tk.Tk):
             )
 
     def _start(self) -> None:
-        anon = _find_anonymize()
-        if not anon:
+        cli = _find_anonymize()
+        if not cli:
             messagebox.showerror(
                 "Anonymizer",
                 "Could not find the anonymize CLI.\n\n"
-                "Install with scripts\\install.ps1, open a new terminal, "
-                "and try again.\n\n"
+                "Install with Anonymizer-Setup.exe or scripts\\install.ps1, "
+                "open a new terminal, and try again.\n\n"
                 f"Log: {_log_path()}",
                 parent=self,
             )
@@ -377,7 +426,7 @@ class OptionsApp(tk.Tk):
 
         if want_review:
             cmds = [
-                [anon, mode, str(p), *common_flags, "--review"] for p in self.files
+                [*cli, mode, str(p), *common_flags, "--review"] for p in self.files
             ]
             self._run_review_batch(cmds, want_open)
             self.destroy()
@@ -388,7 +437,7 @@ class OptionsApp(tk.Tk):
         errors: list[str] = []
         try:
             for fpath in self.files:
-                cmd = [anon, mode, str(fpath), *common_flags]
+                cmd = [*cli, mode, str(fpath), *common_flags]
                 _log(f"RUN: {cmd}")
                 proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode != 0:
