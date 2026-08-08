@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from anonymizer.anonymize.domain_lexicon import DEFAULT_ALLOWLIST_SEEDS
+
 # ---------------------------------------------------------------------------
 # Entity presets per operating mode
 # ---------------------------------------------------------------------------
@@ -106,20 +108,9 @@ class DenylistEntry:
     entity_type: str = "ORG"
 
 
-# Field labels only (not company/person names). Users extend via config.
-DEFAULT_ALLOWLIST: list[str] = [
-    "Y-tunnus",
-    "Y tunnus",
-    "Hetu",
-    "Henkilötunnus",
-    "ALV-numero",
-    "ALV numero",
-    "ALV",
-    "VAT",
-    "IBAN",
-    "Email",
-    "Phone",
-]
+# Field labels + contract roles + legal collocations (not company catalogs).
+# Users append via allowlist_extra; allowlist: still replaces defaults.
+DEFAULT_ALLOWLIST: list[str] = list(DEFAULT_ALLOWLIST_SEEDS)
 
 
 def normalize_mode(mode: str | None) -> str:
@@ -165,6 +156,8 @@ class AnonymizerConfig:
     # True when YAML or CLI set an explicit entity list (overrides mode preset)
     entities_explicit: bool = False
     allowlist: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWLIST))
+    # Appended after allowlist load (does not replace defaults)
+    allowlist_extra: list[str] = field(default_factory=list)
     denylist: list[DenylistEntry] = field(default_factory=list)
     lang: str = "auto"
     include_dates: bool = False
@@ -257,6 +250,8 @@ def load_config(path: Path | None) -> AnonymizerConfig:
         if "allowlist" in data and data["allowlist"] is not None:
             # YAML allowlist replaces defaults when provided (including empty list)
             cfg.allowlist = [str(x) for x in data["allowlist"]]
+        if "allowlist_extra" in data and data["allowlist_extra"] is not None:
+            cfg.allowlist_extra = [str(x) for x in data["allowlist_extra"]]
         if "denylist" in data and data["denylist"]:
             entries: list[DenylistEntry] = []
             for item in data["denylist"]:
@@ -308,4 +303,11 @@ def load_config(path: Path | None) -> AnonymizerConfig:
     from anonymizer.output.native import normalize_output_format
 
     cfg.output_format = normalize_output_format(cfg.output_format)
+    # Append extras without replacing the base list
+    if cfg.allowlist_extra:
+        seen = {a.casefold() for a in cfg.allowlist}
+        for item in cfg.allowlist_extra:
+            if item and item.casefold() not in seen:
+                cfg.allowlist.append(item)
+                seen.add(item.casefold())
     return cfg

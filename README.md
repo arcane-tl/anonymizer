@@ -90,7 +90,7 @@ More detail: [packaging/homebrew/README.md](packaging/homebrew/README.md).
 | Platform | How |
 |----------|-----|
 | **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` |
-| **Windows** | PowerShell installer is on branch `feature/windows-install` (`scripts/install.ps1`) — not on `main` yet |
+| **Windows** | `scripts/install.ps1` — CLI + Start Menu GUI (`anonymize-gui`). Same options as Mac. |
 | **From source** | Python 3.11+, `pip install -e ".[dev]"`, then `python -m spacy download en_core_web_lg` and `fi_core_news_lg` |
 
 ---
@@ -174,7 +174,7 @@ Dates are off by default (`--include-dates` to enable).
 
 ### How detection works (short)
 
-Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people.
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people. Use `allowlist_extra` in YAML to append terms without wiping built-in label defaults.
 
 ---
 

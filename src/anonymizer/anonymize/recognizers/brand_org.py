@@ -15,6 +15,13 @@ from typing import List, Optional
 from presidio_analyzer import AnalysisExplanation, EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
 
+from anonymizer.anonymize.domain_lexicon import (
+    DOC_TITLE_TAILS as _DOMAIN_DOC_TITLE_TAILS,
+    FORMISH_TOKENS,
+    LEGALISH_TOKENS,
+    ORG_ROLE_PREFIXES,
+)
+
 logger = logging.getLogger(__name__)
 
 _WORD = r"[A-ZÅÄÖ][A-Za-zÅÄÖåäö0-9&'’\-]*"
@@ -87,145 +94,14 @@ def _strip_leading_by_pos(text: str, start: int, end: int, nlp) -> tuple[int, in
     return new_start, end, new_surface
 
 
-# Contract / wiki boilerplate lemmas (not a company catalog)
-_LEGALISH = frozenset(
-    {
-        "agreement",
-        "publishing",
-        "rights",
-        "delivery",
-        "date",
-        "initial",
-        "author",
-        "changes",
-        "warranties",
-        "indemnity",
-        "grant",
-        "section",
-        "article",
-        "schedule",
-        "appendix",
-        "promotion",
-        "distribution",
-        "copyright",
-        "manuscript",
-        "work",
-        "new",
-        "letter",
-        "intent",
-        "memorandum",
-        "understanding",
-        "contract",
-        "law",
-        "case",
-        "cases",
-        "summaries",
-        "summary",
-        "basics",
-        "convention",
-        "sale",
-        "international",
-        "european",
-        "united",
-        "nations",
-        "nation",
-        "archive",
-        "internet",
-        "caselist",
-        "list",
-        "principles",
-        "school",
-        "university",
-        "college",
-        "institute",
-        "maine",
-        "wikipedia",
-        "wiki",
-    }
+# Shared domain lexicons (+ a few brand-only orthography extras)
+_LEGALISH = LEGALISH_TOKENS | frozenset({"maine", "wikipedia", "wiki"})
+_FORMISH = FORMISH_TOKENS
+_DOC_TITLE_TAILS = _DOMAIN_DOC_TITLE_TAILS
+_STOP_JOINERS = frozenset(
+    {"of", "and", "the", "for", "to", "a", "an", "on", "in", "uk", "fi", "en", "ja", "tai"}
 )
-
-# Form / field orthography mistaken for brands ("Payment IBAN")
-_FORMISH = frozenset(
-    {
-        "payment",
-        "iban",
-        "email",
-        "phone",
-        "address",
-        "website",
-        "contact",
-        "account",
-        "invoice",
-        "reference",
-        "number",
-        "code",
-        "field",
-        "label",
-        "source",
-        "url",
-        "http",
-        "https",
-        "name",
-        "legal",
-        "office",
-        "registered",
-        "delivery",
-        "vehicle",
-        "network",
-        "endpoint",
-        "person",
-        "business",
-        "secondary",
-        "site",
-        "also",
-        "trading",
-        "customer",
-        "supplier",
-        "annex",
-        "synthetic",
-    }
-)
-
-_DOC_TITLE_TAILS = frozenset(
-    {
-        "agreement",
-        "contract",
-        "policy",
-        "addendum",
-        "amendment",
-        "schedule",
-        "appendix",
-        "annex",
-        "caselist",
-        "summaries",
-    }
-)
-
-_STOP_JOINERS = frozenset({"of", "and", "the", "for", "to", "a", "an", "on", "in", "uk", "fi", "en"})
-
-# Leading role / label words before a brand (surface match)
-_ROLE_PREFIX = frozenset(
-    {
-        "client",
-        "customer",
-        "supplier",
-        "provider",
-        "vendor",
-        "seller",
-        "buyer",
-        "contractor",
-        "partner",
-        "toimittaja",
-        "tilaaja",
-        "asiakas",
-        "myyjä",
-        "ostaja",
-        "brand",
-        "brands",
-        "brändi",
-        "brändiä",
-    }
-)
+_ROLE_PREFIX = ORG_ROLE_PREFIXES
 
 
 def _valid_multi(phrase: str, nlp=None) -> bool:

@@ -15,6 +15,16 @@ from anonymizer.anonymize.config import (
     SPACY_MODELS,
     AnonymizerConfig,
 )
+from anonymizer.anonymize.domain_lexicon import (
+    COMMERCIAL_LOC_SUFFIX,
+    CONTRACT_ROLES,
+    DOC_TITLE_TAILS,
+    LEGAL_PHRASES,
+    ORG_ROLE_PREFIXES,
+    is_contract_role_surface,
+    is_legal_phrase_surface,
+    tokens_all_domain_noise,
+)
 from anonymizer.anonymize.language import resolve_language
 from anonymizer.anonymize.mapping import EntityMap, normalize_entity_text
 from anonymizer.anonymize.org_stems import (
@@ -115,28 +125,8 @@ def _spacy_nlp(lang: str):
     return spacy.load(_resolve_spacy_model(lang))
 
 
-# Contract role words often glued onto company names by NER (surface match only).
-_ORG_ROLE_PREFIXES = frozenset(
-    {
-        "client",
-        "customer",
-        "supplier",
-        "provider",
-        "vendor",
-        "seller",
-        "buyer",
-        "contractor",
-        "toimittaja",
-        "tilaaja",
-        "asiakas",
-        "myyjä",
-        "ostaja",
-        "brand",
-        "brands",
-        "brändi",
-        "brändiä",
-    }
-)
+# Role prefixes for span trimming (domain lexicon)
+_ORG_ROLE_PREFIXES = ORG_ROLE_PREFIXES
 
 _LEGAL_FORM_RE = re.compile(
     r"(?i)\b(oyj|oy|abp|ab|ky|ltd|limited|inc|corp|llc|llp|gmbh|plc)\b"
@@ -185,74 +175,14 @@ def _trim_spacy_org_span_with_doc(doc, start: int, end: int) -> tuple[int, int]:
     return new_start, end
 
 
-_DOC_TITLE_TAILS = frozenset(
-    {
-        "agreement",
-        "contract",
-        "policy",
-        "addendum",
-        "amendment",
-        "schedule",
-        "appendix",
-        "annex",
-        "caselist",
-        "summaries",
-        "ehdot",
-        "peruutusehdot",
-        "veloitus",
-        "veloitusukset",
-        "palvelut",
-        "yhteensä",
-        "majeure",
-        "card",
-        "cardiin",
-    }
-)
-
-# Contract party role words (not organisations)
-_CONTRACT_ROLES = frozenset(
-    {
-        "asiakas",
-        "myyjä",
-        "ostaja",
-        "toimittaja",
-        "tilaaja",
-        "vuokralainen",
-        "vuokranantaja",
-        "osapuoli",
-        "client",
-        "customer",
-        "seller",
-        "buyer",
-        "supplier",
-        "provider",
-        "author",
-        "publisher",
-        "lessor",
-        "lessee",
-    }
-)
-
-# Legal / insurance collocations (not orgs)
-_LEGAL_PHRASES = frozenset(
-    {
-        "force majeure",
-        "green card",
-        "green cardiin",
-        "letter of intent",
-        "memorandum of understanding",
-    }
-)
-
-_COMMERCIAL_LOC_SUFFIX = re.compile(
-    r"(?i)(veloitus|maksu|palkkio|vuokra|ehdot|palvelut|yhteens[aä]|raja)$",
-    re.UNICODE,
-)
+_DOC_TITLE_TAILS = DOC_TITLE_TAILS
+_CONTRACT_ROLES = CONTRACT_ROLES
+_LEGAL_PHRASES = LEGAL_PHRASES
+_COMMERCIAL_LOC_SUFFIX = COMMERCIAL_LOC_SUFFIX
 
 
 def _is_contract_role_surface(surface: str) -> bool:
-    s = surface.strip().strip("\"'()«»")
-    return s.casefold() in _CONTRACT_ROLES
+    return is_contract_role_surface(surface)
 
 
 def _is_all_caps_section_header(surface: str) -> bool:
@@ -348,14 +278,21 @@ def _looks_like_false_location(surface: str) -> bool:
 
 
 def _looks_like_false_person(nlp, surface: str, span_toks) -> bool:
-    """Drop capitalised common nouns / lowercase fragments mis-tagged as PERSON."""
+    """Drop capitalised common nouns / legal roles mis-tagged as PERSON."""
     surface = surface.strip()
     if not surface:
         return True
     # Formal names are capitalised; "lien" mid-clause is not a name
     if surface == surface.casefold():
         return True
-    if len(span_toks) != 1:
+    if is_contract_role_surface(surface) or is_legal_phrase_surface(surface):
+        return True
+    toks = [t.strip(".,;:'\"") for t in surface.split() if t.strip(".,;:'\"")]
+    # Multi-token: all role/legalish/formish → not a person name
+    if len(toks) >= 2 and tokens_all_domain_noise(toks):
+        return True
+    if len(span_toks) != 1 and len(toks) != 1:
+        # Keep multi-token Title Case with at least one non-domain token
         return False
     try:
         probe = nlp(surface.casefold())
@@ -784,20 +721,48 @@ def _drop_noisy_surfaces(
 def _filter_false_org_location(
     text: str, results: list[RecognizerResult]
 ) -> list[RecognizerResult]:
-    """Drop role words, ALL-CAPS headers, commercial LOCATION/CITY, etc."""
+    """Backward-compatible alias for unified post-merge FP filter."""
+    return _filter_entity_false_positives(text, results)
+
+
+def _filter_entity_false_positives(
+    text: str, results: list[RecognizerResult]
+) -> list[RecognizerResult]:
+    """Drop role/legal boilerplate ORG, false PERSON, commercial LOCATION.
+
+    Applied after merge and after org-stem expansion so BrandOrg / Company /
+    stem hits get the same discipline as spaCy-time gates.
+    """
     kept: list[RecognizerResult] = []
     for r in results:
         surface = text[r.start : r.end]
         if r.entity_type == "ORG":
-            if _is_contract_role_surface(surface):
+            if is_contract_role_surface(surface):
                 continue
-            if surface.casefold() in _LEGAL_PHRASES:
+            if is_legal_phrase_surface(surface):
                 continue
             if _is_all_caps_section_header(surface):
                 continue
             if not _LEGAL_FORM_RE.search(surface) and re.search(
-                r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot)\b", surface
+                r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot)\b",
+                surface,
             ):
+                continue
+            # Multi-token ORG with no legal form and only domain noise tokens
+            if not _LEGAL_FORM_RE.search(surface):
+                toks = [t for t in surface.split() if t.strip(".,;:'\"")]
+                if len(toks) >= 2 and tokens_all_domain_noise(toks):
+                    continue
+                # Single-token commercial compound tails
+                if len(toks) == 1 and _COMMERCIAL_LOC_SUFFIX.search(toks[0]):
+                    continue
+        if r.entity_type == "PERSON":
+            if is_contract_role_surface(surface) or is_legal_phrase_surface(surface):
+                continue
+            toks = [t for t in surface.split() if t.strip(".,;:'\"")]
+            if len(toks) >= 2 and tokens_all_domain_noise(toks):
+                continue
+            if surface == surface.casefold():
                 continue
         if r.entity_type in {"LOCATION", "CITY"} and _looks_like_false_location(
             surface
@@ -1000,7 +965,7 @@ class DocumentAnonymizer:
         _p("Merging entities…")
         merged = _merge_results(all_results)
         merged = _filter_field_labels(text, merged)
-        merged = _filter_false_org_location(text, merged)
+        merged = _filter_entity_false_positives(text, merged)
         merged = _drop_noisy_surfaces(text, merged)
 
         # Propagate company stems (LähiTapiola Rahoitus Oy → LähiTapiola / LähiTapiolan)
@@ -1009,7 +974,7 @@ class DocumentAnonymizer:
             if stems:
                 _p("Expanding company short forms…")
                 merged = _merge_results(merged + expand_org_stems_in_text(text, stems))
-                merged = _filter_false_org_location(text, merged)
+                merged = _filter_entity_false_positives(text, merged)
 
         merged = _allowlist_filter(text, merged, self.config.allowlist)
         return merged, decision

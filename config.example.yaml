@@ -23,7 +23,11 @@ score_threshold: 0.5
 #   - EMAIL_ADDRESS
 #   - PHONE_NUMBER
 
-# Never redact these exact strings (your list only)
+# Never redact these exact strings.
+# `allowlist:` replaces built-in defaults when set.
+# Prefer `allowlist_extra:` to append without wiping defaults:
+# allowlist_extra:
+#   - My Internal Product Name
 allowlist:
   - Y-tunnus
   - Hetu
