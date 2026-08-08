@@ -127,6 +127,7 @@ on processFiles(theFiles)
 	set modeArg to modeArg of choices
 	set wantReview to wantReview of choices
 	set wantOpen to wantOpen of choices
+	set wantNative to wantNative of choices
 	set redactStyle to redactStyle of choices
 	set allowText to allowText of choices
 	set denyText to denyText of choices
@@ -144,6 +145,8 @@ on processFiles(theFiles)
 	writeTextToFile(denyText, denyFile)
 
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --allow-from " & quoted form of allowFile & " --deny-from " & quoted form of denyFile
+	-- Also save redacted PDF/DOCX (Markdown still written with --format both)
+	if wantNative then set extraOpts to extraOpts & " --format both"
 
 	if wantReview then
 		display notification "Complete the checklist in Terminal (space / enter)." with title "Anonymizer" subtitle "Review"
@@ -499,6 +502,7 @@ on showOptionsPanel(fileNames)
 	set lastStyleRow to 0
 	set lastReview to false
 	set lastOpen to true
+	set lastNative to false
 
 	-- Design scale (comfortable, not sparse)
 	set margin to 24
@@ -524,8 +528,8 @@ on showOptionsPanel(fileNames)
 	set btnW to 96
 	set btnGap to 10
 
-	-- Exact height: sum of blocks + gaps (top → bottom)
-	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + modeMatrixH + gapLg + styleLabelH + gapXs + styleMatrixH + gapLg + listsLabelH + gapXs + listsStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+	-- Exact height: sum of blocks + gaps (top → bottom); 3 checkboxes
+	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + modeMatrixH + gapLg + styleLabelH + gapXs + styleMatrixH + gapLg + listsLabelH + gapXs + listsStatusH + gapMd + checkH + gapSm + checkH + gapSm + checkH + gapXl + btnH + margin
 
 	repeat
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
@@ -652,6 +656,18 @@ on showOptionsPanel(fileNames)
 		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:openBox
 
+		set y to y - gapSm - checkH
+		set nativeBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
+		nativeBox's setButtonType:(current application's NSButtonTypeSwitch)
+		nativeBox's setTitle:"Also save redacted original (PDF/DOCX)"
+		if lastNative then
+			nativeBox's setState:(current application's NSControlStateValueOn)
+		else
+			nativeBox's setState:(current application's NSControlStateValueOff)
+		end if
+		nativeBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:nativeBox
+
 		-- Action bar (HIG): Cancel left · Lists… + Start right
 		set y to margin
 		set cancelBtn to makeDialogButton("Cancel", margin, y, btnW, btnH, "clickOptionsCancel:")
@@ -688,6 +704,9 @@ on showOptionsPanel(fileNames)
 		set lastOpen to false
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
+		set lastNative to false
+		if (nativeBox's state() as integer) is 1 then set lastNative to true
+		if (nativeBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastNative to true
 
 		thePanel's orderOut_(missing value)
 
@@ -697,8 +716,9 @@ on showOptionsPanel(fileNames)
 			if lastStyleRow is 1 then set redactStyle to "remove"
 			set wantReview to lastReview
 			set wantOpen to lastOpen
+			set wantNative to lastNative
 			if modeArg is "extract" then set wantReview to false
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantNative:wantNative, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
 		else if response is 2 then
 			set edited to showListsPanel(allowText, denyText)
 			if edited is not missing value then

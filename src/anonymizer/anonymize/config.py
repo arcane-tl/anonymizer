@@ -178,6 +178,8 @@ class AnonymizerConfig:
     keep_headers: bool = False
     # placeholder = [PERSON_1] tags (default); remove = delete the span
     redact_style: str = "placeholder"
+    # Output: md (default) | source (native PDF/DOCX) | both
+    output_format: str = "md"
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -284,6 +286,15 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.keep_headers = bool(data["keep_headers"])
         if "redact_style" in data and data["redact_style"]:
             cfg.redact_style = normalize_redact_style(str(data["redact_style"]))
+        if "format" in data and data["format"]:
+            # Lazy import avoids circular import with output package at module load
+            from anonymizer.output.native import normalize_output_format
+
+            cfg.output_format = normalize_output_format(str(data["format"]))
+        if "output_format" in data and data["output_format"]:
+            from anonymizer.output.native import normalize_output_format
+
+            cfg.output_format = normalize_output_format(str(data["output_format"]))
     except ConfigError:
         raise
     except (TypeError, ValueError) as exc:
@@ -294,4 +305,7 @@ def load_config(path: Path | None) -> AnonymizerConfig:
         cfg.entities = entities_for_mode(cfg.mode)
     # Normalize style even if default
     cfg.redact_style = normalize_redact_style(cfg.redact_style)
+    from anonymizer.output.native import normalize_output_format
+
+    cfg.output_format = normalize_output_format(cfg.output_format)
     return cfg

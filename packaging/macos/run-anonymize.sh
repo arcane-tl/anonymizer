@@ -8,12 +8,14 @@
 # Options:
 #   --review              Interactive redaction review (requires a real terminal)
 #   --redact-style STYLE  placeholder (default) | remove
+#   --format FMT          md (default) | source | both (native PDF/DOCX)
 #   --config PATH         YAML config (allowlist, denylist, …)
 #   --allow-from PATH     One allowlist string per line → temp config merge
 #   --deny-from PATH      One denylist string per line → temp config merge
 #
-# On success, prints one line per written Markdown file to stdout:
+# On success, prints one line per written output file to stdout:
 #   OUTPUT:/absolute/path/to/file.md
+#   OUTPUT:/absolute/path/to/file.anonymized.pdf   (when --format both|source)
 #
 # --review needs an interactive terminal (checkbox UI). Use Terminal.app
 # for that path; plain do shell script has no TTY.
@@ -31,13 +33,14 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
 
   --review              Interactive redaction review (requires a real terminal)
   --redact-style STYLE  placeholder | remove (default: placeholder)
+  --format FMT          md | source | both (default: md)
   --config PATH         YAML config file
   --allow-from PATH     Allowlist file (one string per line)
   --deny-from PATH      Denylist file (one string per line)
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
-Stdout (success): one OUTPUT:/abs/path line per written Markdown file.
+Stdout (success): one OUTPUT:/abs/path line per written file (MD and/or native).
 
 Environment:
   ANONYMIZER_BIN   Absolute path to the anonymize executable
@@ -115,6 +118,27 @@ expected_output_path() {
   printf '%s/%s\n' "$dir" "$name"
 }
 
+# Native redacted path: {stem}.anonymized.pdf|.docx when input is PDF/DOCX.
+expected_native_output_path() {
+  local input_path="$1"
+  local dir base stem ext name
+  dir=$(cd "$(dirname -- "$input_path")" && pwd)
+  base=$(basename -- "$input_path")
+  ext="${base##*.}"
+  ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+  if [[ "$base" == *.* ]]; then
+    stem="${base%.*}"
+  else
+    return 1
+  fi
+  case "$ext" in
+    pdf) name="${stem}.anonymized.pdf" ;;
+    docx) name="${stem}.anonymized.docx" ;;
+    *) return 1 ;;
+  esac
+  printf '%s/%s\n' "$dir" "$name"
+}
+
 # Build a temp YAML config from optional --config, --allow-from, --deny-from, style.
 # Prints path to temp file (caller should not delete until process ends).
 build_merged_config() {
@@ -172,6 +196,7 @@ build_merged_config() {
 
 REVIEW=0
 REDACT_STYLE=""
+OUTPUT_FORMAT=""
 CONFIG_PATH=""
 ALLOW_FROM=""
 DENY_FROM=""
@@ -188,6 +213,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --redact-style)
       REDACT_STYLE="${2:-}"
+      shift 2
+      ;;
+    --format)
+      OUTPUT_FORMAT="${2:-}"
       shift 2
       ;;
     --config)
@@ -263,6 +292,9 @@ if [[ -n "$CONFIG_PATH" || -n "$ALLOW_FROM" || -n "$DENY_FROM" || -n "$REDACT_ST
     EXTRA_ARGS+=(--redact-style "$REDACT_STYLE")
   fi
 fi
+if [[ -n "$OUTPUT_FORMAT" ]]; then
+  EXTRA_ARGS+=(--format "$OUTPUT_FORMAT")
+fi
 cleanup_config() {
   if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
     rm -f "$MERGED_CONFIG"
@@ -286,13 +318,38 @@ for f in "$@"; do
     f_abs=$(cd "$(dirname -- "$f")" && pwd)/$(basename -- "$f")
   fi
 
-  if [[ "$REVIEW" -eq 1 ]]; then
-    if "$BIN" "$MODE" "$f_abs" --review "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
-      out_path=$(expected_output_path "$f_abs" "$MODE")
+  emit_outputs() {
+    local f_abs="$1" mode="$2" fmt="${3:-md}"
+    local out_path native_path
+    # Markdown unless format is source-only
+    if [[ "$fmt" != "source" && "$fmt" != "native" && "$fmt" != "original" ]]; then
+      out_path=$(expected_output_path "$f_abs" "$mode")
       if [[ -f "$out_path" ]]; then
         printf 'OUTPUT:%s\n' "$out_path"
         outputs+=("$out_path")
+      elif [[ "$fmt" == "md" || -z "$fmt" ]]; then
+        echo "warning: expected output missing: $out_path" >&2
       fi
+    fi
+    # Native when format is source or both
+    case "$fmt" in
+      source|native|original|both|all|dual)
+        if native_path=$(expected_native_output_path "$f_abs"); then
+          if [[ -f "$native_path" ]]; then
+            printf 'OUTPUT:%s\n' "$native_path"
+            outputs+=("$native_path")
+          else
+            echo "warning: expected native output missing: $native_path" >&2
+          fi
+        fi
+        ;;
+    esac
+  }
+
+  FMT="${OUTPUT_FORMAT:-md}"
+  if [[ "$REVIEW" -eq 1 ]]; then
+    if "$BIN" "$MODE" "$f_abs" --review "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
+      emit_outputs "$f_abs" "$MODE" "$FMT"
       ok=$((ok + 1))
     else
       echo "error: anonymize failed for: $f_abs" >&2
@@ -300,13 +357,7 @@ for f in "$@"; do
     fi
   else
     if "$BIN" "$MODE" "$f_abs" --quiet "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
-      out_path=$(expected_output_path "$f_abs" "$MODE")
-      if [[ -f "$out_path" ]]; then
-        printf 'OUTPUT:%s\n' "$out_path"
-        outputs+=("$out_path")
-      else
-        echo "warning: expected output missing: $out_path" >&2
-      fi
+      emit_outputs "$f_abs" "$MODE" "$FMT"
       ok=$((ok + 1))
     else
       echo "error: anonymize failed for: $f_abs" >&2

@@ -38,6 +38,12 @@ denylist:
 #   remove — delete the text entirely (no tags; --review not available)
 # redact_style: placeholder
 
+# Output format:
+#   md (default) — Markdown only
+#   source       — redacted original PDF/DOCX (black-box PDF; tags/delete in DOCX)
+#   both         — Markdown + native when input is PDF/DOCX
+# format: md
+
 # lang: auto
 
 # Optional LLM layer (off by default). Prefer ollama (local).

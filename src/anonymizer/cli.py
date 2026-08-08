@@ -40,6 +40,14 @@ from anonymizer.anonymize.review import (
 )
 from anonymizer.extract import extract_document
 from anonymizer.output.markdown import render_from_extracted
+from anonymizer.output.native import (
+    default_native_output_path,
+    native_suffix,
+    normalize_output_format,
+    wants_markdown,
+    wants_native,
+    write_native_redacted,
+)
 from anonymizer.util.files import collect_inputs, default_output_path, expand_user_path
 from anonymizer.util.progress import RunProgress
 
@@ -94,6 +102,7 @@ _OPTS_WITH_VALUE = frozenset(
         "--llm-model",
         "--reject",
         "--redact-style",
+        "--format",
     }
 )
 
@@ -143,6 +152,8 @@ def _report_write_success(
     summary: str,
     out_path: Path | None,
     map_file: Path | None,
+    native_path: Path | None = None,
+    wrote_stdout: bool = False,
 ) -> None:
     """Tell the user exactly where files landed (main post-run UX).
 
@@ -151,6 +162,7 @@ def _report_write_success(
     """
     out_disp = _abs_display_path(out_path) if out_path is not None else None
     map_disp = _abs_display_path(map_file) if map_file is not None else None
+    native_disp = _abs_display_path(native_path) if native_path is not None else None
 
     # overflow=ignore keeps absolute paths intact for copy-paste / tests
     print_kw = {"overflow": "ignore", "crop": False, "soft_wrap": False}
@@ -160,12 +172,15 @@ def _report_write_success(
             f"[green]OK[/green] {input_name} · {elapsed} · {summary}",
             **print_kw,
         )
+    label = "Wrote" if not quiet else "→"
     if out_disp is not None:
-        label = "Wrote" if not quiet else "→"
         console.print(f"[green]{label}[/green] {out_disp}", **print_kw)
-    else:
-        label = "Wrote" if not quiet else "→"
+    elif wrote_stdout:
         console.print(f"[green]{label}[/green] stdout", **print_kw)
+    if native_disp is not None:
+        console.print(f"[green]{label}[/green] {native_disp}", **print_kw)
+    if out_disp is None and not wrote_stdout and native_disp is None:
+        console.print(f"[green]{label}[/green] (no output file)", **print_kw)
     if map_disp is not None:
         console.print(
             f"[dim]map[/dim] {map_disp} [dim](contains PII)[/dim]",
@@ -185,6 +200,7 @@ def _build_config(
     llm_provider: str | None,
     llm_model: str | None,
     redact_style: str | None,
+    output_format: str | None = None,
 ) -> AnonymizerConfig:
     cfg = load_config(config)
     cfg.mode = normalize_mode(mode)
@@ -207,6 +223,10 @@ def _build_config(
         cfg.redact_style = normalize_redact_style(redact_style)
     else:
         cfg.redact_style = normalize_redact_style(cfg.redact_style)
+    if output_format is not None:
+        cfg.output_format = normalize_output_format(output_format)
+    else:
+        cfg.output_format = normalize_output_format(cfg.output_format)
     if cfg.mode == "extract" and cfg.use_llm:
         console.print(
             "[dim]Note:[/dim] --llm is ignored in extract mode (no redaction)."
@@ -233,6 +253,7 @@ def _run_pipeline(
     review: bool,
     reject: str | None,
     redact_style: str | None,
+    output_format: str | None,
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
@@ -274,6 +295,7 @@ def _run_pipeline(
             llm_provider=llm_provider,
             llm_model=llm_model,
             redact_style=redact_style,
+            output_format=output_format,
         )
     except (ConfigError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -281,6 +303,24 @@ def _run_pipeline(
     # CLI flag wins over config default
     if keep_headers:
         cfg.keep_headers = True
+
+    out_fmt = cfg.output_format
+    write_md = wants_markdown(out_fmt)
+    write_native = wants_native(out_fmt)
+
+    if cfg.mode == "extract" and write_native and not write_md:
+        console.print(
+            "[red]Error:[/red] --format source is not used in extract mode "
+            "(nothing to redact in the original). Use extract for Markdown only, "
+            "or a redact mode (strict/standard) for native PDF/DOCX."
+        )
+        raise typer.Exit(2)
+    if cfg.mode == "extract" and write_native:
+        console.print(
+            "[dim]Note:[/dim] native PDF/DOCX output is skipped in extract mode."
+        )
+        write_native = False
+        out_fmt = "md"
 
     if offline and cfg.use_llm and cfg.llm_provider.lower() == "xai":
         console.print(
@@ -442,28 +482,98 @@ def _run_pipeline(
             result.anonymized_text = "\n\n".join(anon_blocks)
             result.redact_style = "remove"
 
-        progress.substep("Rendering Markdown…")
-        md = render_from_extracted(doc, anon_blocks, result)
+        # Snapshot mapping before any further changes — native redaction uses
+        # cleartext originals from the (post-review) map.
+        native_mapping = dict(result.mapping)
 
         written_out: Path | None = None
         written_map: Path | None = None
+        written_native: Path | None = None
+        wrote_stdout = False
 
-        if output is not None and str(output) == "-":
-            progress.substep("Writing to stdout…")
-            sys.stdout.write(md)
-            if not md.endswith("\n"):
-                sys.stdout.write("\n")
-        else:
-            if output is not None and not multi:
-                out_path = output
-                out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve -o: .pdf/.docx → native path; else Markdown path (when writing MD)
+        explicit_native_out: Path | None = None
+        explicit_md_out: Path | None = None
+        if output is not None and not multi and str(output) != "-":
+            if output.suffix.lower() in {".pdf", ".docx"}:
+                explicit_native_out = output
             else:
-                out_path = default_output_path(
-                    input_path, out_dir, mode=cfg.mode
-                )
-            progress.substep(f"Writing {out_path}…")
-            out_path.write_text(md, encoding="utf-8")
-            written_out = out_path
+                explicit_md_out = output
+
+        if write_md:
+            progress.substep("Rendering Markdown…")
+            md = render_from_extracted(doc, anon_blocks, result)
+
+            if output is not None and str(output) == "-":
+                progress.substep("Writing to stdout…")
+                sys.stdout.write(md)
+                if not md.endswith("\n"):
+                    sys.stdout.write("\n")
+                wrote_stdout = True
+            else:
+                if explicit_md_out is not None:
+                    out_path = explicit_md_out
+                else:
+                    out_path = default_output_path(
+                        input_path, out_dir, mode=cfg.mode
+                    )
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                progress.substep(f"Writing {out_path}…")
+                out_path.write_text(md, encoding="utf-8")
+                written_out = out_path
+
+        # Native PDF/DOCX (black-box PDF / placeholder|remove DOCX)
+        if write_native and cfg.mode != "extract":
+            if native_suffix(input_path) is None:
+                if not quiet:
+                    console.print(
+                        f"[dim]Note:[/dim] --format {out_fmt} has no native "
+                        f"writer for {input_path.suffix or 'this type'}; "
+                        f"Markdown only."
+                    )
+            else:
+                if explicit_native_out is not None:
+                    native_path = explicit_native_out
+                else:
+                    native_path = default_native_output_path(input_path, out_dir)
+                progress.substep(f"Writing native {native_path.name}…")
+                if doc.used_ocr and not quiet:
+                    console.print(
+                        "[yellow]Warning:[/yellow] source used OCR — native "
+                        "redaction is best-effort (some surfaces may miss)."
+                    )
+                try:
+                    stats = write_native_redacted(
+                        input_path,
+                        native_path,
+                        native_mapping,
+                        redact_style=final_redact_style,
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[red]Native write failed[/red] {input_path}: {exc}"
+                    )
+                    if multi:
+                        continue
+                    raise typer.Exit(1) from exc
+                if stats is not None:
+                    written_native = native_path
+                    if not quiet:
+                        console.print(f"[dim]{stats.summary()}[/dim]")
+                        if stats.surfaces_missed and stats.missed:
+                            preview = ", ".join(
+                                repr(s[:40]) for s in stats.missed[:5]
+                            )
+                            more = (
+                                f" (+{stats.surfaces_missed - 5} more)"
+                                if stats.surfaces_missed > 5
+                                else ""
+                            )
+                            console.print(
+                                f"[yellow]Warning:[/yellow] "
+                                f"{stats.surfaces_missed} surface(s) not found "
+                                f"in original layout: {preview}{more}"
+                            )
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -498,6 +608,7 @@ def _run_pipeline(
             f"mode={result.mode} · lang={result.language.nlp_passes} · "
             f"entities: {counts}"
             + (" · OCR" if doc.used_ocr else "")
+            + (f" · format={out_fmt}" if out_fmt != "md" else "")
         )
         progress.done_document(summary)
         _report_write_success(
@@ -507,6 +618,8 @@ def _run_pipeline(
             summary=summary,
             out_path=written_out,
             map_file=written_map,
+            native_path=written_native,
+            wrote_stdout=wrote_stdout,
         )
         ok_count += 1
 
@@ -820,6 +933,18 @@ def main(
             rich_help_panel="Common",
         ),
     ] = None,
+    output_format: Annotated[
+        Optional[str],
+        typer.Option(
+            "--format",
+            help=(
+                "Output format: md (default Markdown), source (redacted PDF/DOCX), "
+                "or both. Native PDF uses black-box redaction; DOCX uses tags or "
+                "delete per --redact-style. Text inputs stay Markdown-only."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = None,
     entities: Annotated[
         Optional[str],
         typer.Option(
@@ -893,11 +1018,15 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Anonymize or extract documents → Markdown.
+    """Anonymize or extract documents → Markdown (optional native PDF/DOCX).
 
     Examples:
 
       anonymize contract.pdf
+
+      anonymize contract.pdf --format both
+
+      anonymize contract.pdf --format source
 
       anonymize extract report.pdf -o body.md
 
@@ -938,6 +1067,7 @@ def main(
         review=review,
         reject=reject,
         redact_style=redact_style,
+        output_format=output_format,
         llm=llm,
         llm_provider=llm_provider,
         llm_model=llm_model,

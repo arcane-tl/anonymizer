@@ -65,6 +65,7 @@ sharp custom square and breaks size/shape next to other apps.
    - List summary + **Lists…** button → separate editor for allowlist / denylist  
    - ☑ **Review findings before saving** (Terminal checklist; works with tags and delete)  
    - ☑ **Open result when finished**  
+   - ☑ **Also save redacted original (PDF/DOCX)** → writes Markdown **and** `{stem}.anonymized.pdf|.docx`  
 
 **Allowlist / denylist** open in a second dialog. **Done** saves them to  
 `~/.config/anonymizer/config.yaml` (merged; other keys kept). Same file works with  

@@ -118,6 +118,10 @@ anonymize contract.pdf --review
 # Delete findings instead of [PERSON_1] tags
 anonymize contract.pdf --redact-style remove
 
+# Also keep layout: redacted PDF/DOCX next to Markdown
+anonymize contract.pdf --format both
+# Native only (no Markdown): --format source
+
 anonymize examples    # more copy-paste commands
 anonymize --help
 ```
@@ -191,11 +195,12 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
 | `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
+| `--format` | `md` (default), `source` (redacted PDF/DOCX), or `both`. PDF = black boxes; DOCX = tags/delete. Best-effort on OCR / soft wraps. |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
-| `--config` | YAML: mode, allowlist, denylist, `redact_style`, … |
+| `--config` | YAML: mode, allowlist, denylist, `redact_style`, `format`, … |
 
-**Mac app:** options include output style (tags vs delete). **Lists…** opens allowlist/denylist in a separate window; **Done** saves to `~/.config/anonymizer/config.yaml`.
+**Mac app:** options include output style (tags vs delete) and **Also save redacted original (PDF/DOCX)**. **Lists…** opens allowlist/denylist in a separate window; **Done** saves to `~/.config/anonymizer/config.yaml`.
 
 ---
 

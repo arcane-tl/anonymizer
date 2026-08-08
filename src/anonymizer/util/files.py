@@ -81,3 +81,13 @@ def default_output_path(
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / name
     return input_path.with_name(name)
+
+
+def default_native_output_path(
+    input_path: Path,
+    out_dir: Path | None = None,
+) -> Path:
+    """``{stem}.anonymized.pdf`` / ``.docx`` next to source (or under out_dir)."""
+    from anonymizer.output.native import default_native_output_path as _native_path
+
+    return _native_path(expand_user_path(input_path), out_dir)
