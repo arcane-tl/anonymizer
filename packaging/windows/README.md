@@ -37,6 +37,25 @@ Start Menu → Anonymizer
   or:  anonymize-gui path\to\a.pdf path\to\b.docx
 ```
 
+First window is always **Anonymizer** with **Choose documents…** (then the options panel).
+
+### GUI won’t open / flashes and closes
+
+1. Run in a **visible** console (not only the Start Menu):
+   ```powershell
+   anonymize-gui
+   ```
+2. Check the log: `%TEMP%\anonymizer-gui.log`
+3. Test Tk:
+   ```powershell
+   & "$env:LOCALAPPDATA\anonymizer\.venv\Scripts\python.exe" -c "import tkinter; tkinter.Tk().title('ok'); input('press enter')"
+   ```
+   If that fails, reinstall **Python from python.org** with Tcl/Tk, then:
+   ```powershell
+   .\scripts\install.ps1 -Yes -FromSource
+   ```
+4. Re-create launchers after pulling fixes (same install command).
+
 Options (same as Mac):
 
 - Mode: strict / standard / extract  

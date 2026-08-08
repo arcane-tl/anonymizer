@@ -5,7 +5,7 @@ from __future__ import annotations
 __all__ = ["main"]
 
 
-def main() -> None:
+def main() -> int:
     from anonymizer.gui.app import main as _main
 
-    _main()
+    return int(_main() or 0)

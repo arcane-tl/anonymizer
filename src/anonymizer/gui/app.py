@@ -1,8 +1,6 @@
 """Anonymizer options window — layout/copy parity with Mac droplet.
 
-Thin wrapper: collects options, invokes anonymize CLI (or helper). Does not
-reimplement detection. Target platform is Windows; tkinter also runs on macOS
-for development.
+Thin wrapper: collects options, invokes anonymize CLI. Target: Windows.
 """
 
 from __future__ import annotations
@@ -12,12 +10,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
-except ImportError as _tk_err:  # pragma: no cover - depends on OS Python build
+except ImportError as _tk_err:  # pragma: no cover
     tk = None  # type: ignore[assignment]
     _TK_IMPORT_ERROR = _tk_err
 else:
@@ -38,6 +37,51 @@ STYLE_LABELS = [
 
 SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".text", ".markdown"}
 
+# Windows Tk is picky: one pattern per entry (not "a.pdf b.docx" in one string).
+_FILETYPES = [
+    ("PDF", "*.pdf"),
+    ("Word documents", "*.docx"),
+    ("Text / Markdown", "*.txt *.md"),
+    ("All files", "*.*"),
+]
+
+
+def _log_path() -> Path:
+    base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
+    return Path(base) / "anonymizer-gui.log"
+
+
+def _log(msg: str) -> None:
+    try:
+        p = _log_path()
+        with p.open("a", encoding="utf-8") as f:
+            f.write(msg.rstrip() + "\n")
+    except OSError:
+        pass
+
+
+def _message_box(title: str, text: str) -> None:
+    """Show an error even when tkinter is broken (Windows MessageBox)."""
+    try:
+        if tk is not None:
+            # Need a root for messagebox sometimes
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(title, text)
+            root.destroy()
+            return
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, text, title, 0x10)
+            return
+        except Exception:
+            pass
+    print(f"{title}: {text}", file=sys.stderr)
+
 
 def _find_anonymize() -> str | None:
     env = os.environ.get("ANONYMIZER_BIN")
@@ -46,13 +90,17 @@ def _find_anonymize() -> str | None:
     which = shutil.which("anonymize")
     if which:
         return which
-    # Dev: project venv
+    # Windows install layout
+    local = Path(os.environ.get("LOCALAPPDATA", "")) / "anonymizer" / "bin" / "anonymize.cmd"
+    if local.is_file():
+        return str(local)
     here = Path(__file__).resolve()
     for root in (here.parents[3], here.parents[2], Path.cwd()):
         for rel in (
             ".venv/bin/anonymize",
             ".venv/Scripts/anonymize.exe",
             ".venv/Scripts/anonymize",
+            ".venv/Scripts/anonymize.cmd",
         ):
             cand = root / rel
             if cand.is_file():
@@ -74,8 +122,21 @@ def _lists_status(allow: str, deny: str) -> str:
     )
 
 
+def _filter_paths(paths: list[str] | tuple[str, ...]) -> list[Path]:
+    files: list[Path] = []
+    for a in paths:
+        p = Path(a).expanduser()
+        try:
+            p = p.resolve()
+        except OSError:
+            continue
+        if p.is_file() and p.suffix.lower() in SUPPORTED:
+            files.append(p)
+    return files
+
+
 class ListsDialog(tk.Toplevel):
-    def __init__(self, master: tk.Tk, allow: str, deny: str) -> None:
+    def __init__(self, master: tk.Misc, allow: str, deny: str) -> None:
         super().__init__(master)
         self.title("Custom lists")
         self.resizable(True, True)
@@ -126,7 +187,9 @@ class ListsDialog(tk.Toplevel):
         try:
             save_lists(self.result[0], self.result[1])
         except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("Anonymizer", f"Could not save lists:\n{exc}", parent=self)
+            messagebox.showerror(
+                "Anonymizer", f"Could not save lists:\n{exc}", parent=self
+            )
             return
         self.destroy()
 
@@ -139,7 +202,7 @@ class OptionsApp(tk.Tk):
     def __init__(self, files: list[Path]) -> None:
         super().__init__()
         self.files = [p.resolve() for p in files]
-        self.title("")
+        self.title(f"Anonymizer {__version__}")
         self.resizable(False, False)
         try:
             self.tk.call("tk", "scaling", 1.25)
@@ -160,7 +223,6 @@ class OptionsApp(tk.Tk):
         root = ttk.Frame(self, padding=pad)
         root.pack(fill=tk.BOTH, expand=True)
 
-        # Title
         title_row = ttk.Frame(root)
         title_row.pack(fill=tk.X, pady=(0, 6))
         ttk.Label(
@@ -176,21 +238,20 @@ class OptionsApp(tk.Tk):
         )
         ttk.Label(root, text=sub, foreground="#555").pack(anchor=tk.W, pady=(0, 14))
 
-        # Files
         ttk.Label(root, text="Files", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
-        files_box = tk.Text(root, height=5, width=56, font=("Segoe UI", 10), wrap=tk.WORD)
+        files_box = tk.Text(
+            root, height=5, width=56, font=("Segoe UI", 10), wrap=tk.WORD
+        )
         files_box.pack(fill=tk.X, pady=(4, 14))
         files_box.insert("1.0", "\n".join(f"• {p.name}" for p in self.files))
         files_box.configure(state=tk.DISABLED)
 
-        # Mode
         ttk.Label(root, text="Mode", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
         for val, label in MODE_LABELS:
             ttk.Radiobutton(
                 root, text=label, value=val, variable=self.mode_var
             ).pack(anchor=tk.W, pady=2)
 
-        # Style
         ttk.Label(root, text="Output style", font=("Segoe UI", 11, "bold")).pack(
             anchor=tk.W, pady=(14, 0)
         )
@@ -199,16 +260,16 @@ class OptionsApp(tk.Tk):
                 root, text=label, value=val, variable=self.style_var
             ).pack(anchor=tk.W, pady=2)
 
-        # Lists
         ttk.Label(root, text="Custom lists", font=("Segoe UI", 11, "bold")).pack(
             anchor=tk.W, pady=(14, 0)
         )
         self.lists_lbl = ttk.Label(
-            root, text=_lists_status(self.allow_text, self.deny_text), foreground="#666"
+            root,
+            text=_lists_status(self.allow_text, self.deny_text),
+            foreground="#666",
         )
         self.lists_lbl.pack(anchor=tk.W, pady=(4, 10))
 
-        # Checks
         ttk.Checkbutton(
             root,
             text="Review findings before saving (opens Terminal)",
@@ -223,18 +284,26 @@ class OptionsApp(tk.Tk):
             variable=self.native_var,
         ).pack(anchor=tk.W, pady=2)
 
-        # Actions
         bar = ttk.Frame(root)
         bar.pack(fill=tk.X, pady=(22, 0))
         ttk.Button(bar, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
         right = ttk.Frame(bar)
         right.pack(side=tk.RIGHT)
-        ttk.Button(right, text="Lists…", command=self._lists).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(right, text="Lists…", command=self._lists).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
         ttk.Button(right, text="Start", command=self._start).pack(side=tk.LEFT)
 
         self.bind("<Escape>", lambda _e: self.destroy())
         self.bind("<Return>", lambda _e: self._start())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        # Ensure window is on screen and focused (Windows often starts behind)
+        self.update_idletasks()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
+        self.focus_force()
 
     def _lists(self) -> None:
         dlg = ListsDialog(self, self.allow_text, self.deny_text)
@@ -249,8 +318,10 @@ class OptionsApp(tk.Tk):
         if not anon:
             messagebox.showerror(
                 "Anonymizer",
-                "Could not find the anonymize CLI.\n"
-                "Install it first (install.ps1 / brew / pip), then try again.",
+                "Could not find the anonymize CLI.\n\n"
+                "Install with scripts\\install.ps1, open a new terminal, "
+                "and try again.\n\n"
+                f"Log: {_log_path()}",
                 parent=self,
             )
             return
@@ -261,7 +332,6 @@ class OptionsApp(tk.Tk):
         want_open = self.open_var.get()
         want_native = self.native_var.get() and mode != "extract"
 
-        # Temp list files
         allow_f = tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8"
         )
@@ -281,9 +351,10 @@ class OptionsApp(tk.Tk):
             common_flags.extend(["--format", "both"])
 
         if want_review:
-            # One terminal session; process files sequentially
-            cmds = [[anon, mode, str(p), *common_flags, "--review"] for p in self.files]
-            self._run_review_batch(cmds, want_open, [allow_f.name, deny_f.name, str(cfg_path)])
+            cmds = [
+                [anon, mode, str(p), *common_flags, "--review"] for p in self.files
+            ]
+            self._run_review_batch(cmds, want_open)
             self.destroy()
             return
 
@@ -293,10 +364,12 @@ class OptionsApp(tk.Tk):
         try:
             for fpath in self.files:
                 cmd = [anon, mode, str(fpath), *common_flags]
+                _log(f"RUN: {cmd}")
                 proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode != 0:
                     err = (proc.stderr or proc.stdout or "error").strip()
                     errors.append(f"{fpath.name}: {err}")
+                    _log(f"FAIL {fpath}: {err}")
                     continue
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs:
@@ -335,7 +408,9 @@ class OptionsApp(tk.Tk):
         if outputs:
             msg += "Created:\n" + "\n".join(f"• {Path(o).name}" for o in outputs)
         else:
-            msg += "Finished. Check next to your original files for .md / native output."
+            msg += (
+                "Finished. Check next to your original files for .md / native output."
+            )
         if errors:
             msg += "\n\nSome files failed:\n" + "\n".join(errors[:5])
         if outputs and messagebox.askyesno(
@@ -353,7 +428,6 @@ class OptionsApp(tk.Tk):
         self.destroy()
 
     def _write_temp_config(self, style: str, allow_path: str, deny_path: str) -> Path:
-        """Temp YAML config merging lists (same idea as Mac helper)."""
         import yaml
 
         cfg_path = Path(tempfile.mkstemp(suffix=".yaml", prefix="anonymizer-gui-")[1])
@@ -378,9 +452,7 @@ class OptionsApp(tk.Tk):
         )
         return cfg_path
 
-    def _run_review_batch(
-        self, cmds: list[list[str]], want_open: bool, cleanup: list[str]
-    ) -> None:
+    def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
         messagebox.showinfo(
             "Anonymizer",
             "Complete the checklist in the terminal (space / enter).",
@@ -389,32 +461,84 @@ class OptionsApp(tk.Tk):
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
-        # Sequential shell script in one terminal
         if sys.platform == "win32":
-            parts = []
-            for cmd in cmds:
-                parts.append(subprocess.list2cmdline(cmd))
+            parts = [subprocess.list2cmdline(cmd) for cmd in cmds]
             parts.append("echo.")
             parts.append("echo --- Finished. You can close this window. ---")
             script = " & ".join(parts)
             if shutil.which("wt"):
-                subprocess.Popen(
-                    ["wt", "cmd", "/k", script],
-                    env=env,
-                )
+                subprocess.Popen(["wt", "cmd", "/k", script], env=env)
             else:
-                subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", script], env=env)
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "cmd", "/k", script], env=env
+                )
         elif sys.platform == "darwin":
             chain = " ; ".join(" ".join(shlex_quote(c) for c in cmd) for cmd in cmds)
             chain += '; echo; echo "--- Finished. You can close this window. ---"'
-            # Escape for AppleScript double-quoted string
             chain_esc = chain.replace("\\", "\\\\").replace('"', '\\"')
             osa = f'tell application "Terminal" to do script "{chain_esc}"'
             subprocess.Popen(["osascript", "-e", osa], env=env)
         else:
             for cmd in cmds:
                 subprocess.run(cmd, env=env)
-        # Temp files cleaned by OS eventually; best-effort unlink after delay not needed
+
+
+class LauncherApp(tk.Tk):
+    """Always-visible first window: pick files or quit (never silent)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title(f"Anonymizer {__version__}")
+        self.resizable(False, False)
+        self.chosen: list[Path] = []
+
+        frm = ttk.Frame(self, padding=28)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            frm,
+            text=f"Anonymizer (version {__version__})",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            frm,
+            text="Choose PDF, DOCX, or text documents to anonymize.\n"
+            "Saves next to the original · Private on this PC",
+            foreground="#555",
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(8, 20))
+
+        ttk.Button(
+            frm, text="Choose documents…", command=self._pick
+        ).pack(fill=tk.X, pady=4)
+        ttk.Button(frm, text="Quit", command=self.destroy).pack(fill=tk.X, pady=4)
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.update_idletasks()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
+        self.focus_force()
+
+    def _pick(self) -> None:
+        paths = filedialog.askopenfilenames(
+            parent=self,
+            title="Choose documents to anonymize",
+            filetypes=_FILETYPES,
+        )
+        files = _filter_paths(list(paths) if paths else [])
+        if not files:
+            if paths:
+                messagebox.showwarning(
+                    "Anonymizer",
+                    "No supported files selected.\n\n"
+                    "Supported: PDF, DOCX, TXT, Markdown.",
+                    parent=self,
+                )
+            return
+        self.chosen = files
+        self.destroy()
 
 
 def shlex_quote(s: str) -> str:
@@ -454,44 +578,46 @@ def _guess_outputs(files: list[Path], mode: str, native: bool) -> list[str]:
     return paths
 
 
-def _collect_files(argv: list[str]) -> list[Path]:
-    files: list[Path] = []
-    for a in argv:
-        p = Path(a).expanduser()
-        if p.is_file() and p.suffix.lower() in SUPPORTED:
-            files.append(p)
-    return files
-
-
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    _log(f"--- anonymize-gui start platform={sys.platform} argv={argv or sys.argv}")
     if tk is None:
-        print(
-            "error: tkinter is not available in this Python build.\n"
-            "On Windows, install Python from python.org (includes Tcl/Tk).\n"
-            f"Import error: {_TK_IMPORT_ERROR}",
-            file=sys.stderr,
+        msg = (
+            "tkinter is not available in this Python build.\n\n"
+            "On Windows, install Python from https://www.python.org/downloads/\n"
+            "(include Tcl/Tk), then re-run install.ps1.\n\n"
+            f"Import error: {_TK_IMPORT_ERROR}\n"
+            f"Log: {_log_path()}"
         )
-        raise SystemExit(2)
-    args = list(sys.argv[1:] if argv is None else argv)
-    files = _collect_files(args)
-    # Hide root flash for file dialog
-    root_probe = tk.Tk()
-    root_probe.withdraw()
-    if not files:
-        paths = filedialog.askopenfilenames(
-            title="Choose documents to anonymize",
-            filetypes=[
-                ("Documents", "*.pdf *.docx *.txt *.md"),
-                ("All files", "*.*"),
-            ],
+        _log(msg)
+        _message_box("Anonymizer", msg)
+        return 2
+
+    try:
+        args = list(sys.argv[1:] if argv is None else argv)
+        # Strip Windows empty args
+        args = [a for a in args if a and a.strip()]
+        files = _filter_paths(args)
+
+        if not files:
+            launcher = LauncherApp()
+            launcher.mainloop()
+            files = launcher.chosen
+            if not files:
+                _log("no files chosen; exit")
+                return 0
+
+        app = OptionsApp(files)
+        app.mainloop()
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        _log(tb)
+        _message_box(
+            "Anonymizer",
+            f"The GUI crashed:\n\n{exc}\n\nDetails written to:\n{_log_path()}",
         )
-        files = [Path(p) for p in paths if Path(p).suffix.lower() in SUPPORTED]
-    root_probe.destroy()
-    if not files:
-        return
-    app = OptionsApp(files)
-    app.mainloop()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
