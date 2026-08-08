@@ -10,10 +10,17 @@
   Launcher directory (default: %LOCALAPPDATA%\Anonymizer\bin)
 
 .PARAMETER KeepFiles
-  Only remove the launcher; leave the install prefix on disk
+  Only remove launchers/shortcuts; leave the install prefix on disk
 
 .PARAMETER Yes
-  Non-interactive
+  Non-interactive (assume yes for all removals)
+
+.EXAMPLE
+  .\scripts\uninstall.ps1 -Yes
+
+.EXAMPLE
+  # Old lowercase install root:
+  .\scripts\uninstall.ps1 -Yes -Prefix "$env:LOCALAPPDATA\anonymizer" -BinDir "$env:LOCALAPPDATA\anonymizer\bin"
 #>
 [CmdletBinding()]
 param(
@@ -36,54 +43,114 @@ function Confirm-Step([string] $Prompt) {
     return ($ans -eq "y" -or $ans -eq "Y" -or $ans -eq "yes")
 }
 
-foreach ($name in @("anonymize.cmd", "anonymize-gui.cmd")) {
-    $launcher = Join-Path $BinDir $name
-    if (Test-Path $launcher) {
-        $text = Get-Content -Raw $launcher -ErrorAction SilentlyContinue
-        if ($text -and ($text -like "*$Prefix*" -or $text -like "*.venv\Scripts\*")) {
-            if (Confirm-Step "Remove launcher $launcher?") {
-                Remove-Item -Force $launcher
-                Write-Ok "Removed $launcher"
-            }
-        } else {
-            Write-Warn "Launcher $launcher does not look like this install — leaving it alone"
-        }
+function Remove-Launcher([string] $Path, [string] $InstallPrefix) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $text = ""
+    try {
+        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $text) { $text = "" }
+    } catch {
+        $text = ""
+    }
+    $looksOurs = ($text -like "*$InstallPrefix*") -or
+                 ($text -like "*.venv\Scripts\*") -or
+                 ($text -like "*\runtime\Scripts\*") -or
+                 ($text -like "*anonymizer*")
+    if (-not $looksOurs) {
+        Write-Warn "Launcher $Path does not look like this install — leaving it alone"
+        return
+    }
+    if (Confirm-Step "Remove launcher $Path?") {
+        Remove-Item -LiteralPath $Path -Force
+        Write-Ok "Removed $Path"
+    }
+}
+
+Write-Info "Uninstalling anonymizer (Prefix=$Prefix)"
+
+# Launchers under default + legacy BinDir
+$binDirs = @(
+    $BinDir,
+    (Join-Path $env:LOCALAPPDATA "Anonymizer\bin"),
+    (Join-Path $env:LOCALAPPDATA "anonymizer\bin")
+) | Select-Object -Unique
+
+foreach ($dir in $binDirs) {
+    if (-not $dir) { continue }
+    foreach ($name in @("anonymize.cmd", "anonymize-gui.cmd", "Anonymizer.cmd")) {
+        $launcherPath = Join-Path $dir $name
+        Remove-Launcher -Path $launcherPath -InstallPrefix $Prefix
     }
 }
 
 $startMenuLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Anonymizer.lnk"
 if (Test-Path -LiteralPath $startMenuLnk) {
     if (Confirm-Step "Remove Start Menu shortcut $startMenuLnk?") {
-        Remove-Item -Force $startMenuLnk
+        Remove-Item -LiteralPath $startMenuLnk -Force
         Write-Ok "Removed Start Menu shortcut"
     }
 }
 
+# Install trees: current + legacy lowercase
+$prefixes = @(
+    $Prefix,
+    (Join-Path $env:LOCALAPPDATA "Anonymizer"),
+    (Join-Path $env:LOCALAPPDATA "anonymizer")
+) | Select-Object -Unique
+
 $scriptDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $scriptDir
-$isRepo = (Test-Path (Join-Path $repoRoot "pyproject.toml"))
+$isRepo = Test-Path (Join-Path $repoRoot "pyproject.toml")
 
-if ($isRepo -and ((Resolve-Path $Prefix -ErrorAction SilentlyContinue).Path -eq (Resolve-Path $repoRoot -ErrorAction SilentlyContinue).Path)) {
-    $venv = Join-Path $repoRoot ".venv"
-    if (Test-Path $venv) {
-        if (Confirm-Step "Remove virtualenv $venv?") {
-            Remove-Item -Recurse -Force $venv
-            Write-Ok "Removed $venv"
+foreach ($p in $prefixes) {
+    if (-not $p) { continue }
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+
+    $resolvedPrefix = $null
+    $resolvedRepo = $null
+    try { $resolvedPrefix = (Resolve-Path -LiteralPath $p).Path } catch { }
+    try { $resolvedRepo = (Resolve-Path -LiteralPath $repoRoot).Path } catch { }
+
+    if ($isRepo -and $resolvedPrefix -and $resolvedRepo -and ($resolvedPrefix -eq $resolvedRepo)) {
+        $venv = Join-Path $repoRoot ".venv"
+        if (Test-Path -LiteralPath $venv) {
+            if (Confirm-Step "Remove virtualenv $venv?") {
+                Remove-Item -LiteralPath $venv -Recurse -Force
+                Write-Ok "Removed $venv"
+            }
         }
+        continue
     }
-} elseif ((Test-Path $Prefix) -and -not $KeepFiles) {
-    if (Confirm-Step "Remove install directory $Prefix?") {
-        Remove-Item -Recurse -Force $Prefix
-        Write-Ok "Removed $Prefix"
+
+    if (-not $KeepFiles) {
+        if (Confirm-Step "Remove install directory $p?") {
+            Remove-Item -LiteralPath $p -Recurse -Force
+            Write-Ok "Removed $p"
+        }
     }
 }
 
-# Optionally strip BinDir from user PATH if empty and we added it
+# Strip BinDir entries from user PATH when those dirs are gone
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -and (Test-Path $BinDir) -eq $false) {
-    $parts = $userPath -split ";" | Where-Object { $_ -ne "" -and $_ -ne $BinDir }
-    # only remove if directory gone
+if ($userPath) {
+    $parts = $userPath -split ";" | Where-Object {
+        $_ -and
+        $_ -ne "" -and
+        -not ($_ -match '[\\/]Anonymizer[\\/]bin$') -and
+        -not ($_ -match '[\\/]anonymizer[\\/]bin$')
+    }
+    # Only rewrite PATH if something was removed AND user confirmed full uninstall
+    $newPath = ($parts -join ";").TrimEnd(";")
+    if ($newPath -ne $userPath.TrimEnd(";")) {
+        if (Confirm-Step "Remove Anonymizer bin folders from user PATH?") {
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Ok "Updated user PATH"
+        }
+    }
 }
 
 Write-Ok "Uninstall finished"
-Write-Host "Note: system Python and Tesseract (if installed) were left alone."
+Write-Host "Note: system Python, Tesseract, and your git clone (if any) were left alone."
+Write-Host "Open a new PowerShell window so PATH changes apply."
