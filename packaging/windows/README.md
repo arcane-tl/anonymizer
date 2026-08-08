@@ -39,22 +39,52 @@ Start Menu → Anonymizer
 
 First window is always **Anonymizer** with **Choose documents…** (then the options panel).
 
-### GUI won’t open / flashes and closes
+### GUI won’t open / no log file
 
-1. Run in a **visible** console (not only the Start Menu):
-   ```powershell
-   anonymize-gui
-   ```
-2. Check the log: `%TEMP%\anonymizer-gui.log`
-3. Test Tk:
-   ```powershell
-   & "$env:LOCALAPPDATA\anonymizer\.venv\Scripts\python.exe" -c "import tkinter; tkinter.Tk().title('ok'); input('press enter')"
-   ```
-   If that fails, reinstall **Python from python.org** with Tcl/Tk, then:
-   ```powershell
-   .\scripts\install.ps1 -Yes -FromSource
-   ```
-4. Re-create launchers after pulling fixes (same install command).
+`%TEMP%` is not a folder name you type in Explorer as-is for searching blindly.
+In PowerShell the log path is:
+
+```powershell
+echo $env:TEMP\anonymizer-gui.log
+# typical real path:
+# C:\Users\YOURNAME\AppData\Local\Temp\anonymizer-gui.log
+```
+
+If the log **still doesn’t exist**, the updated launcher never ran. Diagnose:
+
+```powershell
+cd path\to\anonymizer
+git pull
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\diagnose-gui.ps1
+```
+
+Or step by step:
+
+```powershell
+# 1) Does the command exist?
+Get-Command anonymize-gui -ErrorAction SilentlyContinue
+Get-Command anonymize -ErrorAction SilentlyContinue
+
+# 2) Run the real installer GUI script (shows errors)
+& "$env:LOCALAPPDATA\anonymizer\bin\anonymize-gui.cmd"
+
+# 3) Or call Python directly
+& "$env:LOCALAPPDATA\anonymizer\.venv\Scripts\python.exe" -m anonymizer.gui
+
+# 4) Tk test (must print "tkinter OK")
+& "$env:LOCALAPPDATA\anonymizer\.venv\Scripts\python.exe" -c "import tkinter; print('tkinter OK')"
+```
+
+Then reinstall from the branch:
+
+```powershell
+cd path\to\anonymizer
+git checkout feature/domain-fp-filters
+git pull
+.\scripts\install.ps1 -Yes -FromSource
+```
+
+Use a **new** PowerShell window after install.
 
 Options (same as Mac):
 
