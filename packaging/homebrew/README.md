@@ -1,7 +1,9 @@
-# Homebrew (formula + cask)
+# Homebrew (formula + cask) — macOS
 
 **Product name (Finder):** Anonymizer.app  
 **CLI command:** `anonymize`  
+
+For **Windows** (Setup.exe, Apps & features uninstall), see [../windows/README.md](../windows/README.md).
 
 | Package | Token | What you get |
 |---------|--------|----------------|

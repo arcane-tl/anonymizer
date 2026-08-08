@@ -12,9 +12,12 @@ Thin wrapper around the `anonymize` CLI.
 ```bash
 brew tap arcane-tl/anonymizer
 brew trust arcane-tl/anonymizer
-brew install anonymizer
+brew install --cask anonymizer-app   # app + CLI
+# or CLI only: brew install anonymizer
 anonymize doctor
 ```
+
+For **Windows** install (Setup.exe / Apps & features), see [../windows/README.md](../windows/README.md).
 
 ## Install the app (end users)
 

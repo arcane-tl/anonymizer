@@ -9,21 +9,24 @@ Turn contracts, reports, and scans into shareable Markdown — on your machine, 
 
 - **CLI:** `anonymize`
 - **Mac app:** **Anonymizer.app** (drag-and-drop)
-- **Default:** Offline — Everything stays on your computer unless you choose to use an API for local or cloud processing
+- **Windows app:** **Anonymizer** via **Setup.exe** (Start Menu + Apps & features uninstall)
+- **Default:** Offline — everything stays on your computer unless you pass `--llm`
 
-> **Not a legal guarantee.** Detection is probabilistic. Always spot-check high-stakes output.
+> **Not a legal guarantee.** Detection is probabilistic. Native PDF/DOCX output is **best-effort** (text-layer search; images/forms/comments may remain). Always spot-check high-stakes output.
 
 ---
 
 ## Why Anonymizer
 
-- **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM  
+- **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM (`--llm`)  
 - **Real office formats** — PDF (including OCR for scans), Word (`.docx`), and text/Markdown  
+- **Optional native redaction** — keep layout with redacted `.pdf` / `.docx` (`--format source` or `both`)  
 - **Modes that match the job** — full scrub, identity-only, or plain text extract  
 - **Stable placeholders** — the same person stays `[PERSON_1]` throughout a document  
-- **English + Finnish** — auto language detection, patterns + neural NER  
+- **English + Finnish** — auto language detection, patterns + neural NER + domain false-positive filters  
 - **Human in the loop** — optional review to keep false positives in clear text  
 - **No hard-coded company catalogs** — patterns, models, and *your* allow/deny lists only  
+- **Desktop GUIs** — same options on Mac (droplet) and Windows (Setup wizard / Start Menu)
 
 ---
 
@@ -85,13 +88,41 @@ brew link --overwrite anonymizer && hash -r
 
 More detail: [packaging/homebrew/README.md](packaging/homebrew/README.md).
 
+### Windows — Setup.exe (recommended)
+
+Download **`Anonymizer-Setup-*.exe`** from [Releases](https://github.com/arcane-tl/anonymizer/releases).
+
+```text
+Double-click Setup → Next → Finish
+  → Start Menu: Anonymizer
+  → Settings → Apps: Anonymizer (uninstall here)
+  → optional: CLI on PATH as anonymize
+```
+
+- Install location: `%LOCALAPPDATA%\Anonymizer` (per-user, no admin)
+- No separate system Python required for the Setup build
+- Unsigned builds may show SmartScreen → *More info* → *Run anyway*
+
+**Dev / from source (PowerShell):** does **not** register in Apps & features (use Setup for that):
+
+```powershell
+git clone https://github.com/arcane-tl/anonymizer.git
+cd anonymizer
+.\scripts\install.ps1 -Yes -FromSource
+anonymize doctor
+anonymize-gui
+```
+
+Uninstall PowerShell install: `.\scripts\uninstall.ps1 -Yes`  
+Full packaging notes: [packaging/windows/README.md](packaging/windows/README.md).
+
 ### Other options
 
 | Platform | How |
 |----------|-----|
-| **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` |
-| **Windows** | **`Anonymizer-Setup-*.exe`** from [Releases](https://github.com/arcane-tl/anonymizer/releases) (wizard). Dev: `scripts/install.ps1`. GUI matches Mac options. |
-| **From source** | Python 3.11+, `pip install -e ".[dev]"`, then `python -m spacy download en_core_web_lg` and `fi_core_news_lg` |
+| **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` then optional `./packaging/macos/install-app.sh` |
+| **Windows portable** | `Anonymizer-*-windows.zip` from Releases — keep `runtime\` next to `Anonymizer.exe` |
+| **From source** | Python 3.11+, `pip install -e ".[dev]"`, then spaCy models (`en_core_web_lg` / `fi_core_news_lg` or `sm`) |
 
 ---
 
@@ -126,7 +157,14 @@ anonymize examples    # more copy-paste commands
 anonymize --help
 ```
 
-**Drag-and-drop (Mac):** open **Anonymizer** from Applications, drop a PDF/DOCX/txt, pick a mode. Needs the CLI on your PATH (`brew install anonymizer`).
+**Desktop GUI**
+
+| | |
+|--|--|
+| **Mac** | Open **Anonymizer** from Applications / `~/Applications`, drop files (or pick files). Needs CLI on PATH for the droplet. |
+| **Windows** | Start Menu **Anonymizer** (after Setup.exe). Choose documents → same options as Mac. |
+
+GUI options: mode, output style (tags vs delete), **Lists…**, review, open when finished, **Also save redacted original (PDF/DOCX)**.
 
 ---
 
@@ -147,13 +185,16 @@ Aliases: `text` → extract · `normal` / `pii` → standard · `scrub` / `full`
 | Mode | Document text leaves this machine? |
 |------|-------------------------------------|
 | Default (`anonymize file.pdf`) | **No** — local extract, spaCy, patterns only |
-| `--llm` / `--llm-provider ollama` | **No**, if Ollama is on localhost |
+| `--llm` + ollama on localhost | **No** |
+| `--llm` + non-local `ollama_url` | **Yes** — warned; blocked by `--offline` |
 | `--llm --llm-provider xai` | **Yes** — sent to `https://api.x.ai` (`XAI_API_KEY`) |
-| `--offline` | Blocks remote `xai` even if config enables it |
+| Config `use_llm: true` **without** `--llm` | **No** — CLI requires explicit `--llm` |
+| `--offline` | Blocks remote xAI and non-loopback Ollama |
 
 - **No telemetry** in this application  
 - **`--map`** writes placeholder → original JSON (**contains PII**; mode `0600` when possible)  
-- Install-time network only: `pip` / Homebrew / spaCy model download  
+- Install-time network: Homebrew / Setup download / spaCy models / optional LLM  
+- **Native PDF/DOCX** is best-effort layout redaction, not a forensic wipe
 
 ---
 
@@ -201,18 +242,21 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `-o -` | Markdown on stdout (progress stays on stderr) |
 | `--config` | YAML: mode, allowlist, denylist, `redact_style`, `format`, … |
 
-**Mac app:** options include output style (tags vs delete) and **Also save redacted original (PDF/DOCX)**. **Lists…** opens allowlist/denylist in a separate window; **Done** saves to `~/.config/anonymizer/config.yaml`.
+**GUIs (Mac + Windows):** output style (tags vs delete), **Also save redacted original (PDF/DOCX)**, review, open when finished. **Lists…** saves allow/deny to `~/.config/anonymizer/config.yaml` (same on both platforms).
 
 ---
 
 ## Troubleshooting
 
-| Message | Fix |
-|---------|-----|
+| Message / issue | Fix |
+|-----------------|-----|
 | No Cask with this name | `brew tap arcane-tl/anonymizer` |
 | Untrusted tap (Homebrew 6+) | `brew trust arcane-tl/anonymizer` (note the final **r**) |
 | “Anonymizer is damaged…” | `brew reinstall --cask anonymizer-app` |
 | `anonymize: command not found` / `skipping link` | Uninstall old cask token: `brew uninstall --cask anonymizer`; then `brew install --cask anonymizer-app`; `brew link --overwrite anonymizer && hash -r` |
+| Windows: not in Apps & features | Install with **Setup.exe**, not only `install.ps1` |
+| Windows: GUI won’t open | Run `anonymize-gui` in a console; check `%TEMP%\anonymizer-gui.log`; see [packaging/windows/README.md](packaging/windows/README.md) |
+| Windows: uninstall after `install.ps1` | `.\scripts\uninstall.ps1 -Yes` (not appwiz) |
 
 ---
 
@@ -229,7 +273,11 @@ pytest -q
 Regression: `tests/test_contract_templates.py`, `tests/test_realworld_precision.py`, `tests/test_offline_security.py`.  
 See [tests/fixtures/README.md](tests/fixtures/README.md).
 
-Mac GUI build: [packaging/macos/README.md](packaging/macos/README.md).
+Packaging:
+
+- Mac GUI: [packaging/macos/README.md](packaging/macos/README.md)
+- Windows Setup / GUI: [packaging/windows/README.md](packaging/windows/README.md)
+- Homebrew: [packaging/homebrew/README.md](packaging/homebrew/README.md)
 
 ---
 

@@ -19,6 +19,8 @@ Portable (advanced): **`Anonymizer-<version>-windows.zip`** — unzip and run `A
 
 ### Dev / from source (PowerShell)
 
+Does **not** register in Windows **Apps & features**. Prefer **Setup.exe** for end users who need Add/Remove Programs.
+
 ```powershell
 .\scripts\install.ps1 -Yes -FromSource
 ```
@@ -27,15 +29,19 @@ This installs:
 
 | Piece | Location |
 |-------|----------|
-| CLI | `%LOCALAPPDATA%\anonymizer` + `anonymize.cmd` on user PATH |
+| CLI | `%LOCALAPPDATA%\Anonymizer\bin\anonymize.cmd` on user PATH |
 | GUI | Start Menu **Anonymizer** + `anonymize-gui.cmd` |
 | Config lists | `%USERPROFILE%\.config\anonymizer\config.yaml` |
 
-Uninstall:
+Uninstall PowerShell install:
 
 ```powershell
-& "$env:LOCALAPPDATA\anonymizer\scripts\uninstall.ps1" -Yes
+.\scripts\uninstall.ps1 -Yes
+# or:
+& "$env:LOCALAPPDATA\Anonymizer\scripts\uninstall.ps1" -Yes
 ```
+
+Uninstall **Setup.exe** install: **Settings → Apps → Anonymizer**, or `unins000.exe` under `%LOCALAPPDATA%\Anonymizer`.
 
 ## Use GUI
 

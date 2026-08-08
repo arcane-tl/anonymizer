@@ -44,7 +44,8 @@ denylist:
 
 # Output format:
 #   md (default) — Markdown only
-#   source       — redacted original PDF/DOCX (black-box PDF; tags/delete in DOCX)
+#   source       — redacted original PDF/DOCX (best-effort; metadata scrubbed;
+#                  images/forms/comments may remain — not a forensic wipe)
 #   both         — Markdown + native when input is PDF/DOCX
 # format: md
 
