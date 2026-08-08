@@ -1,0 +1,37 @@
+# Build Windows stage zip (+ Setup.exe if Inno Setup is available).
+# Trigger manually or on tags v*.*.*
+name: Windows release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+        continue-on-error: true
+
+      - name: Build release stage + installer
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1 -Models sm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: anonymizer-windows
+          path: |
+            dist/Anonymizer-*-windows.zip
+            dist/Anonymizer-Setup-*.exe
+          if-no-files-found: warn

@@ -90,7 +90,7 @@ More detail: [packaging/homebrew/README.md](packaging/homebrew/README.md).
 | Platform | How |
 |----------|-----|
 | **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` |
-| **Windows** | `scripts/install.ps1` — CLI + Start Menu GUI (`anonymize-gui`). Same options as Mac. |
+| **Windows** | **`Anonymizer-Setup-*.exe`** from [Releases](https://github.com/arcane-tl/anonymizer/releases) (wizard). Dev: `scripts/install.ps1`. GUI matches Mac options. |
 | **From source** | Python 3.11+, `pip install -e ".[dev]"`, then `python -m spacy download en_core_web_lg` and `fi_core_news_lg` |
 
 ---

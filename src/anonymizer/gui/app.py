@@ -83,6 +83,13 @@ def _message_box(title: str, text: str) -> None:
     print(f"{title}: {text}", file=sys.stderr)
 
 
+def _app_dir() -> Path:
+    """Directory of frozen Anonymizer.exe or this source tree."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 def _find_anonymize() -> str | None:
     env = os.environ.get("ANONYMIZER_BIN")
     if env and Path(env).is_file():
@@ -90,10 +97,28 @@ def _find_anonymize() -> str | None:
     which = shutil.which("anonymize")
     if which:
         return which
-    # Windows install layout
-    local = Path(os.environ.get("LOCALAPPDATA", "")) / "anonymizer" / "bin" / "anonymize.cmd"
-    if local.is_file():
-        return str(local)
+
+    # Install / stage layouts (Setup.exe and install.ps1)
+    local_app = Path(os.environ.get("LOCALAPPDATA", ""))
+    for base in (
+        local_app / "Anonymizer",
+        local_app / "anonymizer",
+        _app_dir(),
+        _app_dir().parent,
+    ):
+        for rel in (
+            "bin/anonymize.cmd",
+            "bin/anonymize.exe",
+            "runtime/Scripts/anonymize.exe",
+            "runtime/Scripts/anonymize",
+            ".venv/Scripts/anonymize.exe",
+            ".venv/Scripts/anonymize",
+            ".venv/bin/anonymize",
+        ):
+            cand = base / rel
+            if cand.is_file():
+                return str(cand)
+
     here = Path(__file__).resolve()
     for root in (here.parents[3], here.parents[2], Path.cwd()):
         for rel in (

@@ -2,14 +2,22 @@
 
 Thin desktop UI matching the **Mac Anonymizer** options panel. Detection stays in the `anonymize` CLI.
 
-## Install (end users)
+## Install (end users) — recommended
 
-```powershell
-irm https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes
-```
+**One file:** download **`Anonymizer-Setup-<version>.exe`** from
+[GitHub Releases](https://github.com/arcane-tl/anonymizer/releases).
 
-Or from a clone:
+1. Double-click the Setup wizard  
+2. Finish → Start Menu **Anonymizer**  
+3. Optional: “Add CLI to PATH” installs `anonymize` for terminals  
+
+If SmartScreen warns on an **unsigned** build: *More info* → *Run anyway*  
+(signed builds are the goal for public releases).
+
+Portable (advanced): **`Anonymizer-<version>-windows.zip`** — unzip and run `Anonymizer.exe`
+(needs the included `runtime\` folder next to it).
+
+### Dev / from source (PowerShell)
 
 ```powershell
 .\scripts\install.ps1 -Yes -FromSource
@@ -107,7 +115,33 @@ python -m anonymizer.gui
 anonymize-gui
 ```
 
-Optional frozen `.exe` (later): PyInstaller on `anonymizer.gui:main` — not required for first Windows GUI.
+## Building Setup.exe (maintainers / CI)
+
+On a **Windows** machine (or `windows-latest` CI):
+
+```powershell
+# Prerequisites: Python 3.11+, optional Inno Setup 6
+#   https://jrsoftware.org/isinfo.php
+
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
+```
+
+Outputs:
+
+| Artifact | Path |
+|----------|------|
+| Stage (GUI + runtime + models) | `dist\windows-stage\` |
+| Portable zip | `dist\Anonymizer-<ver>-windows.zip` |
+| Setup wizard | `dist\Anonymizer-Setup-<ver>.exe` (if ISCC installed) |
+
+GitHub Actions: `.github/workflows/windows-release.yml` (workflow_dispatch or tag `v*`).
+
+Code signing (recommended before wide release):
+
+```powershell
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+  dist\Anonymizer-Setup-*.exe dist\windows-stage\Anonymizer.exe
+```
 
 ## Parity notes
 
