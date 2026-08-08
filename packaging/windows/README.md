@@ -123,20 +123,49 @@ anonymize-gui
 
 ## Building Setup.exe (maintainers / CI)
 
-On a **Windows** machine (or `windows-latest` CI):
+### One-shot release build (copy-paste)
+
+Run on a **Windows** PC after `main` has the version you want (e.g. **1.2.0** already in `pyproject.toml`):
 
 ```powershell
-# Prerequisites:
-#   - Python 3.11+ on the *build host* (for PyInstaller + wheel build)
-#   - Inno Setup 6 for Setup.exe (optional; zip still builds without it)
-#       winget install --id JRSoftware.InnoSetup -e
-#       https://jrsoftware.org/isinfo.php
-# Network required once: downloads embeddable CPython 3.12 + spaCy models.
+# 0) Clone or update (same commit as the Mac release)
+git clone https://github.com/arcane-tl/anonymizer.git
+cd anonymizer
+# or:  cd path\to\anonymizer
+git checkout main
+git pull origin main
 
+# Confirm version (must match the release tag, e.g. 1.2.0)
+Select-String -Path pyproject.toml -Pattern '^version\s*='
+
+# 1) Prerequisites (once per machine)
+#    - Python 3.11+ on the *build host* (for PyInstaller + wheel)
+#      winget install Python.Python.3.12
+#    - Inno Setup 6 (required for Setup.exe; zip still builds without it)
+#      winget install --id JRSoftware.InnoSetup -e
+#      https://jrsoftware.org/isinfo.php
+#    Network required once: embeddable CPython 3.12 + spaCy models + pip packages.
+
+# 2) Build stage + portable zip + Setup.exe
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
+# Optional larger NER models (bigger installer):
+#   ... build-release.ps1 -Models lg
+
+# 3) Confirm outputs
+Get-ChildItem dist\Anonymizer-*-windows.zip, dist\Anonymizer-Setup-*.exe
 ```
 
-What the build produces under `dist\windows-stage\`:
+Expected files (version from `pyproject.toml`):
+
+| Artifact | Path |
+|----------|------|
+| Portable zip | `dist\Anonymizer-<ver>-windows.zip` |
+| Setup wizard | `dist\Anonymizer-Setup-<ver>.exe` |
+| Stage (for local smoke) | `dist\windows-stage\` |
+
+**Next:** smoke-test (below), then copy **both** `Anonymizer-Setup-*.exe` and `Anonymizer-*-windows.zip` to the Mac/release machine and attach them to the GitHub Release `vX.Y.Z` alongside the Mac zip.
+
+What the build puts under `dist\windows-stage\`:
 
 | Piece | Role |
 |-------|------|
@@ -145,20 +174,13 @@ What the build produces under `dist\windows-stage\`:
 | `bin\anonymize.cmd` | CLI: `runtime\python.exe -m anonymizer.cli` |
 | `bin\Anonymizer.cmd` | Launches GUI |
 
-Outputs:
-
-| Artifact | Path |
-|----------|------|
-| Stage (GUI + runtime + models) | `dist\windows-stage\` |
-| Portable zip | `dist\Anonymizer-<ver>-windows.zip` |
-| Setup wizard | `dist\Anonymizer-Setup-<ver>.exe` (if ISCC found) |
-
 Install target (Setup): `%LOCALAPPDATA%\Anonymizer` (per-user, no admin). Optional task adds `bin\` to the user PATH.
 
 ### Smoke-check a local build
 
 ```powershell
 # CLI (portable stage)
+.\dist\windows-stage\bin\anonymize.cmd --version
 .\dist\windows-stage\bin\anonymize.cmd doctor
 .\dist\windows-stage\bin\anonymize.cmd --mode standard tests\fixtures\sample_en.pdf `
   -o $env:TEMP\smoke.md --format both
@@ -166,19 +188,15 @@ Install target (Setup): `%LOCALAPPDATA%\Anonymizer` (per-user, no admin). Option
 # GUI (needs runtime\ next to Anonymizer.exe)
 Start-Process .\dist\windows-stage\Anonymizer.exe
 # Log if needed:  $env:TEMP\anonymizer-gui.log
+
+# Full Setup install (recommended before public release)
+Start-Process .\dist\Anonymizer-Setup-*.exe -Wait
+# Then: Start Menu → Anonymizer; Settings → Apps → Anonymizer (uninstall)
 ```
 
 ### GitHub Actions / Release
 
-1. Copy the template into the live workflows tree (not done automatically):
-
-   ```text
-   packaging/windows/ci/windows-release.yml  →  .github/workflows/windows-release.yml
-   ```
-
-2. On tag `v*` or `workflow_dispatch`, CI builds zip + Setup and uploads artifacts.
-
-3. Attach `Anonymizer-Setup-<ver>.exe` and `Anonymizer-<ver>-windows.zip` to the GitHub Release.
+`.github/workflows/windows-release.yml` builds on tag `v*` or `workflow_dispatch` and uploads artifacts. You still attach Setup + zip to the GitHub Release manually (or via `gh release upload`).
 
 ### Code signing (recommended before wide release)
 

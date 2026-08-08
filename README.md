@@ -3,6 +3,13 @@
   Anonymizer
 </h1>
 
+<p align="center">
+  <a href="https://github.com/arcane-tl/anonymizer/releases/latest"><img src="https://img.shields.io/github/v/release/arcane-tl/anonymizer" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="https://github.com/arcane-tl/anonymizer/releases/latest"><img src="https://img.shields.io/badge/macOS-Homebrew%20%7C%20.app-black" alt="macOS" /></a>
+  <a href="https://github.com/arcane-tl/anonymizer/releases/latest"><img src="https://img.shields.io/badge/Windows-Setup.exe-0078D6" alt="Windows" /></a>
+</p>
+
 Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.
 
 **Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text → Markdown**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
@@ -13,6 +20,26 @@ Turn contracts, reports, and scans into shareable Markdown — on your machine, 
 - **Default:** Offline — everything stays on your computer unless you pass `--llm`
 
 > **Not a legal guarantee.** Detection is probabilistic. Native PDF/DOCX output is **best-effort** (text-layer search; images/forms/comments may remain). Always spot-check high-stakes output.
+
+---
+
+## Download
+
+| Platform | Recommended | Also |
+|----------|-------------|------|
+| **macOS** | [Homebrew](#macos--homebrew-recommended) · `brew install --cask anonymizer-app` | [Latest release](https://github.com/arcane-tl/anonymizer/releases/latest) — `Anonymizer-VERSION.zip` |
+| **Windows** | [Latest release](https://github.com/arcane-tl/anonymizer/releases/latest) — **`Anonymizer-Setup-VERSION.exe`** | Portable `Anonymizer-VERSION-windows.zip` (keep `runtime\` next to the exe) |
+| **CLI only** | macOS: `brew install anonymizer` | Windows: enable “Add CLI to PATH” in Setup, or use the portable `bin\anonymize.cmd` |
+
+On the release page look for:
+
+| Asset | Platform |
+|-------|----------|
+| `Anonymizer-VERSION.zip` | macOS app (also used by Homebrew cask) |
+| `Anonymizer-Setup-VERSION.exe` | Windows installer (Apps & features) |
+| `Anonymizer-VERSION-windows.zip` | Windows portable |
+
+Release assets (from **1.2.0** onward): Mac zip, Windows Setup.exe, and Windows portable zip on the same [Releases](https://github.com/arcane-tl/anonymizer/releases/latest) page. Older tags may be Mac-only.
 
 ---
 
