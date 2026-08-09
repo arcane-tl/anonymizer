@@ -15,6 +15,9 @@ _datas = []
 if _gui_assets.is_dir():
     _datas.append((str(_gui_assets), "anonymizer/gui/assets"))
 
+_icon = root / "packaging" / "windows" / "icons" / "Anonymizer.ico"
+_icon_arg = str(_icon) if _icon.is_file() else None
+
 a = Analysis(
     [str(gui_entry)],
     pathex=[str(root / "src")],
@@ -69,4 +72,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=_icon_arg,
 )

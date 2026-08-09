@@ -16,9 +16,10 @@ from pathlib import Path
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog, messagebox, ttk
 except ImportError as _tk_err:  # pragma: no cover
     tk = None  # type: ignore[assignment]
+    ttk = None  # type: ignore[assignment]
     _TK_IMPORT_ERROR = _tk_err
 else:
     _TK_IMPORT_ERROR = None
@@ -397,49 +398,133 @@ def _value_for(choices: list[tuple[str, str]], label: str) -> str:
     return choices[0][0]
 
 
+_DARK_COMBO_STYLE = "Anonymizer.Dark.TCombobox"
+_dark_combo_style_ready = False
+
+
+def _ensure_dark_combobox_style(master: "tk.Misc") -> None:
+    """Configure a calm, dark readonly combobox once per process."""
+    global _dark_combo_style_ready
+    if _dark_combo_style_ready or ttk is None:
+        return
+    style = ttk.Style(master)
+    # "clam" honors fieldbackground / border colors more reliably than vista/xpnative.
+    try:
+        if style.theme_use() in {"vista", "xpnative", "winnative", "default"}:
+            style.theme_use("clam")
+    except tk.TclError:
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+    style.configure(
+        _DARK_COMBO_STYLE,
+        fieldbackground=_BG_WELL,
+        background=_BG_BTN,
+        foreground=_TEXT,
+        arrowcolor=_TEXT,
+        bordercolor=_BORDER,
+        lightcolor=_BORDER,
+        darkcolor=_BORDER,
+        insertcolor=_TEXT,
+        selectbackground=_SELECT,
+        selectforeground=_TEXT,
+        padding=(10, 7),
+        relief="flat",
+        borderwidth=1,
+    )
+    style.map(
+        _DARK_COMBO_STYLE,
+        fieldbackground=[
+            ("readonly", _BG_WELL),
+            ("disabled", _BG_APP),
+            ("focus", _BG_WELL),
+        ],
+        foreground=[
+            ("readonly", _TEXT),
+            ("disabled", _TEXT_MUTED),
+            ("focus", _TEXT),
+        ],
+        selectbackground=[("readonly", _SELECT), ("focus", _SELECT)],
+        selectforeground=[("readonly", _TEXT), ("focus", _TEXT)],
+        background=[
+            ("active", _BG_BTN_HOVER),
+            ("pressed", _BG_BTN_HOVER),
+            ("readonly", _BG_BTN),
+        ],
+        arrowcolor=[("disabled", _TEXT_MUTED), ("readonly", _TEXT)],
+        bordercolor=[("focus", _ACCENT), ("readonly", _BORDER)],
+        lightcolor=[("focus", _ACCENT), ("readonly", _BORDER)],
+        darkcolor=[("focus", _ACCENT), ("readonly", _BORDER)],
+    )
+
+    # Dropdown listbox (not fully covered by ttk style maps).
+    try:
+        master.option_add("*TCombobox*Listbox.background", _BG_WELL)
+        master.option_add("*TCombobox*Listbox.foreground", _TEXT)
+        master.option_add("*TCombobox*Listbox.selectBackground", _SELECT)
+        master.option_add("*TCombobox*Listbox.selectForeground", _TEXT)
+        master.option_add("*TCombobox*Listbox.font", _FONT)
+        master.option_add("*TCombobox*Listbox.relief", "flat")
+        master.option_add("*TCombobox*Listbox.borderWidth", 0)
+    except tk.TclError:
+        pass
+    _dark_combo_style_ready = True
+
+
 def _dark_popup(
     parent: "tk.Misc",
     variable: "tk.StringVar",
     choices: list[tuple[str, str]],
-) -> "tk.OptionMenu":
+    *,
+    pady: tuple[int, int] = (0, 2),
+) -> "ttk.Combobox | tk.OptionMenu":
     """Exclusive dropdown; *variable* holds the CLI value key (not the display label)."""
     labels = [lab for _, lab in choices]
     display = tk.StringVar(value=_label_for(choices, variable.get()))
 
-    def _on_pick(lab: str) -> None:
-        display.set(lab)
-        variable.set(_value_for(choices, lab))
+    def _sync_from_display(*_args: object) -> None:
+        variable.set(_value_for(choices, display.get()))
 
-    om = tk.OptionMenu(parent, display, *labels, command=_on_pick)
-    om.configure(
-        bg=_BG_WELL,
-        fg=_TEXT,
-        activebackground=_BG_BTN_HOVER,
-        activeforeground=_TEXT,
-        highlightthickness=1,
-        highlightbackground=_BORDER,
-        highlightcolor=_BORDER,
-        bd=0,
-        font=_FONT,
-        anchor=tk.W,
-        cursor="hand2",
-        indicatoron=True,
-        direction="below",
-    )
-    try:
-        menu = om["menu"]
-        menu.configure(
+    if ttk is None:
+        # Extremely old / broken Tk — fall back to OptionMenu.
+        def _on_pick(lab: str) -> None:
+            display.set(lab)
+            variable.set(_value_for(choices, lab))
+
+        om = tk.OptionMenu(parent, display, *labels, command=_on_pick)
+        om.configure(
             bg=_BG_WELL,
             fg=_TEXT,
-            activebackground=_SELECT,
+            activebackground=_BG_BTN_HOVER,
             activeforeground=_TEXT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
             font=_FONT,
-            bd=0,
+            anchor=tk.W,
+            cursor="hand2",
         )
-    except tk.TclError:
-        pass
-    om.pack(fill=tk.X, pady=(0, 2))
-    return om
+        om.pack(fill=tk.X, pady=pady)
+        return om
+
+    _ensure_dark_combobox_style(parent)
+    combo = ttk.Combobox(
+        parent,
+        textvariable=display,
+        values=labels,
+        state="readonly",
+        style=_DARK_COMBO_STYLE,
+        font=_FONT,
+        cursor="hand2",
+    )
+    combo.pack(fill=tk.X, pady=pady)
+    combo.bind("<<ComboboxSelected>>", _sync_from_display, add="+")
+    # Prevent mouse-wheel from accidentally changing the selection while scrolling.
+    combo.bind("<MouseWheel>", lambda _e: "break")
+    combo.bind("<Button-4>", lambda _e: "break")
+    combo.bind("<Button-5>", lambda _e: "break")
+    return combo
 
 
 def _dark_check(
@@ -447,6 +532,7 @@ def _dark_check(
     text: str,
     *,
     variable: "tk.BooleanVar",
+    pady: tuple[int, int] | int = 2,
 ) -> "tk.Checkbutton":
     cb = tk.Checkbutton(
         parent,
@@ -463,7 +549,7 @@ def _dark_check(
         anchor=tk.W,
         cursor="hand2",
     )
-    cb.pack(anchor=tk.W, pady=2)
+    cb.pack(anchor=tk.W, pady=pady)
     return cb
 
 
@@ -731,12 +817,19 @@ class OptionsApp(tk.Tk):
         ).pack(anchor=tk.W, pady=(16, 4))
         _dark_popup(root, self.format_var, FORMAT_LABELS)
 
+        # Extra vertical separation: format field vs toggle group
         _dark_check(
             root,
             "Review findings before saving",
             variable=self.review_var,
+            pady=(18, 4),
         )
-        _dark_check(root, "Open result when finished", variable=self.open_var)
+        _dark_check(
+            root,
+            "Open result when finished",
+            variable=self.open_var,
+            pady=(2, 2),
+        )
 
         # Action bar (Mac HIG): Cancel left · Lists… + Start right, compact chips
         bar = tk.Frame(root, bg=_BG_APP)

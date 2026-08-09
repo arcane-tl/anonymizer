@@ -16,6 +16,8 @@
 #define MyAppPublisher "anonymizer contributors"
 #define MyAppURL "https://github.com/arcane-tl/anonymizer"
 #define MyAppExeName "Anonymizer.exe"
+; Logo for Setup wizard (path relative to this .iss file)
+#define MySetupIcon "..\icons\Anonymizer.ico"
 
 [Setup]
 AppId={{A7B3C1D2-E4F5-6789-ABCD-EF0123456789}
@@ -35,6 +37,7 @@ OutputBaseFilename=Anonymizer-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile={#MySetupIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes

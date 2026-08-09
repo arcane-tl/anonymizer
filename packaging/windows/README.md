@@ -30,8 +30,10 @@ This installs:
 | Piece | Location |
 |-------|----------|
 | CLI | `%LOCALAPPDATA%\Anonymizer\bin\anonymize.cmd` on user PATH |
-| GUI | Start Menu **Anonymizer** + `anonymize-gui.cmd` |
+| GUI | Start Menu **Anonymizer** (Anonymizer logo icon) + `anonymize-gui.cmd` |
 | Config lists | `%USERPROFILE%\.config\anonymizer\config.yaml` |
+
+Start Menu / desktop shortcuts use `packaging/windows/icons/Anonymizer.ico` (same logo as Mac). From-source install copies it to `%LOCALAPPDATA%\Anonymizer\Anonymizer.ico` and sets the `.lnk` icon; Setup builds embed it in `Anonymizer.exe` via PyInstaller.
 
 Uninstall PowerShell install:
 

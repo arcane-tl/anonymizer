@@ -356,6 +356,30 @@ exit /b %ERR%
     Set-Content -Path $guiCmd -Value $guiBat -Encoding ASCII
     Write-Ok "GUI launcher: $guiCmd"
 
+    # Brand icon for Start Menu (avoid default Python icon from pythonw.exe)
+    $iconSrcCandidates = @(
+        (Join-Path $script:InstallRoot "packaging\windows\icons\Anonymizer.ico")
+        (Join-Path $PSScriptRoot "..\packaging\windows\icons\Anonymizer.ico")
+        (Join-Path $PSScriptRoot "packaging\windows\icons\Anonymizer.ico")
+    )
+    $iconSrc = $null
+    foreach ($c in $iconSrcCandidates) {
+        if (Test-Path -LiteralPath $c) { $iconSrc = $c; break }
+    }
+    $iconDst = Join-Path $script:InstallRoot "Anonymizer.ico"
+    if ($iconSrc) {
+        try {
+            Copy-Item -LiteralPath $iconSrc -Destination $iconDst -Force
+            Write-Ok "App icon: $iconDst"
+        } catch {
+            Write-Warn "Could not copy app icon: $_"
+            $iconDst = $iconSrc
+        }
+    } else {
+        Write-Warn "Anonymizer.ico not found — Start Menu may show the Python icon"
+        $iconDst = $null
+    }
+
     $programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
     New-Item -ItemType Directory -Force -Path $programs | Out-Null
     $lnkPath = Join-Path $programs "Anonymizer.lnk"
@@ -367,6 +391,10 @@ exit /b %ERR%
         $sc.WorkingDirectory = $script:InstallRoot
         $sc.WindowStyle = 1
         $sc.Description = "Anonymizer — document redaction options"
+        if ($iconDst -and (Test-Path -LiteralPath $iconDst)) {
+            # ",0" = first icon resource in the .ico
+            $sc.IconLocation = "$iconDst,0"
+        }
         $sc.Save()
         Write-Ok "Start Menu shortcut: $lnkPath"
     } catch {
