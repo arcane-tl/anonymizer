@@ -841,7 +841,7 @@ def run_review_window(
             bg=_BG_PANEL,
             fg=_TEXT_MUTED,
             cursor="hand2",
-            padx=(6, 0),
+            padx=6,
         )
         count.pack(side=tk.RIGHT)
 
