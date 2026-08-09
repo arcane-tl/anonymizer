@@ -295,24 +295,54 @@ def run_review_window(
         side, text="Findings", bg=_BG_PANEL, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
     ).pack(fill=tk.X, pady=(0, 10))
 
-    # Toolbar: matched-height search (rounded) + funnel icon + filter combobox
-    _CTRL_H = 34  # shared outer height for search shell and filter shell
-    _SEARCH_R = 9
+    # Toolbar: search + funnel + filter — one shared outer height
+    _CTRL_H = 36
+    _CTRL_R = 9
+    _ICON = 22  # funnel size matched to control height
 
     tools = tk.Frame(side, bg=_BG_PANEL, height=_CTRL_H)
     tools.pack(fill=tk.X, pady=(0, 10))
     tools.pack_propagate(False)
 
-    # --- Rounded search shell ---
-    search_shell = tk.Frame(tools, bg=_BG_PANEL, height=_CTRL_H)
-    search_shell.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-    search_shell.pack_propagate(False)
+    def _rounded_shell(
+        parent: tk.Frame, *, expand: bool = False
+    ) -> tuple[tk.Frame, tk.Canvas]:
+        """Fixed-height elevated shell with rounded border (search & filter)."""
+        shell = tk.Frame(parent, bg=_BG_PANEL, height=_CTRL_H)
+        if expand:
+            shell.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        else:
+            shell.pack(side=tk.LEFT, fill=tk.Y)
+        shell.pack_propagate(False)
+        canvas = tk.Canvas(
+            shell, bg=_BG_PANEL, highlightthickness=0, bd=0, height=_CTRL_H
+        )
+        canvas.pack(fill=tk.BOTH, expand=True)
 
-    search_canvas = tk.Canvas(
-        search_shell, bg=_BG_PANEL, highlightthickness=0, bd=0, height=_CTRL_H
-    )
-    search_canvas.pack(fill=tk.BOTH, expand=True)
+        def _redraw(_event=None) -> None:
+            cw = max(canvas.winfo_width(), 40)
+            ch = _CTRL_H
+            canvas.configure(height=ch)
+            canvas.delete("shell")
+            _round_rect(
+                canvas,
+                1,
+                1,
+                cw - 2,
+                ch - 2,
+                _CTRL_R,
+                fill=_BG_ELEVATED,
+                outline=_BORDER,
+                width=1,
+                tags="shell",
+            )
+            canvas.tag_lower("shell")
 
+        canvas.bind("<Configure>", _redraw)
+        return shell, canvas
+
+    # --- Search (rounded elevated field) ---
+    search_shell, search_canvas = _rounded_shell(tools, expand=True)
     search_entry = tk.Entry(
         search_canvas,
         font=_FONT,
@@ -323,7 +353,9 @@ def run_review_window(
         highlightthickness=0,
         bd=0,
     )
-    search_win = search_canvas.create_window(10, _CTRL_H // 2, window=search_entry, anchor=tk.W)
+    search_win = search_canvas.create_window(
+        12, _CTRL_H // 2, window=search_entry, anchor=tk.W
+    )
 
     def _redraw_search_shell(_event=None) -> None:
         cw = max(search_canvas.winfo_width(), 40)
@@ -336,65 +368,96 @@ def run_review_window(
             1,
             cw - 2,
             ch - 2,
-            _SEARCH_R,
+            _CTRL_R,
             fill=_BG_ELEVATED,
             outline=_BORDER,
             width=1,
             tags="shell",
         )
         search_canvas.tag_lower("shell")
-        # Entry inset inside rounded shell
-        ew = max(20, cw - 20)
-        search_canvas.itemconfigure(search_win, width=ew)
-        search_canvas.coords(search_win, 10, ch // 2)
+        search_canvas.itemconfigure(search_win, width=max(20, cw - 24))
+        search_canvas.coords(search_win, 12, ch // 2)
 
     search_canvas.bind("<Configure>", _redraw_search_shell)
 
-    # --- Filter: funnel icon + combobox, same outer height ---
-    filter_shell = tk.Frame(tools, bg=_BG_PANEL, height=_CTRL_H)
-    filter_shell.pack(side=tk.LEFT, fill=tk.Y)
-    filter_shell.pack_propagate(False)
-
-    # 18×18 funnel (standard filter metaphor), muted silver
+    # --- Funnel icon (same vertical band as controls) ---
+    icon_box = tk.Frame(tools, bg=_BG_PANEL, width=_ICON + 8, height=_CTRL_H)
+    icon_box.pack(side=tk.LEFT, fill=tk.Y)
+    icon_box.pack_propagate(False)
     funnel = tk.Canvas(
-        filter_shell,
-        width=18,
-        height=18,
+        icon_box,
+        width=_ICON,
+        height=_ICON,
         bg=_BG_PANEL,
         highlightthickness=0,
         bd=0,
     )
-    funnel.pack(side=tk.LEFT, padx=(0, 6))
-    # Funnel: top bar, tapering sides, stem
-    funnel.create_line(2, 4, 16, 4, fill=_TEXT_MUTED, width=1.5)
-    funnel.create_line(2, 4, 8, 11, fill=_TEXT_MUTED, width=1.5)
-    funnel.create_line(16, 4, 10, 11, fill=_TEXT_MUTED, width=1.5)
-    funnel.create_line(8, 11, 10, 11, fill=_TEXT_MUTED, width=1.5)
-    funnel.create_line(9, 11, 9, 16, fill=_TEXT_MUTED, width=1.5)
-    # Accessibility: tooltip-ish leave empty; combobox values are self-explanatory
+    # Vertically center icon in _CTRL_H
+    funnel.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+    # Funnel scaled to _ICON (standard filter metaphor)
+    s = _ICON / 18.0
+    def _f(x: float, y: float) -> tuple[float, float]:
+        return x * s, y * s
 
+    funnel.create_line(*_f(2, 4), *_f(16, 4), fill=_TEXT_MUTED, width=max(1.5, s))
+    funnel.create_line(*_f(2, 4), *_f(8, 11), fill=_TEXT_MUTED, width=max(1.5, s))
+    funnel.create_line(*_f(16, 4), *_f(10, 11), fill=_TEXT_MUTED, width=max(1.5, s))
+    funnel.create_line(*_f(8, 11), *_f(10, 11), fill=_TEXT_MUTED, width=max(1.5, s))
+    funnel.create_line(*_f(9, 11), *_f(9, 16), fill=_TEXT_MUTED, width=max(1.5, s))
+
+    # --- Filter combobox in same-height rounded shell ---
+    filter_shell, filter_canvas = _rounded_shell(tools, expand=False)
     type_values = ["All"] + sorted(
         {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
     )
     type_combo = ttk.Combobox(
-        filter_shell,
+        filter_canvas,
         textvariable=filter_type,
         values=type_values,
-        width=12,
+        width=11,
         state="readonly",
         font=_FONT,
     )
-    type_combo.pack(side=tk.LEFT, pady=(_CTRL_H - 28) // 2)
+    filter_win = filter_canvas.create_window(
+        8, _CTRL_H // 2, window=type_combo, anchor=tk.W
+    )
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
-    # After map, force filter_shell width to fit icon + combobox
-    def _size_filter_shell() -> None:
-        filter_shell.update_idletasks()
-        need = funnel.winfo_reqwidth() + 6 + type_combo.winfo_reqwidth() + 4
-        filter_shell.configure(width=max(need, 120), height=_CTRL_H)
+    def _redraw_filter_shell(_event=None) -> None:
+        # Size shell to combobox + padding; force combobox vertical center
+        filter_canvas.update_idletasks()
+        tw = max(type_combo.winfo_reqwidth(), 90)
+        pad_x = 8
+        shell_w = tw + pad_x * 2
+        filter_shell.configure(width=shell_w, height=_CTRL_H)
+        cw = max(filter_canvas.winfo_width(), shell_w)
+        ch = _CTRL_H
+        filter_canvas.configure(height=ch)
+        filter_canvas.delete("shell")
+        _round_rect(
+            filter_canvas,
+            1,
+            1,
+            cw - 2,
+            ch - 2,
+            _CTRL_R,
+            fill=_BG_ELEVATED,
+            outline=_BORDER,
+            width=1,
+            tags="shell",
+        )
+        filter_canvas.tag_lower("shell")
+        filter_canvas.itemconfigure(filter_win, width=tw)
+        filter_canvas.coords(filter_win, pad_x, ch // 2)
 
-    root.after_idle(_size_filter_shell)
-    root.after_idle(_redraw_search_shell)
+    filter_canvas.bind("<Configure>", _redraw_filter_shell)
+
+    def _layout_toolbar() -> None:
+        _redraw_search_shell()
+        _redraw_filter_shell()
+
+    root.after_idle(_layout_toolbar)
+    root.after(50, _layout_toolbar)
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
