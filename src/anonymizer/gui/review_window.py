@@ -135,36 +135,24 @@ def run_review_window(
     filt_row.pack(fill=tk.X, pady=(0, 6))
     ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT, padx=(0, 8))
 
-    # tk.Entry so we can use white-on-black while typing
-    search_entry = tk.Entry(
-        filt_row,
-        font=("Segoe UI", 11),
-        insertbackground="#FFFFFF",
-        relief=tk.SOLID,
-        borderwidth=1,
-    )
-    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=3)
+    # Same layout as original ttk.Entry row; only colours change for typing vs placeholder
+    search_entry = tk.Entry(filt_row)
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
         search_entry.delete(0, tk.END)
         search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        # Placeholder: same chrome grey as before (on light field)
-        search_entry.configure(
-            fg=_CHROME_FG,
-            bg="#FFFFFF",
-            insertbackground=_CHROME_FG,
-        )
+        # Placeholder: chrome grey (unchanged intent)
+        search_entry.configure(fg=_CHROME_FG, bg="#FFFFFF", insertbackground=_CHROME_FG)
 
     def _hide_search_placeholder(_evt=None) -> None:
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
             search_entry.delete(0, tk.END)
-            # Active typing: white text on black
+            # Typed text only: white on black (no layout change)
             search_entry.configure(
-                fg="#FFFFFF",
-                bg=_LIST_ROW_BG,
-                insertbackground="#FFFFFF",
+                fg="#FFFFFF", bg="#1A202C", insertbackground="#FFFFFF"
             )
 
     def _on_search_focus_out(_evt=None) -> None:
