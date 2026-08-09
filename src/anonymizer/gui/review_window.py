@@ -1,6 +1,7 @@
 """Interactive document review window (Tk): accept, reject, add redactions.
 
-Used by CLI ``--review`` and the desktop GUI. Offline; no network.
+Cohesive light design system — one surface hierarchy, native ttk controls,
+readable document preview. Offline; no network.
 """
 
 from __future__ import annotations
@@ -17,33 +18,39 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# --- Colours ---
-_HL_REDACT_BG = "#F6E05E"
-_HL_REDACT_FG = "#1A202C"
-_HL_SELECTED_BG = "#63B3ED"
-_HL_SELECTED_FG = "#1A202C"
+# ── Design tokens (single light theme) ────────────────────────────
+# Hierarchy: app bg → panel → content. One text colour family. One accent.
+_BG_APP = "#F3F4F6"  # window chrome
+_BG_PANEL = "#FFFFFF"  # cards / list / document
+_BG_MUTED = "#F9FAFB"  # toolbars inside panels
+_BG_SELECTED = "#DBEAFE"  # focused finding row
+_BG_HOVER = "#EFF6FF"
 
-_LIST_FG = "#FFFFFF"
-_LIST_CLEAR_FG = "#A0AEC0"
-_LIST_ROW_BG = "#1A202C"
-_LIST_SEL_BG = "#2B6CB0"
-_LIST_SEL_FG = "#FFFFFF"
+_BORDER = "#E5E7EB"
+_BORDER_FOCUS = "#93C5FD"
 
-_CHROME_FG = "#4A5568"  # instructions + search placeholder
-_STATUS_BG = "#2D3748"
-_STATUS_FG = "#FFFFFF"
-_FIELD_LIGHT_BG = "#FFFFFF"
-_FIELD_DARK_BG = "#1A202C"
+_TEXT = "#111827"  # primary body / list
+_TEXT_MUTED = "#6B7280"  # hints, placeholder, keep-clear
+_TEXT_SUBTLE = "#9CA3AF"
 
-_PAD = 12
+_ACCENT = "#2563EB"  # selection accent (document + list)
+
+# Document highlights (readable on white)
+_HL_REDACT_BG = "#FEF08A"
+_HL_REDACT_FG = _TEXT
+_HL_SELECTED_BG = "#93C5FD"
+_HL_SELECTED_FG = _TEXT
+
+_PAD = 16
+_GAP = 12
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
 
-_UI_FONT = ("Segoe UI", 11) if sys.platform != "darwin" else ("SF Pro Text", 12)
-_UI_FONT_BOLD = ("Segoe UI", 12, "bold") if sys.platform != "darwin" else ("SF Pro Text", 13, "bold")
-_UI_FONT_SMALL = ("Segoe UI", 10) if sys.platform != "darwin" else ("SF Pro Text", 11)
-_MONO = ("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10)
-_MONO_DOC = ("Menlo", 12) if sys.platform == "darwin" else ("Consolas", 11)
+_FONT = ("Segoe UI", 11) if sys.platform != "darwin" else (".AppleSystemUIFont", 13)
+_FONT_BOLD = ("Segoe UI", 12, "bold") if sys.platform != "darwin" else (".AppleSystemUIFont", 14, "bold")
+_FONT_SMALL = ("Segoe UI", 10) if sys.platform != "darwin" else (".AppleSystemUIFont", 12)
+_FONT_MONO = ("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10)
+_FONT_DOC = ("Menlo", 12) if sys.platform == "darwin" else ("Consolas", 11)
 
 
 def display_available() -> bool:
@@ -70,7 +77,7 @@ def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_
 
 
 def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    """Test helper: include simple enabled mark."""
+    """Test helper."""
     mark = "[x]" if f.enabled else "[ ]"
     return f"{mark} {format_finding_label(f, max_original=max_original)}"
 
@@ -78,8 +85,8 @@ def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MA
 def _shortcut_help_text() -> str:
     save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
     return (
-        "↑/↓ or j/k  move   ·   spacebar or double-click  toggle redact / keep clear   ·   "
-        f"a  add selection   ·   {save}   ·   esc  cancel"
+        "↑/↓ or j/k move  ·  spacebar or double-click toggle redact/keep clear  ·  "
+        f"a add selection  ·  {save}  ·  esc cancel"
     )
 
 
@@ -103,16 +110,34 @@ def run_review_window(
     root.title(title)
     root.minsize(1000, 640)
     root.geometry("1120x720")
+    root.configure(bg=_BG_APP)
 
-    # ttk style — shared padding so Entry-like and Combobox align
+    # Unified ttk theme colours (where the theme allows)
     style = ttk.Style(root)
     try:
-        style.configure("Review.TEntry", padding=(8, 5))
-        style.configure("Review.TCombobox", padding=(6, 5))
-        style.configure("Review.TButton", padding=(10, 5))
-        style.configure("Review.Header.TLabel", font=_UI_FONT_BOLD)
-        style.configure("Review.Section.TLabel", font=_UI_FONT_BOLD)
-        style.configure("Review.Hint.TLabel", foreground=_CHROME_FG, font=_UI_FONT_SMALL)
+        # clam/alt allow more colour control than aqua; stay on default for native look
+        style.configure(".", background=_BG_APP, foreground=_TEXT, font=_FONT)
+        style.configure("TFrame", background=_BG_APP)
+        style.configure("TLabel", background=_BG_APP, foreground=_TEXT, font=_FONT)
+        style.configure("TCheckbutton", background=_BG_APP, foreground=_TEXT, font=_FONT)
+        style.configure("TButton", font=_FONT, padding=(12, 6))
+        style.configure("TCombobox", font=_FONT, padding=4)
+        style.configure("TEntry", font=_FONT, padding=4)
+        style.configure("TPanedwindow", background=_BG_APP)
+        style.configure("TScrollbar", background=_BG_APP)
+
+        style.configure("Panel.TFrame", background=_BG_PANEL)
+        style.configure("Panel.TLabel", background=_BG_PANEL, foreground=_TEXT, font=_FONT)
+        style.configure("Muted.TFrame", background=_BG_MUTED)
+        style.configure("Muted.TLabel", background=_BG_MUTED, foreground=_TEXT_MUTED, font=_FONT_SMALL)
+        style.configure("Title.TLabel", background=_BG_APP, foreground=_TEXT, font=_FONT_BOLD)
+        style.configure("Section.TLabel", background=_BG_PANEL, foreground=_TEXT, font=_FONT_BOLD)
+        style.configure("Hint.TLabel", background=_BG_APP, foreground=_TEXT_MUTED, font=_FONT_SMALL)
+        style.configure("PanelHint.TLabel", background=_BG_PANEL, foreground=_TEXT_MUTED, font=_FONT_SMALL)
+        style.configure("Footer.TFrame", background=_BG_PANEL)
+        style.configure("Footer.TLabel", background=_BG_PANEL, foreground=_TEXT_MUTED, font=_FONT_SMALL)
+        style.configure("Status.TLabel", background=_BG_PANEL, foreground=_TEXT, font=_FONT_BOLD)
+        style.configure("Primary.TButton", font=_FONT, padding=(14, 6))
     except tk.TclError:
         pass
 
@@ -123,14 +148,14 @@ def run_review_window(
     status_var = tk.StringVar(value="")
     search_is_placeholder = [True]
 
-    # ── Outer layout ──────────────────────────────────────────────
+    # ── Shell ─────────────────────────────────────────────────────
     outer = ttk.Frame(root, padding=_PAD)
     outer.pack(fill=tk.BOTH, expand=True)
 
     # Header
     header = ttk.Frame(outer)
-    header.pack(fill=tk.X, pady=(0, 10))
-    ttk.Label(header, text=title, style="Review.Header.TLabel").pack(side=tk.LEFT)
+    header.pack(fill=tk.X, pady=(0, _GAP))
+    ttk.Label(header, text=title, style="Title.TLabel").pack(side=tk.LEFT)
     ttk.Checkbutton(
         header,
         text="Preview redacted",
@@ -138,113 +163,114 @@ def run_review_window(
         command=lambda: _refresh_doc(),
     ).pack(side=tk.RIGHT)
 
-    # Body: sidebar | document
+    # Main split
     body = ttk.Panedwindow(outer, orient=tk.HORIZONTAL)
     body.pack(fill=tk.BOTH, expand=True)
 
-    # ── Sidebar: Findings ─────────────────────────────────────────
-    side = ttk.Frame(body, width=360, padding=(0, 0, 8, 0))
-    body.add(side, weight=1)
+    # ── Findings panel ────────────────────────────────────────────
+    side_outer = ttk.Frame(body, style="TFrame")
+    body.add(side_outer, weight=1)
 
-    ttk.Label(side, text="Findings", style="Review.Section.TLabel").pack(
-        anchor=tk.W, pady=(0, 6)
+    side = tk.Frame(
+        side_outer,
+        bg=_BG_PANEL,
+        highlightbackground=_BORDER,
+        highlightthickness=1,
+        bd=0,
     )
+    side.pack(fill=tk.BOTH, expand=True)
 
-    # Toolbar: search + filter (matching ttk family)
-    tools = ttk.Frame(side)
+    side_pad = tk.Frame(side, bg=_BG_PANEL)
+    side_pad.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+    tk.Label(
+        side_pad,
+        text="Findings",
+        bg=_BG_PANEL,
+        fg=_TEXT,
+        font=_FONT_BOLD,
+        anchor=tk.W,
+    ).pack(fill=tk.X, pady=(0, 8))
+
+    # Toolbar: search + filter — both ttk, same row
+    tools = tk.Frame(side_pad, bg=_BG_PANEL)
     tools.pack(fill=tk.X, pady=(0, 8))
 
-    # Use tk.Entry sized like combobox via shared vertical padding frame,
-    # so we can set white-on-black when typing (ttk fieldbackground is unreliable).
-    search_wrap = ttk.Frame(tools)
-    search_wrap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-    search_entry = tk.Entry(
-        search_wrap,
-        font=_UI_FONT,
-        relief=tk.FLAT,
-        highlightthickness=1,
-        highlightbackground="#CBD5E0",
-        highlightcolor="#A0AEC0",
-    )
-    search_entry.pack(fill=tk.X, ipady=4)
+    search_var_ui = tk.StringVar(value=_SEARCH_PLACEHOLDER)
+    search_entry = ttk.Entry(tools, textvariable=search_var_ui, font=_FONT)
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=2)
 
-    filter_wrap = ttk.Frame(tools)
-    filter_wrap.pack(side=tk.LEFT)
-    ttk.Label(filter_wrap, text="Filter", style="Review.Hint.TLabel").pack(
-        side=tk.LEFT, padx=(0, 6)
-    )
     type_values = ["All"] + sorted(
         {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
     )
+    tk.Label(tools, text="Filter", bg=_BG_PANEL, fg=_TEXT_MUTED, font=_FONT_SMALL).pack(
+        side=tk.LEFT, padx=(0, 6)
+    )
     type_combo = ttk.Combobox(
-        filter_wrap,
+        tools,
         textvariable=filter_type,
         values=type_values,
         width=12,
         state="readonly",
-        style="Review.TCombobox",
-        font=_UI_FONT,
+        font=_FONT,
     )
-    type_combo.pack(side=tk.LEFT)
+    type_combo.pack(side=tk.LEFT, ipady=1)
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
-
-    def _apply_search_placeholder_style() -> None:
-        search_entry.configure(
-            fg=_CHROME_FG,
-            bg=_FIELD_LIGHT_BG,
-            insertbackground=_CHROME_FG,
-            highlightbackground="#CBD5E0",
-        )
-
-    def _apply_search_typing_style() -> None:
-        search_entry.configure(
-            fg="#FFFFFF",
-            bg=_FIELD_DARK_BG,
-            insertbackground="#FFFFFF",
-            highlightbackground="#4A5568",
-        )
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
-        search_entry.delete(0, tk.END)
-        search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        _apply_search_placeholder_style()
+        search_var_ui.set(_SEARCH_PLACEHOLDER)
+        # Placeholder = instruction grey (ttk Entry uses system field; fg via option)
+        try:
+            search_entry.configure(foreground=_TEXT_MUTED)
+        except tk.TclError:
+            pass
 
     def _begin_search_edit(_evt=None) -> None:
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
-            search_entry.delete(0, tk.END)
-            _apply_search_typing_style()
+            search_var_ui.set("")
+            try:
+                search_entry.configure(foreground=_TEXT)
+            except tk.TclError:
+                pass
 
     def _on_search_focus_out(_evt=None) -> None:
-        # Do not re-grab focus; only restore placeholder when empty
-        if not search_entry.get().strip() or search_is_placeholder[0]:
+        if not search_var_ui.get().strip() or search_is_placeholder[0]:
             _show_search_placeholder()
 
     def _search_query() -> str:
         if search_is_placeholder[0]:
             return ""
-        return search_entry.get().strip()
+        return search_var_ui.get().strip()
+
+    def _on_search_changed(_a=None, _b=None, _c=None) -> None:
+        if search_is_placeholder[0]:
+            return
+        _refresh_list()
 
     search_entry.bind("<FocusIn>", _begin_search_edit)
     search_entry.bind("<FocusOut>", _on_search_focus_out)
-    search_entry.bind("<KeyRelease>", lambda _e: _on_search_changed())
+    search_var_ui.trace_add("write", _on_search_changed)
     _show_search_placeholder()
 
-    # Findings list
-    list_outer = ttk.Frame(side)
-    list_outer.pack(fill=tk.BOTH, expand=True)
+    # List area (same white panel — not a second “theme”)
+    list_border = tk.Frame(side_pad, bg=_BORDER)
+    list_border.pack(fill=tk.BOTH, expand=True)
+    list_outer = tk.Frame(list_border, bg=_BG_PANEL)
+    list_outer.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
     list_canvas = tk.Canvas(
         list_outer,
         highlightthickness=0,
         borderwidth=0,
-        bg=_LIST_ROW_BG,
+        bg=_BG_PANEL,
         takefocus=True,
     )
     list_scroll = ttk.Scrollbar(
         list_outer, orient=tk.VERTICAL, command=list_canvas.yview
     )
-    list_inner = tk.Frame(list_canvas, bg=_LIST_ROW_BG)
+    list_inner = tk.Frame(list_canvas, bg=_BG_PANEL)
     list_inner.bind(
         "<Configure>",
         lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
@@ -278,38 +304,61 @@ def run_review_window(
     visible_ph: list[str] = []
     row_widgets: dict[str, dict] = {}
 
-    # ── Document pane ─────────────────────────────────────────────
-    doc_frame = ttk.Frame(body, padding=(8, 0, 0, 0))
-    body.add(doc_frame, weight=3)
+    # ── Document panel ────────────────────────────────────────────
+    doc_outer = ttk.Frame(body, style="TFrame")
+    body.add(doc_outer, weight=3)
 
-    doc_header = ttk.Frame(doc_frame)
-    doc_header.pack(fill=tk.X, pady=(0, 6))
-    ttk.Label(doc_header, text="Document", style="Review.Section.TLabel").pack(
-        side=tk.LEFT
+    doc_panel = tk.Frame(
+        doc_outer,
+        bg=_BG_PANEL,
+        highlightbackground=_BORDER,
+        highlightthickness=1,
+        bd=0,
     )
-    ttk.Label(
+    doc_panel.pack(fill=tk.BOTH, expand=True, padx=(_GAP, 0))
+
+    doc_pad = tk.Frame(doc_panel, bg=_BG_PANEL)
+    doc_pad.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+    doc_header = tk.Frame(doc_pad, bg=_BG_PANEL)
+    doc_header.pack(fill=tk.X, pady=(0, 8))
+    tk.Label(
+        doc_header,
+        text="Document",
+        bg=_BG_PANEL,
+        fg=_TEXT,
+        font=_FONT_BOLD,
+        anchor=tk.W,
+    ).pack(side=tk.LEFT)
+    tk.Label(
         doc_header,
         text="Yellow = redact  ·  blue = focused  ·  space / double-click toggles",
-        style="Review.Hint.TLabel",
+        bg=_BG_PANEL,
+        fg=_TEXT_MUTED,
+        font=_FONT_SMALL,
+        anchor=tk.E,
     ).pack(side=tk.RIGHT)
 
-    text_wrap = ttk.Frame(doc_frame)
+    text_wrap = tk.Frame(doc_pad, bg=_BORDER)
     text_wrap.pack(fill=tk.BOTH, expand=True)
+    text_inner = tk.Frame(text_wrap, bg=_BG_PANEL)
+    text_inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
     doc = tk.Text(
-        text_wrap,
+        text_inner,
         wrap=tk.WORD,
-        font=_MONO_DOC,
+        font=_FONT_DOC,
         undo=False,
-        padx=10,
-        pady=10,
-        bg="#FAFAFA",
-        fg="#1A202C",
-        insertbackground="#1A202C",
+        padx=12,
+        pady=12,
+        bg=_BG_PANEL,
+        fg=_TEXT,
+        insertbackground=_TEXT,
         relief=tk.FLAT,
-        highlightthickness=1,
-        highlightbackground="#E2E8F0",
+        highlightthickness=0,
+        borderwidth=0,
     )
-    doc_scroll = ttk.Scrollbar(text_wrap, orient=tk.VERTICAL, command=doc.yview)
+    doc_scroll = ttk.Scrollbar(text_inner, orient=tk.VERTICAL, command=doc.yview)
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -323,64 +372,70 @@ def run_review_window(
     )
     doc.tag_raise("hl_SELECTED")
 
-    # Add-redaction toolbar (under document)
-    add_bar = ttk.Frame(doc_frame)
+    # Add toolbar — same muted bar language as search/filter row
+    add_bar = tk.Frame(doc_pad, bg=_BG_MUTED, highlightbackground=_BORDER, highlightthickness=1)
     add_bar.pack(fill=tk.X, pady=(10, 0))
-    ttk.Label(add_bar, text="Add redaction", style="Review.Hint.TLabel").pack(
-        side=tk.LEFT, padx=(0, 8)
-    )
+    add_inner = tk.Frame(add_bar, bg=_BG_MUTED)
+    add_inner.pack(fill=tk.X, padx=10, pady=8)
+    tk.Label(
+        add_inner,
+        text="Add redaction",
+        bg=_BG_MUTED,
+        fg=_TEXT_MUTED,
+        font=_FONT_SMALL,
+    ).pack(side=tk.LEFT, padx=(0, 8))
     type_menu = ttk.Combobox(
-        add_bar,
+        add_inner,
         textvariable=type_var,
         values=[t[0] for t in REVIEW_ADD_TYPES],
         width=16,
         state="readonly",
-        style="Review.TCombobox",
-        font=_UI_FONT,
+        font=_FONT,
     )
-    type_menu.pack(side=tk.LEFT, padx=(0, 8))
+    type_menu.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
     ttk.Button(
-        add_bar,
-        text="Add selection",
-        style="Review.TButton",
-        command=lambda: _add_selection(),
+        add_inner, text="Add selection", command=lambda: _add_selection()
     ).pack(side=tk.LEFT)
 
-    # ── Footer: status + actions + one shortcuts line ─────────────
-    foot = ttk.Frame(outer)
-    foot.pack(fill=tk.X, pady=(12, 0))
+    # ── Footer (light, matches panels — native buttons sit on same surface) ──
+    foot = tk.Frame(
+        outer,
+        bg=_BG_PANEL,
+        highlightbackground=_BORDER,
+        highlightthickness=1,
+        bd=0,
+    )
+    foot.pack(fill=tk.X, pady=(_GAP, 0))
+    foot_inner = tk.Frame(foot, bg=_BG_PANEL)
+    foot_inner.pack(fill=tk.X, padx=12, pady=10)
 
-    status_bar = tk.Frame(foot, bg=_STATUS_BG)
-    status_bar.pack(fill=tk.X)
-    status_inner = tk.Frame(status_bar, bg=_STATUS_BG, padx=12, pady=8)
-    status_inner.pack(fill=tk.X)
-    tk.Label(
-        status_inner,
+    status_lbl = tk.Label(
+        foot_inner,
         textvariable=status_var,
-        bg=_STATUS_BG,
-        fg=_STATUS_FG,
-        font=_UI_FONT_BOLD,
+        bg=_BG_PANEL,
+        fg=_TEXT,
+        font=_FONT_BOLD,
         anchor=tk.W,
-    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-    # Actions on the same dark bar for a single footer band
-    act = tk.Frame(status_inner, bg=_STATUS_BG)
+    )
+    status_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    act = ttk.Frame(foot_inner)
     act.pack(side=tk.RIGHT)
-    # ttk buttons on dark bar — pack in nested ttk frame for native look
-    act_ttk = ttk.Frame(act)
-    act_ttk.pack()
-    ttk.Button(act_ttk, text="Cancel", command=lambda: _on_close()).pack(
+    ttk.Button(act, text="Cancel", command=lambda: _on_close()).pack(
         side=tk.LEFT, padx=(0, 8)
     )
-    ttk.Button(
-        act_ttk, text="Save output", style="Review.TButton", command=lambda: _on_save()
-    ).pack(side=tk.LEFT)
+    ttk.Button(act, text="Save output", command=lambda: _on_save()).pack(side=tk.LEFT)
 
-    ttk.Label(
-        foot,
+    tk.Label(
+        outer,
         text=_shortcut_help_text(),
-        style="Review.Hint.TLabel",
-        wraplength=1080,
-    ).pack(anchor=tk.W, pady=(8, 0))
+        bg=_BG_APP,
+        fg=_TEXT_MUTED,
+        font=_FONT_SMALL,
+        anchor=tk.W,
+        justify=tk.LEFT,
+        wraplength=1060,
+    ).pack(fill=tk.X, pady=(8, 0))
 
     # ── Logic ─────────────────────────────────────────────────────
     def _status() -> None:
@@ -402,11 +457,6 @@ def run_review_window(
             out.append(f)
         return out
 
-    def _on_search_changed() -> None:
-        if search_is_placeholder[0]:
-            return
-        _refresh_list()
-
     def _focus_list() -> None:
         list_canvas.focus_set()
 
@@ -414,14 +464,18 @@ def run_review_window(
         for key, rw in row_widgets.items():
             f = session.get(key)
             selected = key == ph
-            bg = _LIST_SEL_BG if selected else _LIST_ROW_BG
+            bg = _BG_SELECTED if selected else _BG_PANEL
             if f and not f.enabled:
-                fg = _LIST_CLEAR_FG
+                fg = _TEXT_MUTED
             else:
-                fg = _LIST_SEL_FG if selected else _LIST_FG
+                fg = _TEXT
             try:
                 rw["frame"].configure(bg=bg)
                 rw["label"].configure(bg=bg, fg=fg)
+                if selected:
+                    rw["accent"].configure(bg=_ACCENT)
+                else:
+                    rw["accent"].configure(bg=bg)
             except tk.TclError:
                 pass
 
@@ -442,7 +496,7 @@ def run_review_window(
         if ph not in visible_ph:
             return
         selected_ph[0] = ph
-        _focus_list()  # leave search box so keyboard works on list
+        _focus_list()
         _style_row_selected(ph)
         rw = row_widgets.get(ph)
         if rw:
@@ -456,18 +510,24 @@ def run_review_window(
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
-        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=8, pady=5)
-        fr.pack(fill=tk.X, pady=0)
+        fr = tk.Frame(parent, bg=_BG_PANEL)
+        fr.pack(fill=tk.X)
+        # Left accent bar for selection (professional list pattern)
+        accent = tk.Frame(fr, bg=_BG_PANEL, width=3)
+        accent.pack(side=tk.LEFT, fill=tk.Y)
+        accent.pack_propagate(False)
 
         label = tk.Label(
             fr,
             text=format_finding_label(f),
             anchor=tk.W,
             justify=tk.LEFT,
-            font=_MONO,
-            bg=_LIST_ROW_BG,
-            fg=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
+            font=_FONT_MONO,
+            bg=_BG_PANEL,
+            fg=_TEXT if f.enabled else _TEXT_MUTED,
             cursor="hand2",
+            padx=10,
+            pady=7,
         )
         label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -478,11 +538,11 @@ def run_review_window(
             _toggle_ph(f.placeholder)
             return "break"
 
-        for w in (label, fr):
+        for w in (label, fr, accent):
             w.bind("<Button-1>", select_me)
             w.bind("<Double-Button-1>", toggle_me)
 
-        return {"frame": fr, "label": label}
+        return {"frame": fr, "label": label, "accent": accent}
 
     def _refresh_list(
         select_ph: str | None = None, *, refresh_doc: bool = True
@@ -492,7 +552,18 @@ def run_review_window(
         row_widgets.clear()
         visible_ph.clear()
 
-        for f in _filtered_findings():
+        findings = _filtered_findings()
+        if not findings:
+            empty = tk.Label(
+                list_inner,
+                text="No findings match this filter.",
+                bg=_BG_PANEL,
+                fg=_TEXT_MUTED,
+                font=_FONT_SMALL,
+                pady=24,
+            )
+            empty.pack(fill=tk.X)
+        for f in findings:
             rw = _make_row(list_inner, f)
             row_widgets[f.placeholder] = rw
             visible_ph.append(f.placeholder)
@@ -606,7 +677,7 @@ def run_review_window(
         try:
             parent = w.master
             while parent is not None:
-                if parent in (search_entry, type_menu, type_combo, search_wrap):
+                if parent in (search_entry, type_menu, type_combo):
                     return True
                 pcls = parent.winfo_class()
                 if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
@@ -716,13 +787,9 @@ def run_review_window(
         return _nav(delta)
 
     def _on_escape(_evt=None) -> str:
-        # Escape in search: clear + return to list (don't cancel the window)
-        if _is_text_input_focused() and (
-            root.focus_get() is search_entry
-            or (
-                root.focus_get() is not None
-                and str(root.focus_get()).startswith(str(search_entry))
-            )
+        w = root.focus_get()
+        if w is search_entry or (
+            w is not None and str(w).startswith(str(search_entry))
         ):
             _show_search_placeholder()
             _refresh_list()
