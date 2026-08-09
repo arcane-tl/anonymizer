@@ -689,22 +689,73 @@ class OptionsApp(tk.Tk):
 
         bar = tk.Frame(root, bg=_BG_APP)
         bar.pack(fill=tk.X, pady=(28, 0))
-        _chip_button(bar, "Cancel", self.destroy).pack(side=tk.LEFT)
+        _chip_button(bar, "Cancel", self._on_cancel).pack(side=tk.LEFT)
         right = tk.Frame(bar, bg=_BG_APP)
         right.pack(side=tk.RIGHT)
         _chip_button(right, "Lists…", self._lists).pack(side=tk.LEFT, padx=(0, 10))
         _chip_button(right, "Start", self._start, primary=True).pack(side=tk.LEFT)
 
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.bind("<Return>", lambda _e: self._start())
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._busy = False
+        # Accept Return only after a short grace period. focus_force + topmost can
+        # steal a keypress (e.g. Enter from another app) and looked like the window
+        # "closed by itself" because _start() withdraws immediately.
+        self._accept_return = False
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Return>", self._on_return)
+        self.bind("<KP_Enter>", self._on_return)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        # Ensure window is on screen and focused (Windows often starts behind)
+        # Ensure window is on screen (Windows often starts behind). Soft focus:
+        # lift/topmost without focus_force so we do not yank keystrokes mid-type.
         self.update_idletasks()
+        try:
+            w = max(self.winfo_reqwidth(), 480)
+            h = max(self.winfo_reqheight(), 400)
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            x = max(40, (sw - w) // 2)
+            y = max(40, (sh - h) // 2)
+            self.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
         self.lift()
-        self.attributes("-topmost", True)
-        self.after(200, lambda: self.attributes("-topmost", False))
-        self.focus_force()
+        try:
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self._safe_topmost(False))
+        except tk.TclError:
+            pass
+        # Enable Return → Start only after focus has settled
+        self.after(500, self._enable_return_shortcut)
+        _log(f"OptionsApp ready files={len(self.files)}")
+
+    def _safe_topmost(self, value: bool) -> None:
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", value)
+        except tk.TclError:
+            pass
+
+    def _enable_return_shortcut(self) -> None:
+        self._accept_return = True
+
+    def _on_escape(self, _event=None) -> str:
+        _log("OptionsApp Escape → cancel")
+        self._on_cancel()
+        return "break"
+
+    def _on_return(self, _event=None) -> str | None:
+        if not self._accept_return or self._busy:
+            _log("OptionsApp Return ignored (grace/busy)")
+            return "break"
+        _log("OptionsApp Return → start")
+        self._start()
+        return "break"
+
+    def _on_cancel(self) -> None:
+        _log("OptionsApp cancel/close")
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def _lists(self) -> None:
         dlg = ListsDialog(self, self.allow_text, self.deny_text)
@@ -715,6 +766,22 @@ class OptionsApp(tk.Tk):
             )
 
     def _start(self) -> None:
+        if self._busy:
+            _log("OptionsApp _start ignored (already busy)")
+            return
+        self._busy = True
+        _log("OptionsApp _start begin")
+        try:
+            self._run_start()
+        finally:
+            # If window still alive (error paths), allow another try
+            try:
+                if self.winfo_exists():
+                    self._busy = False
+            except tk.TclError:
+                pass
+
+    def _run_start(self) -> None:
         cli = _find_anonymize()
         if not cli:
             messagebox.showerror(
@@ -757,10 +824,14 @@ class OptionsApp(tk.Tk):
                 for p in self.files
             ]
             self._run_review_batch(cmds, want_open)
+            _log("OptionsApp review batch spawned → destroy")
             self.destroy()
             return
 
-        self.withdraw()
+        # Keep the window visible with a working status instead of vanishing
+        # (withdraw looked like a crash / auto-close).
+        self._set_working(True)
+        self.update_idletasks()
         outputs: list[str] = []
         errors: list[str] = []
         try:
@@ -783,13 +854,14 @@ class OptionsApp(tk.Tk):
                     Path(p).unlink(missing_ok=True)
                 except OSError:
                     pass
+            self._set_working(False)
 
         if errors and not outputs:
             messagebox.showerror(
                 "Anonymizer",
                 "Something went wrong:\n\n" + "\n\n".join(errors[:3]),
+                parent=self,
             )
-            self.deiconify()
             return
 
         if want_open and outputs:
@@ -803,6 +875,7 @@ class OptionsApp(tk.Tk):
                         subprocess.run(["xdg-open", out], check=False)
                 except OSError:
                     pass
+            _log("OptionsApp done (open results) → destroy")
             self.destroy()
             return
 
@@ -827,7 +900,22 @@ class OptionsApp(tk.Tk):
                 subprocess.run(["xdg-open", folder], check=False)
         else:
             messagebox.showinfo("Anonymizer", msg, parent=self)
+        _log("OptionsApp done → destroy")
         self.destroy()
+
+    def _set_working(self, working: bool) -> None:
+        """Show a simple busy state without hiding the whole window."""
+        try:
+            if not self.winfo_exists():
+                return
+            if working:
+                self.title(f"Anonymizer {__version__} — working…")
+                self.configure(cursor="watch")
+            else:
+                self.title(f"Anonymizer {__version__}")
+                self.configure(cursor="")
+        except tk.TclError:
+            pass
 
     def _write_temp_config(self, style: str, allow_path: str, deny_path: str) -> Path:
         import yaml
@@ -932,9 +1020,11 @@ class LauncherApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.update_idletasks()
         self.lift()
-        self.attributes("-topmost", True)
-        self.after(200, lambda: self.attributes("-topmost", False))
-        self.focus_force()
+        try:
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
 
     def _pick(self) -> None:
         paths = filedialog.askopenfilenames(
