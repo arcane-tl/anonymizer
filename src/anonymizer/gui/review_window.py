@@ -24,12 +24,12 @@ _HL_REDACT_FG = "#1A202C"
 _HL_SELECTED_BG = "#63B3ED"  # stronger light blue for focus
 _HL_SELECTED_FG = "#1A202C"
 
-# Sidebar list rows (tk.Frame so we can set real backgrounds)
-_LIST_FG = "#1A202C"
-_LIST_CLEAR_FG = "#4A5568"
-_LIST_ROW_BG = "#FFFFFF"
-_LIST_SEL_BG = "#BEE3F8"  # selected finding — light blue, dark text
-_LIST_SEL_FG = "#1A202C"
+# Sidebar list: white text on dark background (selected = slightly lighter)
+_LIST_FG = "#FFFFFF"
+_LIST_CLEAR_FG = "#A0AEC0"  # muted white-grey for keep-clear
+_LIST_ROW_BG = "#1A202C"
+_LIST_SEL_BG = "#2B6CB0"  # selected finding — blue, still white text
+_LIST_SEL_FG = "#FFFFFF"
 
 _CHROME_FG = "#4A5568"  # hints, shortcuts, search placeholder
 _STATUS_BG = "#2D3748"  # totals strip
@@ -149,7 +149,7 @@ def run_review_window(
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
             search_entry.delete(0, tk.END)
-            search_entry.configure(foreground=_LIST_FG)
+            search_entry.configure(foreground="#1A202C")
 
     def _on_search_focus_out(_evt=None) -> None:
         if not search_entry.get().strip():
