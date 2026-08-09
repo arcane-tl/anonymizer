@@ -380,9 +380,15 @@ def run_review_window(
 
     search_canvas.bind("<Configure>", _redraw_search_shell)
 
-    # --- Funnel icon (same vertical band as controls) ---
-    icon_box = tk.Frame(tools, bg=_BG_PANEL, width=_ICON + 8, height=_CTRL_H)
-    icon_box.pack(side=tk.LEFT, fill=tk.Y)
+    # --- Filter: funnel icon only → opens pick list (no separate dropdown field) ---
+    type_values = ["All"] + sorted(
+        {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
+    )
+    # Hit target matches control height; icon sized to _ICON and centered
+    icon_box = tk.Frame(
+        tools, bg=_BG_PANEL, width=_CTRL_H, height=_CTRL_H, cursor="hand2"
+    )
+    icon_box.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 2))
     icon_box.pack_propagate(False)
     funnel = tk.Canvas(
         icon_box,
@@ -391,87 +397,28 @@ def run_review_window(
         bg=_BG_PANEL,
         highlightthickness=0,
         bd=0,
-    )
-    # Vertically center icon in _CTRL_H
-    funnel.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-    # Funnel scaled to _ICON (standard filter metaphor)
-    s = _ICON / 18.0
-    def _f(x: float, y: float) -> tuple[float, float]:
-        return x * s, y * s
-
-    funnel.create_line(*_f(2, 4), *_f(16, 4), fill=_TEXT_MUTED, width=max(1.5, s))
-    funnel.create_line(*_f(2, 4), *_f(8, 11), fill=_TEXT_MUTED, width=max(1.5, s))
-    funnel.create_line(*_f(16, 4), *_f(10, 11), fill=_TEXT_MUTED, width=max(1.5, s))
-    funnel.create_line(*_f(8, 11), *_f(10, 11), fill=_TEXT_MUTED, width=max(1.5, s))
-    funnel.create_line(*_f(9, 11), *_f(9, 16), fill=_TEXT_MUTED, width=max(1.5, s))
-
-    # --- Filter: one seamless rounded field (value + chevron), no nested combobox ---
-    type_values = ["All"] + sorted(
-        {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
-    )
-    filter_shell, filter_canvas = _rounded_shell(tools, expand=False)
-    filter_label = tk.Label(
-        filter_canvas,
-        textvariable=filter_type,
-        font=_FONT,
-        bg=_BG_ELEVATED,
-        fg=_TEXT,
-        anchor=tk.W,
         cursor="hand2",
     )
-    filter_lbl_win = filter_canvas.create_window(
-        12, _CTRL_H // 2, window=filter_label, anchor=tk.W
-    )
+    funnel.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
-    def _redraw_filter_shell(_event=None) -> None:
-        # Measure label text width for shell size; draw value + chevron as one field
-        filter_canvas.update_idletasks()
-        sample = filter_type.get() or "All"
-        # Approximate text width
-        tw = max(filter_label.winfo_reqwidth(), 56)
-        pad_l, pad_r = 12, 28  # room for chevron
-        shell_w = tw + pad_l + pad_r
-        filter_shell.configure(width=max(shell_w, 88), height=_CTRL_H)
-        cw = max(filter_canvas.winfo_width(), shell_w)
-        ch = _CTRL_H
-        filter_canvas.configure(height=ch)
-        filter_canvas.delete("shell")
-        filter_canvas.delete("chevron")
-        _round_rect(
-            filter_canvas,
-            1,
-            1,
-            cw - 2,
-            ch - 2,
-            _CTRL_R,
-            fill=_BG_ELEVATED,
-            outline=_BORDER,
-            width=1,
-            tags="shell",
-        )
-        filter_canvas.tag_lower("shell")
-        # Value text
-        filter_canvas.itemconfigure(filter_lbl_win, width=max(40, cw - pad_l - pad_r))
-        filter_canvas.coords(filter_lbl_win, pad_l, ch // 2)
-        # Chevron (part of same field, not a second control)
-        cx, cy = cw - 14, ch // 2
-        filter_canvas.create_polygon(
-            cx - 5,
-            cy - 2,
-            cx + 5,
-            cy - 2,
-            cx,
-            cy + 4,
-            fill=_TEXT_MUTED,
-            outline=_TEXT_MUTED,
-            tags="chevron",
-        )
+    def _draw_funnel(*, active: bool = False) -> None:
+        funnel.delete("all")
+        color = _ACCENT if active else _TEXT_MUTED
+        s = _ICON / 18.0
 
-    filter_canvas.bind("<Configure>", _redraw_filter_shell)
+        def _f(x: float, y: float) -> tuple[float, float]:
+            return x * s, y * s
+
+        wline = max(1.5, s)
+        funnel.create_line(*_f(2, 4), *_f(16, 4), fill=color, width=wline)
+        funnel.create_line(*_f(2, 4), *_f(8, 11), fill=color, width=wline)
+        funnel.create_line(*_f(16, 4), *_f(10, 11), fill=color, width=wline)
+        funnel.create_line(*_f(8, 11), *_f(10, 11), fill=color, width=wline)
+        funnel.create_line(*_f(9, 11), *_f(9, 16), fill=color, width=wline)
 
     def _set_filter(value: str) -> None:
         filter_type.set(value)
-        _redraw_filter_shell()
+        _draw_funnel(active=value != "All")
         _refresh_list()
 
     def _open_filter_menu(_event=None) -> None:
@@ -485,22 +432,27 @@ def run_review_window(
             bd=0,
             font=_FONT,
         )
+        current = filter_type.get()
         for val in type_values:
-            menu.add_command(label=val, command=lambda v=val: _set_filter(v))
-        # Pop below the filter field
+            # Checkmark on current choice (pick list, single select)
+            label = f"✓  {val}" if val == current else f"    {val}"
+            menu.add_command(label=label, command=lambda v=val: _set_filter(v))
         try:
-            x = filter_shell.winfo_rootx()
-            y = filter_shell.winfo_rooty() + filter_shell.winfo_height()
+            x = icon_box.winfo_rootx()
+            y = icon_box.winfo_rooty() + icon_box.winfo_height()
             menu.tk_popup(x, y)
         finally:
-            menu.grab_release()
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
 
-    for w in (filter_canvas, filter_label):
+    _draw_funnel(active=False)
+    for w in (icon_box, funnel):
         w.bind("<Button-1>", _open_filter_menu)
 
     def _layout_toolbar() -> None:
         _redraw_search_shell()
-        _redraw_filter_shell()
 
     root.after_idle(_layout_toolbar)
     root.after(50, _layout_toolbar)
@@ -881,7 +833,7 @@ def run_review_window(
         w = root.focus_get()
         if w is None:
             return False
-        if w is search_entry or w is type_menu or w is filter_label:
+        if w is search_entry or w is type_menu:
             return True
         try:
             if str(w).startswith(str(search_entry)):
@@ -894,7 +846,7 @@ def run_review_window(
         try:
             parent = w.master
             while parent is not None:
-                if parent in (search_entry, type_menu, filter_label, filter_canvas):
+                if parent in (search_entry, type_menu):
                     return True
                 pcls = parent.winfo_class()
                 if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
@@ -945,8 +897,7 @@ def run_review_window(
             {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
         )
         if filter_type.get() not in {"All", finding.type_label}:
-            filter_type.set("All")
-            _redraw_filter_shell()
+            _set_filter("All")
         selected_ph[0] = finding.placeholder
         _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
