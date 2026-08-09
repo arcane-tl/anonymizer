@@ -223,8 +223,11 @@ Write-Info ("Downloading spaCy models (size={0}; default lg for best NER quality
 if (-not (Install-SpacyChain $enCandidates "English")) { Die "Could not install English spaCy model" }
 if (-not (Install-SpacyChain $fiCandidates "Finnish")) { Die "Could not install Finnish spaCy model" }
 
-# Sanity: package imports without host Python
-& $PyEmbed -c 'import anonymizer, spacy; print("runtime ok", anonymizer.__version__)'
+# Sanity: package imports without host Python.
+# Use a variable + Python single-quoted strings: PowerShell re-quotes native
+# args and strips "..." if they appear inside -c 'print("...")'.
+$runtimeCheck = "import anonymizer, spacy; print('runtime ok', anonymizer.__version__)"
+& $PyEmbed -c $runtimeCheck
 if ($LASTEXITCODE -ne 0) { Die "runtime import check failed" }
 Write-Ok "Embeddable runtime ready"
 
