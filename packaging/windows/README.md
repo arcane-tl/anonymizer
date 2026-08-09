@@ -105,7 +105,7 @@ Options (same as Mac):
 - Mode: strict / standard / extract  
 - Output style: tags vs delete  
 - Lists… (allow / deny → config YAML)  
-- Review (opens terminal checklist)  
+- Review (document review window)  
 - Open result when finished  
 - Also save redacted original (PDF/DOCX) → `--format both`  
 

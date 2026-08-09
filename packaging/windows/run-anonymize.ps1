@@ -113,7 +113,7 @@ foreach ($f in $files) {
     }
     $abs = (Resolve-Path -LiteralPath $f).Path
     $args = @($mode, $abs) + $extra
-    if ($Review) { $args += "--review" }
+    if ($Review) { $args += "--review-window" }
     else { $args += "--quiet" }
 
     try {

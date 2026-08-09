@@ -36,7 +36,8 @@ from anonymizer.anonymize.review import (
     interactive_review,
     parse_reject_list,
     recount_entities,
-    require_tty_for_review,
+    require_review_capable,
+    resolve_review_surface,
     strip_placeholders_in_blocks,
 )
 from anonymizer.extract import extract_document
@@ -66,8 +67,9 @@ Modes:
   strict    full scrub — default when you just pass a file
 
 Review:
-  --review / -r   document window: toggle false positives, select text to add redactions
-  --review-cli    terminal checklist only (legacy)
+  --review / -r       terminal checklist (toggle false positives)
+  --review-window     document window UI (GUIs use this)
+  --review-cli        same as default terminal checklist (explicit)
   --reject ORG_1,PHONE_2   non-interactive un-redact
 
 Tip: run "anonymize doctor" after install if anything looks wrong.
@@ -290,6 +292,7 @@ def _run_pipeline(
     keep_headers: bool,
     review: bool,
     review_cli: bool,
+    review_window: bool,
     reject: str | None,
     redact_style: str | None,
     output_format: str | None,
@@ -411,13 +414,15 @@ def _run_pipeline(
             "[dim]Note:[/dim] --map is empty in extract mode (nothing redacted)."
         )
 
-    do_review = (review or review_cli) and cfg.mode != "extract"
-    force_review_cli = review_cli or (
-        os.environ.get("ANONYMIZER_REVIEW", "").strip().lower() in {"cli", "terminal"}
+    review_surface = resolve_review_surface(
+        review=review,
+        review_cli=review_cli,
+        review_window=review_window,
     )
+    do_review = review_surface is not None and cfg.mode != "extract"
     if do_review:
         try:
-            require_tty_for_review(allow_gui=not force_review_cli)
+            require_review_capable(review_surface or "cli")
         except SystemExit as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
@@ -522,7 +527,7 @@ def _run_pipeline(
                     console=console,
                     file_label=label,
                     original_blocks=block_texts,
-                    force_cli=force_review_cli,
+                    surface=review_surface or "cli",
                     pre_keep_clear=pre_keep,
                 )
             except SystemExit as exc:
@@ -993,9 +998,8 @@ def main(
             "--review/--no-review",
             "-r",
             help=(
-                "Interactive review before writing: document window to toggle "
-                "false positives and select text to add redactions. "
-                "Falls back to terminal checklist if no display."
+                "Interactive review before writing (terminal checklist by default). "
+                "Use --review-window for the document UI; GUIs pass that flag."
             ),
             rich_help_panel="Common",
         ),
@@ -1005,8 +1009,19 @@ def main(
         typer.Option(
             "--review-cli",
             help=(
-                "Use the terminal checklist only (legacy). "
-                "Implies review; useful over SSH or without a GUI."
+                "Terminal checklist review (same as default --review). "
+                "Implies review; useful to force CLI if ANONYMIZER_REVIEW=window."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = False,
+    review_window: Annotated[
+        bool,
+        typer.Option(
+            "--review-window",
+            help=(
+                "Document review window (toggle false positives, select text to add). "
+                "Implies review. Used by anonymize-gui / desktop apps."
             ),
             rich_help_panel="Common",
         ),
@@ -1170,6 +1185,7 @@ def main(
         keep_headers=keep_headers,
         review=review,
         review_cli=review_cli,
+        review_window=review_window,
         reject=reject,
         redact_style=redact_style,
         output_format=output_format,

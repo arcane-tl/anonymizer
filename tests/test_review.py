@@ -103,10 +103,27 @@ def test_cli_review_requires_tty(tmp_path: Path):
     result = _invoke(
         [str(src), "-o", str(out), "--review", "-q"],
     )
-    # CliRunner is non-TTY → should fail clearly
+    # CliRunner is non-TTY → terminal --review should fail clearly
     assert result.exit_code != 0
     combined = (result.output or "") + (result.stdout or "")
     assert "review" in combined.lower() or "terminal" in combined.lower()
+
+
+def test_resolve_review_surface_defaults_to_cli():
+    from anonymizer.anonymize.review import resolve_review_surface
+
+    assert resolve_review_surface(review=False) is None
+    assert resolve_review_surface(review=True) == "cli"
+    assert resolve_review_surface(review=True, review_cli=True) == "cli"
+    assert resolve_review_surface(review=True, review_window=True) == "window"
+    # Explicit --review-cli wins over --review-window
+    assert (
+        resolve_review_surface(review_cli=True, review_window=True) == "cli"
+    )
+    assert resolve_review_surface(review=True, env="window") == "window"
+    assert resolve_review_surface(review=True, env="cli") == "cli"
+    # Flag --review-window alone is enough
+    assert resolve_review_surface(review_window=True) == "window"
 
 
 def test_checkbox_review_mocked(monkeypatch):

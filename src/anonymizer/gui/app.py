@@ -426,7 +426,8 @@ class OptionsApp(tk.Tk):
 
         if want_review:
             cmds = [
-                [*cli, mode, str(p), *common_flags, "--review"] for p in self.files
+                [*cli, mode, str(p), *common_flags, "--review-window"]
+                for p in self.files
             ]
             self._run_review_batch(cmds, want_open)
             self.destroy()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -610,6 +611,40 @@ def _text_fallback_review(
     return accepted
 
 
+def resolve_review_surface(
+    *,
+    review: bool = False,
+    review_cli: bool = False,
+    review_window: bool = False,
+    env: str | None = None,
+) -> str | None:
+    """Pick review UI surface: ``cli``, ``window``, or ``None`` if review is off.
+
+    Priority: ``--review-cli`` → ``--review-window`` → ``ANONYMIZER_REVIEW`` →
+    default **cli** when any review flag is set.
+
+    Environment values: ``cli`` / ``terminal`` | ``window`` / ``gui`` / ``ui``.
+    """
+    if not (review or review_cli or review_window):
+        return None
+    if review_cli:
+        return "cli"
+    if review_window:
+        return "window"
+    raw = (
+        env
+        if env is not None
+        else os.environ.get("ANONYMIZER_REVIEW", "")
+    )
+    val = str(raw).strip().lower()
+    if val in {"cli", "terminal"}:
+        return "cli"
+    if val in {"window", "gui", "ui"}:
+        return "window"
+    # Default for plain --review: terminal checklist (predictable for CLI installs)
+    return "cli"
+
+
 def interactive_review(
     mapping: dict[str, str],
     *,
@@ -617,9 +652,10 @@ def interactive_review(
     file_label: str | None = None,
     original_blocks: list[str] | None = None,
     force_cli: bool = False,
+    surface: str | None = None,
     pre_keep_clear: Iterable[str] | None = None,
 ) -> ReviewSession:
-    """Interactive review: document window (preferred) or CLI checklist.
+    """Interactive review: terminal checklist or document window.
 
     Returns a :class:`ReviewSession` after the user saves.
     Raises ``SystemExit(130)`` if the user aborts.
@@ -630,7 +666,10 @@ def interactive_review(
         Pre-anonymization block texts (required for accurate add/remove apply).
         If omitted, empty blocks are used and only the mapping list is reviewed.
     force_cli
-        Skip the Tk window and use questionary / text prompts.
+        Deprecated alias: if True, force terminal checklist. Prefer ``surface``.
+    surface
+        ``"cli"`` (terminal checklist, default) or ``"window"`` (Tk document UI).
+        GUIs should pass ``"window"``; plain CLI ``--review`` uses ``"cli"``.
     pre_keep_clear
         Placeholders already rejected (e.g. from ``--reject``) start unchecked.
     """
@@ -649,37 +688,56 @@ def interactive_review(
         console.print("[dim]No redactions to review.[/dim]")
         return session
 
-    # Prefer document window when a display is available
-    if not force_cli:
+    use_surface = "cli" if force_cli else (surface or "cli")
+    use_surface = str(use_surface).strip().lower()
+    if use_surface not in {"cli", "window"}:
+        use_surface = "cli"
+
+    if use_surface == "window":
         try:
             from anonymizer.gui.review_window import display_available, run_review_window
+        except Exception as exc:  # pragma: no cover - missing tk
+            raise SystemExit(
+                "Error: --review-window requires tkinter (desktop GUI support).\n"
+                f"Details: {exc}\n"
+                "Use plain --review for the terminal checklist, or install a "
+                "Python build with tkinter."
+            ) from exc
 
-            if display_available():
-                console.print(
-                    "[dim]Opening review window "
-                    "(toggle false positives, select text to add redactions)…[/dim]"
-                )
-                finished = run_review_window(session, file_label=file_label)
-                if finished is None:
-                    console.print("[yellow]Review cancelled — no file written.[/yellow]")
-                    raise SystemExit(130)
-                kept = finished.keep_clear_placeholders()
-                if kept:
-                    print_keep_clear_summary(
-                        {f.placeholder: f.original for f in finished.findings},
-                        kept,
-                        console=console,
-                    )
-                return finished
+        if not display_available():
+            raise SystemExit(
+                "Error: --review-window requires a desktop display.\n"
+                "Use plain --review for the terminal checklist, "
+                "or run from a graphical session."
+            )
+
+        try:
+            console.print(
+                "[dim]Opening review window "
+                "(toggle false positives, select text to add redactions)…[/dim]"
+            )
+            finished = run_review_window(session, file_label=file_label)
         except SystemExit:
             raise
         except Exception as exc:  # pragma: no cover - UI env issues
-            console.print(
-                f"[yellow]Review window unavailable ({exc}); "
-                "falling back to terminal checklist.[/yellow]"
-            )
+            raise SystemExit(
+                f"Error: review window failed ({exc}).\n"
+                "Use plain --review for the terminal checklist."
+            ) from exc
 
-    # Terminal checklist (legacy / headless / --review-cli)
+        if finished is None:
+            console.print("[yellow]Review cancelled — no file written.[/yellow]")
+            raise SystemExit(130)
+        kept = finished.keep_clear_placeholders()
+        if kept:
+            print_keep_clear_summary(
+                {f.placeholder: f.original for f in finished.findings},
+                kept,
+                console=console,
+            )
+        return finished
+
+    # Terminal checklist (default for CLI --review)
     try:
         import questionary  # noqa: F401
 
@@ -702,8 +760,36 @@ def interactive_review(
     return session
 
 
+def require_review_capable(surface: str) -> None:
+    """Exit if the chosen review surface cannot run in this environment."""
+    surface = (surface or "cli").strip().lower()
+    if surface == "window":
+        try:
+            from anonymizer.gui.review_window import display_available
+
+            if display_available():
+                return
+        except Exception:
+            pass
+        raise SystemExit(
+            "Error: --review-window requires a desktop display and tkinter.\n"
+            "Use plain --review for the terminal checklist, "
+            "or run the Anonymizer GUI app."
+        )
+    # cli surface
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "Error: --review requires an interactive terminal.\n"
+            "Use --reject ORG_1,PHONE_2 for non-interactive un-redaction, "
+            "--review-window in a desktop GUI, or omit --review."
+        )
+
+
 def require_tty_for_review(*, allow_gui: bool = True) -> None:
-    """Exit with a clear error if --review is used without a terminal or GUI."""
+    """Backward-compatible gate used by older call sites.
+
+    Prefer :func:`require_review_capable` with an explicit surface.
+    """
     if allow_gui:
         try:
             from anonymizer.gui.review_window import display_available

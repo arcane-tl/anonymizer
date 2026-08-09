@@ -54,19 +54,32 @@ def test_run_anonymize_extract_writes_markdown(tmp_path: Path, script_env: dict)
     assert f"OUTPUT:{out.resolve()}" in proc.stdout.replace("\r", "")
 
 
-def test_run_anonymize_review_requires_tty(tmp_path: Path, script_env: dict):
+def test_run_anonymize_review_passes_review_window(tmp_path: Path):
+    """GUI helper must request the document window, not plain --review."""
     src = tmp_path / "note.txt"
     src.write_text("Contact alice@example.com\n", encoding="utf-8")
-    # Pipe stdin so the script is not a TTY
+    fake = tmp_path / "fake-anonymize"
+    log = tmp_path / "args.log"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$@" > "{log}"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    env = os.environ.copy()
+    env["ANONYMIZER_BIN"] = str(fake)
     proc = subprocess.run(
         ["bash", str(SCRIPT), "--review", "strict", str(src)],
         capture_output=True,
         text=True,
-        env=script_env,
-        stdin=subprocess.DEVNULL,
+        env=env,
+        cwd=str(tmp_path),
     )
-    assert proc.returncode == 2
-    assert "interactive terminal" in (proc.stderr + proc.stdout).lower()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    args = log.read_text(encoding="utf-8")
+    assert "--review-window" in args
+    assert "--review-cli" not in args
 
 
 def test_run_anonymize_default_mode_is_strict_verb(tmp_path: Path, script_env: dict):

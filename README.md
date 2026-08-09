@@ -168,9 +168,10 @@ anonymize standard sopimus.pdf
 # Text only — no redaction
 anonymize extract report.pdf
 
-# Review redactions before writing (false positives → keep clear)
+# Review redactions before writing (terminal checklist)
 anonymize contract.pdf --review
 # ↑/↓ move · space check · enter confirm
+# Document window (same as desktop GUIs): anonymize contract.pdf --review-window
 # Or non-interactive: anonymize contract.pdf --reject ORG_1,PHONE_2
 
 # Delete findings instead of [PERSON_1] tags
@@ -260,7 +261,8 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 
 | Flag | Role |
 |------|------|
-| `-r` / `--review` | Checkbox: mark false positives to keep clear before write |
+| `-r` / `--review` | Terminal checklist: mark false positives to keep clear before write |
+| `--review-window` | Document review UI (used by Mac/Windows GUIs) |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
 | `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
 | `--format` | `md` (default), `source` (redacted PDF/DOCX), or `both`. PDF = black boxes + metadata scrub; DOCX = tags/delete + property scrub. **Best-effort** (not forensic): images, some forms/comments, wrap misses may remain. |
