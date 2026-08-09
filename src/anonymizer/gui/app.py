@@ -346,7 +346,7 @@ class OptionsApp(tk.Tk):
 
         ttk.Checkbutton(
             root,
-            text="Review findings before saving (opens Terminal)",
+            text="Review findings before saving (toggle + add redactions)",
             variable=self.review_var,
         ).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(
@@ -533,7 +533,8 @@ class OptionsApp(tk.Tk):
     def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
         messagebox.showinfo(
             "Anonymizer",
-            "Complete the checklist in the terminal (space / enter).",
+            "A review window will open for each file.\n"
+            "Toggle false positives, select text to add redactions, then Save.",
             parent=self,
         )
         env = os.environ.copy()

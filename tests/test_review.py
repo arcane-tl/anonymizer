@@ -152,9 +152,11 @@ def test_checkbox_review_mocked(monkeypatch):
         "_checkbox_review",
         lambda mapping, console, file_label: ["[ORG_1]"],
     )
-    # Test via interactive_review with questionary "importable"
-    selected = review_mod.interactive_review(mapping)
-    assert selected == ["[ORG_1]"]
+    # force_cli skips Tk window; returns ReviewSession with ORG kept clear
+    session = review_mod.interactive_review(mapping, force_cli=True)
+    assert session.keep_clear_placeholders() == ["[ORG_1]"]
+    assert "[ORG_1]" not in session.active_mapping()
+    assert "[PHONE_1]" in session.active_mapping()
 
 
 def test_print_keep_clear_summary():
