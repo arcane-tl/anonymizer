@@ -92,6 +92,33 @@ def count_surface_occurrences(blocks: list[str], surface: str) -> int:
     return n
 
 
+def collapse_ws(text: str) -> str:
+    """Strip ends and collapse internal whitespace to single spaces."""
+    return " ".join(text.split())
+
+
+def resolve_surface_in_blocks(blocks: list[str], text: str) -> str | None:
+    """Return an exact substring of ``blocks`` suitable for redaction, or None.
+
+    Tries stripped selection, then whitespace-collapsed form if that exact
+    string appears in the document (so UI selection and apply() stay in sync).
+    """
+    if not text or not blocks:
+        return None
+    candidates: list[str] = []
+    stripped = text.strip()
+    if stripped:
+        candidates.append(stripped)
+    collapsed = collapse_ws(text)
+    if collapsed and collapsed not in candidates:
+        candidates.append(collapsed)
+    # Prefer longer exact matches when both work
+    for surface in sorted(candidates, key=len, reverse=True):
+        if count_surface_occurrences(blocks, surface) > 0:
+            return surface
+    return None
+
+
 def apply_mapping_to_text(
     text: str,
     mapping: dict[str, str],
@@ -232,12 +259,16 @@ class ReviewSession:
     def add_redaction(self, text: str, entity_type: str) -> ReviewFinding:
         """Redact ``text`` (all same surfaces) as ``entity_type``.
 
-        If an existing finding already covers the same normalized surface and
-        type label, re-enable it and return that finding.
+        ``text`` must resolve to an exact substring of the original blocks
+        (see :func:`resolve_surface_in_blocks`). If an existing finding already
+        covers the same normalized surface and type label, re-enable it.
         """
-        surface = text.strip()
+        surface = resolve_surface_in_blocks(self.original_blocks, text)
         if not surface:
-            raise ValueError("Cannot redact empty text")
+            raise ValueError(
+                "Could not find that exact text in the document. "
+                "Select a continuous phrase that appears in the body."
+            )
         ent = entity_type.strip().upper() or "CUSTOM"
         label = placeholder_label(ent)
         norm = normalize_entity_text(surface)

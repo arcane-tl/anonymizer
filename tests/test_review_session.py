@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from anonymizer.anonymize.review import (
     ReviewFinding,
     ReviewSession,
@@ -9,6 +11,7 @@ from anonymizer.anonymize.review import (
     count_surface_occurrences,
     entity_type_from_placeholder,
     placeholder_type_label,
+    resolve_surface_in_blocks,
 )
 from anonymizer.gui.review_window import format_finding_row
 
@@ -130,3 +133,15 @@ def test_format_finding_row():
         occurrence_count=3,
     )
     assert format_finding_row(f2) == "☐+ [ORG_1] — Acme Ltd (×3)"
+
+
+def test_resolve_surface_in_blocks():
+    blocks = ["Hello Tomi Lindroos here."]
+    assert resolve_surface_in_blocks(blocks, "  Tomi Lindroos  ") == "Tomi Lindroos"
+    assert resolve_surface_in_blocks(blocks, "not present") is None
+
+
+def test_add_redaction_rejects_missing_surface():
+    session = ReviewSession.from_mapping(["Hello world"], {})
+    with pytest.raises(ValueError, match="Could not find"):
+        session.add_redaction("Nobody", "PERSON")
