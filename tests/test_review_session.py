@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from anonymizer.anonymize.review import (
+    ReviewFinding,
     ReviewSession,
     apply_mapping_to_blocks,
     count_surface_occurrences,
     entity_type_from_placeholder,
     placeholder_type_label,
 )
+from anonymizer.gui.review_window import format_finding_row
 
 
 def test_placeholder_type_helpers():
@@ -106,3 +108,25 @@ def test_session_apply_remove_style():
     anon, _ = session.apply(style="remove")
     assert "ACME OY" not in anon[0]
     assert "[ORG_1]" not in anon[0]
+
+
+def test_format_finding_row():
+    f = ReviewFinding(
+        placeholder="[PERSON_1]",
+        original="Tomi Lindroos",
+        entity_type="PERSON",
+        enabled=True,
+        source="auto",
+        occurrence_count=1,
+    )
+    assert format_finding_row(f) == "☑  [PERSON_1] — Tomi Lindroos"
+
+    f2 = ReviewFinding(
+        placeholder="[ORG_1]",
+        original="Acme Ltd",
+        entity_type="ORG",
+        enabled=False,
+        source="user",
+        occurrence_count=3,
+    )
+    assert format_finding_row(f2) == "☐+ [ORG_1] — Acme Ltd (×3)"

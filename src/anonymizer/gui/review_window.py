@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 from typing import Callable
 
-from anonymizer.anonymize.review import REVIEW_ADD_TYPES, ReviewSession
+from anonymizer.anonymize.review import REVIEW_ADD_TYPES, ReviewFinding, ReviewSession
 
 try:
     import tkinter as tk
@@ -17,19 +17,15 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# Highlight colors (light theme)
-_TAG_COLORS = {
-    "PERSON": "#f9e2af",
-    "ORG": "#cba6f7",
-    "EMAIL": "#a6e3a1",
-    "PHONE": "#94e2d5",
-    "STREET": "#89b4fa",
-    "CITY": "#89b4fa",
-    "LOCATION": "#89dceb",
-    "DEFAULT": "#f2cdcd",
-    "USER": "#fab387",
-    "KEEP_CLEAR": "#6c7086",
-}
+# Document highlights: one colour for all redactions + one for list selection.
+_HL_REDACT_BG = "#f5e6c8"  # soft amber — readable on light theme
+_HL_REDACT_FG = "#1a1a1a"
+_HL_SELECTED_BG = "#2f6fed"  # clear focus blue
+_HL_SELECTED_FG = "#ffffff"
+_HL_KEEP_CLEAR_BG = "#e8e8e8"
+_HL_KEEP_CLEAR_FG = "#555555"
+
+_LIST_SNIPPET_MAX = 48
 
 
 def display_available() -> bool:
@@ -44,6 +40,25 @@ def display_available() -> bool:
     import os
 
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
+    """Sidebar line: ``☑ [PERSON_1] — Tomi Lindroos`` (or with ×N / +)."""
+    check = "☑" if f.enabled else "☐"
+    origin = "+" if f.source == "user" else " "
+    snippet = f.original.replace("\n", " ").replace("\r", "")
+    if len(snippet) > max_original:
+        snippet = snippet[: max_original - 1] + "…"
+    count = f" (×{f.occurrence_count})" if f.occurrence_count > 1 else ""
+    return f"{check}{origin} {f.placeholder} — {snippet}{count}"
+
+
+def _shortcut_help_text() -> str:
+    save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
+    return (
+        "↑/↓ or j/k  move  ·  space  keep clear / redact  ·  "
+        f"a  add selection  ·  {save}  ·  esc  cancel"
+    )
 
 
 def run_review_window(
@@ -67,8 +82,8 @@ def run_review_window(
     if file_label:
         title = f"Anonymizer review — {file_label}"
     root.title(title)
-    root.minsize(900, 560)
-    root.geometry("1100x680")
+    root.minsize(960, 580)
+    root.geometry("1120x700")
 
     # --- state ---
     selected_ph: list[str | None] = [None]
@@ -99,13 +114,13 @@ def run_review_window(
     body = ttk.Panedwindow(outer, orient=tk.HORIZONTAL)
     body.pack(fill=tk.BOTH, expand=True)
 
-    # Sidebar
-    side = ttk.Frame(body, width=320)
+    # Sidebar (a bit wider for “[TAG] — original”)
+    side = ttk.Frame(body, width=360)
     body.add(side, weight=1)
 
     filt_row = ttk.Frame(side)
     filt_row.pack(fill=tk.X, pady=(0, 4))
-    ttk.Label(filt_row, text="Filter").pack(side=tk.LEFT)
+    ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT)
     type_values = ["All"] + sorted(
         {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
     )
@@ -116,7 +131,8 @@ def run_review_window(
         width=12,
         state="readonly",
     )
-    type_combo.pack(side=tk.LEFT, padx=4)
+    type_combo.pack(side=tk.RIGHT, padx=4)
+    ttk.Label(filt_row, text="Filter").pack(side=tk.RIGHT)
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
     ttk.Entry(side, textvariable=search_var).pack(fill=tk.X, pady=(0, 4))
@@ -129,6 +145,7 @@ def run_review_window(
         font=("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10),
         activestyle="dotbox",
         exportselection=False,
+        width=42,
     )
     scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=listbox.yview)
     listbox.configure(yscrollcommand=scroll.set)
@@ -154,10 +171,10 @@ def run_review_window(
     hint = ttk.Label(
         doc_frame,
         text=(
-            "Yellow/coloured marks = will redact. Uncheck mistakes (Keep clear). "
-            "Select missed text → choose type → Add redaction."
+            "Soft highlight = will be redacted. Blue = selected finding (from the list). "
+            "Keep clear leaves text visible. Select missed text → Add redaction."
         ),
-        wraplength=700,
+        wraplength=720,
         foreground="#555",
     )
     hint.pack(anchor=tk.W, pady=(0, 4))
@@ -177,24 +194,26 @@ def run_review_window(
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-    # Configure tags
-    for key, color in _TAG_COLORS.items():
-        if key == "KEEP_CLEAR":
-            doc.tag_configure(
-                f"hl_{key}",
-                background="#e6e6e6",
-                foreground="#444",
-                overstrike=True,
-            )
-        elif key == "USER":
-            doc.tag_configure(
-                f"hl_{key}",
-                background=color,
-                borderwidth=2,
-                relief=tk.SOLID,
-            )
-        else:
-            doc.tag_configure(f"hl_{key}", background=color)
+    # Three semantic highlight tags only
+    doc.tag_configure(
+        "hl_REDACT",
+        background=_HL_REDACT_BG,
+        foreground=_HL_REDACT_FG,
+    )
+    doc.tag_configure(
+        "hl_SELECTED",
+        background=_HL_SELECTED_BG,
+        foreground=_HL_SELECTED_FG,
+    )
+    doc.tag_configure(
+        "hl_KEEP_CLEAR",
+        background=_HL_KEEP_CLEAR_BG,
+        foreground=_HL_KEEP_CLEAR_FG,
+        overstrike=True,
+    )
+    # Selection must paint above general redact marks
+    doc.tag_raise("hl_SELECTED")
+    doc.tag_raise("hl_KEEP_CLEAR")
 
     add_row = ttk.Frame(doc_frame)
     add_row.pack(fill=tk.X, pady=6)
@@ -207,22 +226,32 @@ def run_review_window(
         state="readonly",
     )
     type_menu.pack(side=tk.LEFT, padx=6)
-    # Human labels in dropdown via map — keep entity codes for simplicity
     ttk.Button(add_row, text="Add redaction", command=lambda: _add_selection()).pack(
         side=tk.LEFT, padx=4
     )
 
-    # Footer
+    # Footer: status + always-visible shortcuts + actions
     foot = ttk.Frame(outer)
     foot.pack(fill=tk.X, pady=(8, 0))
-    ttk.Label(foot, textvariable=status_var, foreground="#444").pack(side=tk.LEFT)
 
-    right = ttk.Frame(foot)
+    status_row = ttk.Frame(foot)
+    status_row.pack(fill=tk.X)
+    ttk.Label(status_row, textvariable=status_var, foreground="#444").pack(side=tk.LEFT)
+    right = ttk.Frame(status_row)
     right.pack(side=tk.RIGHT)
     ttk.Button(right, text="Cancel", command=lambda: _cancel()).pack(
         side=tk.LEFT, padx=(0, 8)
     )
     ttk.Button(right, text="Save output", command=lambda: _save()).pack(side=tk.LEFT)
+
+    shortcuts_row = ttk.Frame(foot)
+    shortcuts_row.pack(fill=tk.X, pady=(6, 0))
+    ttk.Label(
+        shortcuts_row,
+        text=_shortcut_help_text(),
+        foreground="#555",
+        wraplength=1080,
+    ).pack(anchor=tk.W)
 
     def _status() -> None:
         c = session.summary_counts()
@@ -247,19 +276,12 @@ def run_review_window(
         listbox.delete(0, tk.END)
         visible_ph.clear()
         for f in _filtered_findings():
-            mark = "☑" if f.enabled else "☐"
-            origin = "+" if f.source == "user" else " "
-            count = f"×{f.occurrence_count}" if f.occurrence_count > 1 else "  "
-            snippet = f.original.replace("\n", " ")
-            if len(snippet) > 42:
-                snippet = snippet[:41] + "…"
-            line = f"{mark}{origin} {f.placeholder:14} {count}  {snippet}"
-            listbox.insert(tk.END, line)
+            listbox.insert(tk.END, format_finding_row(f))
             visible_ph.append(f.placeholder)
             if not f.enabled:
                 listbox.itemconfig(tk.END, foreground="#888")
             elif f.source == "user":
-                listbox.itemconfig(tk.END, foreground="#b35c00")
+                listbox.itemconfig(tk.END, foreground="#6b4f00")
         _status()
         if select_ph and select_ph in visible_ph:
             idx = visible_ph.index(select_ph)
@@ -268,20 +290,26 @@ def run_review_window(
             listbox.see(idx)
             selected_ph[0] = select_ph
 
-    def _hl_tag_for(f) -> str:
-        if not f.enabled:
-            return "hl_KEEP_CLEAR"
-        if f.source == "user":
-            return "hl_USER"
-        lab = f.type_label
-        if lab in _TAG_COLORS:
-            return f"hl_{lab}"
-        for prefix in ("PERSON", "ORG", "EMAIL", "PHONE", "STREET", "CITY", "LOCATION"):
-            if lab.startswith(prefix):
-                return f"hl_{prefix}"
-        return "hl_DEFAULT"
+    def _paint_finding(f: ReviewFinding, tag: str) -> None:
+        if not f.original:
+            return
+        start = "1.0"
+        while True:
+            idx = doc.search(f.original, start, stopindex=tk.END, nocase=False)
+            if not idx:
+                break
+            end = f"{idx}+{len(f.original)}c"
+            doc.tag_add(tag, idx, end)
+            doc.tag_add(f"ph::{f.placeholder}", idx, end)
+            start = end
 
     def _refresh_doc() -> None:
+        # Preserve scroll position across rehighlight
+        try:
+            yview = doc.yview()
+        except tk.TclError:
+            yview = (0.0, 1.0)
+
         doc.configure(state=tk.NORMAL)
         doc.delete("1.0", tk.END)
         if preview_redacted.get():
@@ -289,33 +317,38 @@ def run_review_window(
             text = "\n\n".join(blocks)
             doc.insert("1.0", text)
             doc.configure(state=tk.DISABLED)
+            _status()
             return
 
         text = "\n\n".join(session.original_blocks)
         doc.insert("1.0", text)
 
-        # Apply highlights: enabled findings first by length so longer wins visually
+        # 1) All enabled redactions — one shared colour (longest first)
         ordered = sorted(
-            session.findings,
+            (f for f in session.findings if f.enabled),
             key=lambda f: len(f.original),
             reverse=True,
         )
         for f in ordered:
-            if not f.original:
-                continue
-            start = "1.0"
-            tag = _hl_tag_for(f)
-            while True:
-                idx = doc.search(f.original, start, stopindex=tk.END, nocase=False)
-                if not idx:
-                    break
-                end = f"{idx}+{len(f.original)}c"
-                doc.tag_add(tag, idx, end)
-                # store placeholder on tag bind via mark — use tag name unique
-                doc.tag_add(f"ph::{f.placeholder}", idx, end)
-                start = end
+            _paint_finding(f, "hl_REDACT")
+
+        # 2) Selected finding — focus colour on top
+        sel = selected_ph[0]
+        if sel:
+            f_sel = session.get(sel)
+            if f_sel and f_sel.enabled:
+                _paint_finding(f_sel, "hl_SELECTED")
+
+        # 3) Keep-clear (false positives) — muted + strike
+        for f in session.findings:
+            if not f.enabled:
+                _paint_finding(f, "hl_KEEP_CLEAR")
 
         doc.configure(state=tk.NORMAL)  # allow selection for add
+        try:
+            doc.yview_moveto(yview[0])
+        except tk.TclError:
+            pass
         _status()
 
     def _on_list_select(_evt=None) -> None:
@@ -326,15 +359,14 @@ def run_review_window(
         selected_ph[0] = ph
         f = session.get(ph)
         if not f or not f.original:
+            _refresh_doc()
             return
-        # Scroll document to first occurrence
+        _refresh_doc()
+        # Scroll document to first occurrence of the focused finding
         doc.configure(state=tk.NORMAL)
         idx = doc.search(f.original, "1.0", stopindex=tk.END)
         if idx:
             doc.see(idx)
-            doc.tag_remove(tk.SEL, "1.0", tk.END)
-            end = f"{idx}+{len(f.original)}c"
-            doc.tag_add(tk.SEL, idx, end)
             doc.mark_set(tk.INSERT, idx)
 
     def _set_selected(enabled: bool) -> None:
@@ -387,7 +419,6 @@ def run_review_window(
         except ValueError as exc:
             messagebox.showerror("Add redaction", str(exc), parent=root)
             return
-        # Update filter types
         type_combo.configure(
             values=["All"]
             + sorted({f.type_label for f in session.findings} | {"PERSON", "ORG"})
@@ -405,7 +436,7 @@ def run_review_window(
                     snip = f.original.replace("\n", " ")
                     if len(snip) > 60:
                         snip = snip[:59] + "…"
-                    lines.append(f"  {ph}  {snip}")
+                    lines.append(f"  {ph} — {snip}")
             more = f"\n  … and {len(kept) - 12} more" if len(kept) > 12 else ""
             msg = (
                 f"{len(kept)} item(s) will appear in CLEAR TEXT:\n\n"
@@ -429,7 +460,10 @@ def run_review_window(
     listbox.bind("<space>", _toggle_selected)
     root.bind("<space>", _toggle_selected)
     root.bind("<Escape>", lambda _e: _cancel())
-    root.bind("<Command-Return>" if sys.platform == "darwin" else "<Control-Return>", lambda _e: _save())
+    root.bind(
+        "<Command-Return>" if sys.platform == "darwin" else "<Control-Return>",
+        lambda _e: _save(),
+    )
     root.bind("a", lambda _e: _add_selection())
     root.bind("A", lambda _e: _add_selection())
 
@@ -453,8 +487,19 @@ def run_review_window(
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
 
+    # Select first finding by default so blue focus is visible immediately
     _refresh_list()
+    if visible_ph:
+        listbox.selection_set(0)
+        selected_ph[0] = visible_ph[0]
     _refresh_doc()
+    if selected_ph[0]:
+        f0 = session.get(selected_ph[0])
+        if f0 and f0.original:
+            idx = doc.search(f0.original, "1.0", stopindex=tk.END)
+            if idx:
+                doc.see(idx)
+
     root.lift()
     try:
         root.attributes("-topmost", True)
