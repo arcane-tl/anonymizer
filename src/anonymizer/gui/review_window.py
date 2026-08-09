@@ -17,18 +17,20 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# --- Calm colour system (light theme) ---
-# Document: one cream for all redactions + blue for list focus. Keep clear = plain.
-_HL_REDACT_BG = "#FFF3D6"
-_HL_REDACT_FG = "#1C1917"
-_HL_SELECTED_BG = "#3B82F6"
-_HL_SELECTED_FG = "#FFFFFF"
+# --- Readable colour system (light theme, dark text always) ---
+# Document: soft fills + near-black text (never white-on-colour — unreadable on prose).
+# Keep clear = no document mark.
+_HL_REDACT_BG = "#F6E05E"  # clear but soft yellow — high contrast with dark text
+_HL_REDACT_FG = "#1A202C"  # near-black
+_HL_SELECTED_BG = "#90CDF4"  # light blue — selected finding still readable
+_HL_SELECTED_FG = "#1A202C"
 
-# Sidebar list foregrounds (not rainbow entity colours)
-_LIST_AUTO_FG = "#1C1917"
-_LIST_USER_FG = "#15803D"  # medium green — user-added, easy on eyes
-_LIST_CLEAR_FG = "#78716C"  # warm gray — keep clear
-_CHROME_FG = "#57534E"
+# Sidebar: system selection handles focus; we only dim “keep clear”.
+# User-added uses same ink as auto + “+” prefix (green fg fights list selection).
+_LIST_AUTO_FG = "#1A202C"
+_LIST_USER_FG = "#1A202C"
+_LIST_CLEAR_FG = "#718096"  # muted gray for ☐ rows
+_CHROME_FG = "#4A5568"
 
 _LIST_SNIPPET_MAX = 48
 
@@ -171,9 +173,9 @@ def run_review_window(
     hint = ttk.Label(
         doc_frame,
         text=(
-            "Cream = will be redacted. Blue = selected finding (list). "
-            "Keep clear removes the highlight (text stays plain). "
-            "Select missed text → Add redaction. Green “+” in the list = you added."
+            "Yellow = will be redacted. Light blue = selected in the list. "
+            "Keep clear removes the highlight (plain text). "
+            "Select missed text → Add redaction. “+” in the list = you added."
         ),
         wraplength=720,
         foreground=_CHROME_FG,
@@ -265,12 +267,11 @@ def run_review_window(
             out.append(f)
         return out
 
-    def _list_fg(f: ReviewFinding) -> str:
+    def _style_list_row(index: int, f: ReviewFinding) -> None:
+        """Only mute keep-clear rows; enabled rows use default system colours."""
         if not f.enabled:
-            return _LIST_CLEAR_FG
-        if f.source == "user":
-            return _LIST_USER_FG
-        return _LIST_AUTO_FG
+            listbox.itemconfig(index, foreground=_LIST_CLEAR_FG)
+        # User-added is marked with “+” in the label, not a special ink colour.
 
     def _refresh_list(select_ph: str | None = None) -> None:
         listbox.delete(0, tk.END)
@@ -278,7 +279,7 @@ def run_review_window(
         for f in _filtered_findings():
             listbox.insert(tk.END, format_finding_row(f))
             visible_ph.append(f.placeholder)
-            listbox.itemconfig(tk.END, foreground=_list_fg(f))
+            _style_list_row(tk.END, f)
         _status()
         target = select_ph or selected_ph[0]
         if target and target in visible_ph:
