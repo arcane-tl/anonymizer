@@ -72,8 +72,7 @@ def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MA
 def _shortcut_help_text() -> str:
     save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
     return (
-        "↑/↓ or j/k  move  ·  space / click checkbox  toggle redact  ·  "
-        "double-click row  toggle  ·  "
+        "↑/↓ or j/k  move  ·  spacebar or double-click row  toggle redact / keep clear  ·  "
         f"a  add selection  ·  {save}  ·  esc  cancel"
     )
 
@@ -136,23 +135,40 @@ def run_review_window(
     filt_row.pack(fill=tk.X, pady=(0, 6))
     ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT, padx=(0, 8))
 
-    search_entry = ttk.Entry(filt_row)
-    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+    # tk.Entry so we can use white-on-black while typing
+    search_entry = tk.Entry(
+        filt_row,
+        font=("Segoe UI", 11),
+        insertbackground="#FFFFFF",
+        relief=tk.SOLID,
+        borderwidth=1,
+    )
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=3)
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
         search_entry.delete(0, tk.END)
         search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        search_entry.configure(foreground=_CHROME_FG)
+        # Placeholder: same chrome grey as before (on light field)
+        search_entry.configure(
+            fg=_CHROME_FG,
+            bg="#FFFFFF",
+            insertbackground=_CHROME_FG,
+        )
 
     def _hide_search_placeholder(_evt=None) -> None:
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
             search_entry.delete(0, tk.END)
-            search_entry.configure(foreground="#1A202C")
+            # Active typing: white text on black
+            search_entry.configure(
+                fg="#FFFFFF",
+                bg=_LIST_ROW_BG,
+                insertbackground="#FFFFFF",
+            )
 
     def _on_search_focus_out(_evt=None) -> None:
-        if not search_entry.get().strip():
+        if not search_entry.get().strip() or search_is_placeholder[0]:
             _show_search_placeholder()
 
     def _search_query() -> str:
@@ -179,7 +195,7 @@ def run_review_window(
     type_combo.pack(side=tk.LEFT)
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
-    # Scrollable checklist (native checkboxes)
+    # Scrollable findings list (no checkboxes — spacebar / double-click toggle)
     list_outer = ttk.Frame(side)
     list_outer.pack(fill=tk.BOTH, expand=True)
     list_canvas = tk.Canvas(
@@ -188,7 +204,7 @@ def run_review_window(
     list_scroll = ttk.Scrollbar(
         list_outer, orient=tk.VERTICAL, command=list_canvas.yview
     )
-    list_inner = ttk.Frame(list_canvas)
+    list_inner = tk.Frame(list_canvas, bg=_LIST_ROW_BG)
     list_inner.bind(
         "<Configure>",
         lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
@@ -204,7 +220,6 @@ def run_review_window(
     list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _on_mousewheel(event) -> None:
-        # macOS: event.delta; Linux: Button-4/5 handled separately if needed
         if sys.platform == "darwin":
             list_canvas.yview_scroll(int(-1 * event.delta), "units")
         else:
@@ -213,14 +228,11 @@ def run_review_window(
     list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
     visible_ph: list[str] = []
-    # placeholder -> row widgets
     row_widgets: dict[str, dict] = {}
-    # suppress checkbox command feedback loops during rebuild
-    rebuild_lock = [False]
 
     legend = ttk.Label(
         side,
-        text="☑ Redact   ☐ Keep clear   ·  click checkbox or double-click row",
+        text="spacebar or double-click row  ·  toggle redact / keep clear",
         foreground=_CHROME_FG,
         font=("Segoe UI", 9),
     )
@@ -232,9 +244,9 @@ def run_review_window(
     hint = ttk.Label(
         doc_frame,
         text=(
-            "Yellow = will be redacted. Light blue = selected finding. "
-            "Uncheck a finding to keep it clear. "
-            "Select missed text in the document → choose type → Add redaction."
+            "Yellow = will be redacted. Blue highlight = focused finding in the list. "
+            "Press spacebar or double-click a row to toggle redact / keep clear. "
+            "Select missed text → choose type → Add redaction."
         ),
         wraplength=720,
         foreground=_CHROME_FG,
@@ -358,16 +370,20 @@ def run_review_window(
             except tk.TclError:
                 pass
 
-    def _set_enabled(ph: str, enabled: bool, *, from_checkbox: bool = False) -> None:
+    def _set_enabled(ph: str, enabled: bool) -> None:
         session.set_enabled(ph, enabled)
         selected_ph[0] = ph
-        if not from_checkbox and ph in row_widgets:
-            rebuild_lock[0] = True
-            try:
-                row_widgets[ph]["var"].set(enabled)
-            finally:
-                rebuild_lock[0] = False
         _style_row_selected(ph)
+        # Update label style for keep-clear vs redacting
+        rw = row_widgets.get(ph)
+        if rw:
+            f = session.get(ph)
+            if f and not f.enabled:
+                rw["label"].configure(fg=_LIST_CLEAR_FG)
+            elif ph == selected_ph[0]:
+                rw["label"].configure(fg=_LIST_SEL_FG)
+            else:
+                rw["label"].configure(fg=_LIST_FG)
         _status()
         _refresh_doc(scroll_to_selected=True)
 
@@ -396,20 +412,9 @@ def run_review_window(
                 pass
         _refresh_doc(scroll_to_selected=scroll_doc)
 
-    def _make_row(parent: ttk.Frame, f: ReviewFinding) -> dict:
-        # tk.Frame + tk.Label so selected row can use a real light-blue background
-        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=2, pady=2)
+    def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
+        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=6, pady=4)
         fr.pack(fill=tk.X, pady=1, padx=2)
-
-        var = tk.BooleanVar(value=f.enabled)
-
-        def on_check() -> None:
-            if rebuild_lock[0]:
-                return
-            _set_enabled(f.placeholder, bool(var.get()), from_checkbox=True)
-
-        cb = ttk.Checkbutton(fr, variable=var, command=on_check)
-        cb.pack(side=tk.LEFT, padx=(4, 6))
 
         label = tk.Label(
             fr,
@@ -421,7 +426,7 @@ def run_review_window(
             fg=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
             cursor="hand2",
         )
-        label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=2)
+        label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         def select_me(_e=None) -> None:
             _focus_ph(f.placeholder, scroll_doc=True)
@@ -434,32 +439,24 @@ def run_review_window(
         label.bind("<Double-Button-1>", toggle_me)
         fr.bind("<Button-1>", select_me)
         fr.bind("<Double-Button-1>", toggle_me)
-        cb.bind(
-            "<Button-1>",
-            lambda _e: selected_ph.__setitem__(0, f.placeholder),
-        )
 
-        return {"frame": fr, "var": var, "label": label, "cb": cb}
+        return {"frame": fr, "label": label}
 
     def _refresh_list(
         select_ph: str | None = None, *, refresh_doc: bool = True
     ) -> None:
-        rebuild_lock[0] = True
-        try:
-            for child in list_inner.winfo_children():
-                child.destroy()
-            row_widgets.clear()
-            visible_ph.clear()
+        for child in list_inner.winfo_children():
+            child.destroy()
+        row_widgets.clear()
+        visible_ph.clear()
 
-            for f in _filtered_findings():
-                rw = _make_row(list_inner, f)
-                row_widgets[f.placeholder] = rw
-                visible_ph.append(f.placeholder)
+        for f in _filtered_findings():
+            rw = _make_row(list_inner, f)
+            row_widgets[f.placeholder] = rw
+            visible_ph.append(f.placeholder)
 
-            list_inner.update_idletasks()
-            list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-        finally:
-            rebuild_lock[0] = False
+        list_inner.update_idletasks()
+        list_canvas.configure(scrollregion=list_canvas.bbox("all"))
 
         _status()
         target = select_ph or selected_ph[0]
