@@ -20,8 +20,8 @@ class Anonymizer < Formula
   url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.3.2.tar.gz"
   sha256 "d66ab95d7fd83940604ab56b505f067a7b355ac24031bbfed602ccbf1cbfbb80"
   version "1.3.2"
-  # post_install: install spaCy models via host pip into formula venv
-  revision 1
+  # rev2: spaCy models via GitHub release wheels (not bare PyPI names)
+  revision 2
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 
@@ -60,18 +60,48 @@ class Anonymizer < Formula
                  "import spacy; spacy.load(#{model.inspect}); print('ok')"
   end
 
+  def spacy_model_wheel_url(model)
+    # spaCy models are NOT on PyPI as bare names (pip install en_core_web_lg → none).
+    # Resolve the release wheel via the installed spaCy compatibility table.
+    out = Utils.safe_popen_read(
+      venv_python, "-c",
+      <<~PY
+        import sys
+        model = #{model.inspect}
+        try:
+            from spacy.cli.download import get_compatibility, get_version
+            from spacy.about import __download_url__ as base
+            ver = get_version(model, get_compatibility())
+            print(f"{base}/{model}-{ver}/{model}-{ver}-py3-none-any.whl")
+        except Exception as e:
+            print(f"ERR:{e}", file=sys.stderr)
+            sys.exit(1)
+      PY
+    ).strip
+    return if out.empty? || out.start_with?("ERR:")
+
+    out
+  end
+
   def install_spacy_model(model)
     return true if model_loadable?(model)
 
-    # 1) pip install into formula venv (reliable under Homebrew --without-pip)
-    ohai "Installing spaCy model #{model} (pip → formula venv)"
-    if system host_python, "-m", "pip", "--python=#{venv_python}",
-             "install", "--upgrade", model
-      return true if model_loadable?(model)
+    url = spacy_model_wheel_url(model)
+    if url
+      ohai "Installing spaCy model #{model} from #{url}"
+      if system host_python, "-m", "pip", "--python=#{venv_python}",
+               "install", "--upgrade", url
+        return true if model_loadable?(model)
+      end
+      opoo "pip install from wheel URL failed for #{model}"
+    else
+      opoo "Could not resolve wheel URL for #{model} (spaCy compatibility lookup)"
     end
 
-    # 2) spaCy CLI (may fail if venv has no pip module)
-    ohai "Retry: python -m spacy download #{model}"
+    # Fallback: ensure pip exists in the venv, then spaCy CLI download
+    system host_python, "-m", "pip", "--python=#{venv_python}",
+           "install", "--upgrade", "pip", "setuptools", "wheel"
+    ohai "Retry: #{venv_python} -m spacy download #{model}"
     if system venv_python, "-m", "spacy", "download", model
       return true if model_loadable?(model)
     end
@@ -106,8 +136,10 @@ class Anonymizer < Formula
       Could not install spaCy models for: #{failures.join(", ")}.
       Retry:
         brew postinstall anonymizer
-      Or install into the formula venv manually:
-        #{host_python} -m pip --python=#{venv_python} install en_core_web_lg fi_core_news_lg
+      Or install wheels into the formula venv (example for spaCy 3.8.x):
+        #{host_python} -m pip --python=#{venv_python} install \\
+          https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl \\
+          https://github.com/explosion/spacy-models/releases/download/fi_core_news_lg-3.8.0/fi_core_news_lg-3.8.0-py3-none-any.whl
       Then: anonymize doctor
     EOS
   end
@@ -147,17 +179,21 @@ class Anonymizer < Formula
 
       spaCy models (default): en_core_web_lg, fi_core_news_lg
         (best NER quality; first install may take several minutes)
+        Models are installed from GitHub release wheels (not bare PyPI names).
 
       If doctor reports missing models after install:
+        brew update && brew reinstall anonymizer
+        # or:
         brew postinstall anonymizer
-      Manual install into this formula's Python:
-        #{host_python} -m pip --python=#{venv_python} install en_core_web_lg fi_core_news_lg
 
-      Smaller / faster models (optional):
-        #{host_python} -m pip --python=#{venv_python} install en_core_web_sm fi_core_news_sm
+      Manual install (spaCy 3.8.x wheels — adjust version if needed):
+        #{host_python} -m pip --python=#{venv_python} install \\
+          https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl \\
+          https://github.com/explosion/spacy-models/releases/download/fi_core_news_lg-3.8.0/fi_core_news_lg-3.8.0-py3-none-any.whl
 
-      Optional Swedish (not installed by default):
-        #{host_python} -m pip --python=#{venv_python} install sv_core_news_lg
+      Optional Swedish:
+        #{host_python} -m pip --python=#{venv_python} install \\
+          https://github.com/explosion/spacy-models/releases/download/sv_core_news_lg-3.8.0/sv_core_news_lg-3.8.0-py3-none-any.whl
         anonymize doc.pdf --lang sv
 
       Model guide: https://github.com/arcane-tl/anonymizer/blob/main/docs/models.md

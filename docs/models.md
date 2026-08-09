@@ -48,20 +48,28 @@ python -m spacy download en_core_web_lg
 python -m spacy download fi_core_news_lg
 ```
 
-**Homebrew** (formula venv is often created *without* pip — use host pip targeting the venv):
+**Homebrew** — do **not** use bare `pip install en_core_web_lg` (models are not on PyPI under that name). Prefer:
 
 ```bash
-# Preferred (same as brew post_install)
+# Re-run formula post_install (resolves correct GitHub wheels for your spaCy version)
+brew update
+brew reinstall anonymizer
+# or:
+brew postinstall anonymizer
+```
+
+Manual wheel install (example for **spaCy 3.8.x** — check `anonymize doctor` / spaCy version if this 404s):
+
+```bash
 HOST_PY="$(brew --prefix python@3.12)/libexec/bin/python"
 VENV_PY="$(brew --prefix anonymizer)/libexec/bin/python"
-"$HOST_PY" -m pip --python="$VENV_PY" install --upgrade en_core_web_lg fi_core_news_lg
+"$HOST_PY" -m pip --python="$VENV_PY" install --upgrade \
+  https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl \
+  https://github.com/explosion/spacy-models/releases/download/fi_core_news_lg-3.8.0/fi_core_news_lg-3.8.0-py3-none-any.whl
 
-# Optional smaller models or Swedish
-"$HOST_PY" -m pip --python="$VENV_PY" install en_core_web_sm fi_core_news_sm
-"$HOST_PY" -m pip --python="$VENV_PY" install sv_core_news_lg
-
-# If models failed during install:
-brew postinstall anonymizer
+# Optional Swedish
+"$HOST_PY" -m pip --python="$VENV_PY" install \
+  https://github.com/explosion/spacy-models/releases/download/sv_core_news_lg-3.8.0/sv_core_news_lg-3.8.0-py3-none-any.whl
 ```
 
 **Windows** (user install from `install.ps1`):
