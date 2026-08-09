@@ -122,7 +122,7 @@ def test_format_finding_row():
         source="auto",
         occurrence_count=1,
     )
-    assert format_finding_row(f) == "☑  [PERSON_1] — Tomi Lindroos"
+    assert format_finding_row(f) == "[x] [PERSON_1] — Tomi Lindroos"
 
     f2 = ReviewFinding(
         placeholder="[ORG_1]",
@@ -132,7 +132,7 @@ def test_format_finding_row():
         source="user",
         occurrence_count=3,
     )
-    assert format_finding_row(f2) == "☐+ [ORG_1] — Acme Ltd (×3)"
+    assert format_finding_row(f2) == "[ ] + [ORG_1] — Acme Ltd (×3)"
 
 
 def test_resolve_surface_in_blocks():

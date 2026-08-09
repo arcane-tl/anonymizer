@@ -18,21 +18,18 @@ except ImportError:  # pragma: no cover
 
 
 # --- Readable colour system (light theme, dark text always) ---
-# Document: soft fills + near-black text (never white-on-colour — unreadable on prose).
-# Keep clear = no document mark.
-_HL_REDACT_BG = "#F6E05E"  # clear but soft yellow — high contrast with dark text
-_HL_REDACT_FG = "#1A202C"  # near-black
-_HL_SELECTED_BG = "#90CDF4"  # light blue — selected finding still readable
+_HL_REDACT_BG = "#F6E05E"
+_HL_REDACT_FG = "#1A202C"
+_HL_SELECTED_BG = "#90CDF4"
 _HL_SELECTED_FG = "#1A202C"
 
-# Sidebar: system selection handles focus; we only dim “keep clear”.
-# User-added uses same ink as auto + “+” prefix (green fg fights list selection).
-_LIST_AUTO_FG = "#1A202C"
-_LIST_USER_FG = "#1A202C"
-_LIST_CLEAR_FG = "#718096"  # muted gray for ☐ rows
+_LIST_FG = "#1A202C"
+_LIST_CLEAR_FG = "#718096"
+_LIST_SEL_BG = "#E2E8F0"  # focused row background
 _CHROME_FG = "#4A5568"
 
 _LIST_SNIPPET_MAX = 48
+_SEARCH_PLACEHOLDER = "Search findings…"
 
 
 def display_available() -> bool:
@@ -48,21 +45,28 @@ def display_available() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    """Sidebar line: ``☑ [PERSON_1] — Tomi Lindroos`` (or with ×N / +)."""
-    check = "☑" if f.enabled else "☐"
-    origin = "+" if f.source == "user" else " "
+def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
+    """Label text without checkbox: ``[PERSON_1] — Tomi Lindroos`` (+ for user-added)."""
+    origin = "+ " if f.source == "user" else ""
     snippet = f.original.replace("\n", " ").replace("\r", "")
     if len(snippet) > max_original:
         snippet = snippet[: max_original - 1] + "…"
     count = f" (×{f.occurrence_count})" if f.occurrence_count > 1 else ""
-    return f"{check}{origin} {f.placeholder} — {snippet}{count}"
+    return f"{origin}{f.placeholder} — {snippet}{count}"
+
+
+# Back-compat alias for tests that imported the old name
+def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
+    """Include a simple [x]/[ ] prefix for pure-function tests."""
+    mark = "[x]" if f.enabled else "[ ]"
+    return f"{mark} {format_finding_label(f, max_original=max_original)}"
 
 
 def _shortcut_help_text() -> str:
     save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
     return (
-        "↑/↓ or j/k  move  ·  space  keep clear / redact  ·  "
+        "↑/↓ or j/k  move  ·  space / click checkbox  toggle redact  ·  "
+        "double-click row  toggle  ·  "
         f"a  add selection  ·  {save}  ·  esc  cancel"
     )
 
@@ -74,10 +78,7 @@ def run_review_window(
     on_allowlist: Callable[[str], None] | None = None,
     on_denylist: Callable[[str, str], None] | None = None,
 ) -> ReviewSession | None:
-    """Open the review UI. Returns session on Save, ``None`` on Cancel.
-
-    Blocks until the window is closed.
-    """
+    """Open the review UI. Returns session on Save, ``None`` on Cancel."""
     if tk is None:
         raise RuntimeError("tkinter is not available")
 
@@ -97,6 +98,8 @@ def run_review_window(
     preview_redacted = tk.BooleanVar(value=False)
     type_var = tk.StringVar(value="PERSON")
     status_var = tk.StringVar(value="")
+    # Prevent search placeholder from filtering
+    search_is_placeholder = [True]
 
     outer = ttk.Frame(root, padding=8)
     outer.pack(fill=tk.BOTH, expand=True)
@@ -118,54 +121,101 @@ def run_review_window(
     body = ttk.Panedwindow(outer, orient=tk.HORIZONTAL)
     body.pack(fill=tk.BOTH, expand=True)
 
-    side = ttk.Frame(body, width=360)
+    side = ttk.Frame(body, width=380)
     body.add(side, weight=1)
 
+    # One row: Findings | search (expand, placeholder) | Filter combobox
     filt_row = ttk.Frame(side)
-    filt_row.pack(fill=tk.X, pady=(0, 4))
-    ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT)
+    filt_row.pack(fill=tk.X, pady=(0, 6))
+    ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT, padx=(0, 8))
+
+    search_entry = ttk.Entry(filt_row)
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+    def _show_search_placeholder() -> None:
+        search_is_placeholder[0] = True
+        search_entry.delete(0, tk.END)
+        search_entry.insert(0, _SEARCH_PLACEHOLDER)
+        search_entry.configure(foreground="#A0AEC0")
+
+    def _hide_search_placeholder(_evt=None) -> None:
+        if search_is_placeholder[0]:
+            search_is_placeholder[0] = False
+            search_entry.delete(0, tk.END)
+            search_entry.configure(foreground=_LIST_FG)
+
+    def _on_search_focus_out(_evt=None) -> None:
+        if not search_entry.get().strip():
+            _show_search_placeholder()
+
+    def _search_query() -> str:
+        if search_is_placeholder[0]:
+            return ""
+        return search_entry.get().strip()
+
+    search_entry.bind("<FocusIn>", _hide_search_placeholder)
+    search_entry.bind("<FocusOut>", _on_search_focus_out)
+    search_entry.bind("<KeyRelease>", lambda _e: _on_search_changed())
+    _show_search_placeholder()
+
     type_values = ["All"] + sorted(
         {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
     )
+    ttk.Label(filt_row, text="Filter").pack(side=tk.LEFT, padx=(0, 4))
     type_combo = ttk.Combobox(
         filt_row,
         textvariable=filter_type,
         values=type_values,
-        width=12,
+        width=11,
         state="readonly",
     )
-    type_combo.pack(side=tk.RIGHT, padx=4)
-    ttk.Label(filt_row, text="Filter").pack(side=tk.RIGHT)
+    type_combo.pack(side=tk.LEFT)
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
-    search_entry = ttk.Entry(side, textvariable=search_var)
-    search_entry.pack(fill=tk.X, pady=(0, 4))
-    search_var.trace_add("write", lambda *_: _refresh_list())
-
-    list_frame = ttk.Frame(side)
-    list_frame.pack(fill=tk.BOTH, expand=True)
-    listbox = tk.Listbox(
-        list_frame,
-        font=("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10),
-        activestyle="dotbox",
-        exportselection=False,
-        width=42,
+    # Scrollable checklist (native checkboxes)
+    list_outer = ttk.Frame(side)
+    list_outer.pack(fill=tk.BOTH, expand=True)
+    list_canvas = tk.Canvas(list_outer, highlightthickness=0, borderwidth=0)
+    list_scroll = ttk.Scrollbar(
+        list_outer, orient=tk.VERTICAL, command=list_canvas.yview
     )
-    scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=listbox.yview)
-    listbox.configure(yscrollcommand=scroll.set)
-    listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    list_inner = ttk.Frame(list_canvas)
+    list_inner.bind(
+        "<Configure>",
+        lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
+    )
+    list_window = list_canvas.create_window((0, 0), window=list_inner, anchor=tk.NW)
+
+    def _on_canvas_configure(event) -> None:
+        list_canvas.itemconfigure(list_window, width=event.width)
+
+    list_canvas.bind("<Configure>", _on_canvas_configure)
+    list_canvas.configure(yscrollcommand=list_scroll.set)
+    list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _on_mousewheel(event) -> None:
+        # macOS: event.delta; Linux: Button-4/5 handled separately if needed
+        if sys.platform == "darwin":
+            list_canvas.yview_scroll(int(-1 * event.delta), "units")
+        else:
+            list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
     visible_ph: list[str] = []
+    # placeholder -> row widgets
+    row_widgets: dict[str, dict] = {}
+    # suppress checkbox command feedback loops during rebuild
+    rebuild_lock = [False]
 
-    side_btns = ttk.Frame(side)
-    side_btns.pack(fill=tk.X, pady=6)
-    ttk.Button(
-        side_btns, text="Keep clear", command=lambda: _set_selected(False)
-    ).pack(side=tk.LEFT, padx=(0, 4))
-    ttk.Button(
-        side_btns, text="Redact", command=lambda: _set_selected(True)
-    ).pack(side=tk.LEFT)
+    legend = ttk.Label(
+        side,
+        text="☑ Redact   ☐ Keep clear   ·  click checkbox or double-click row",
+        foreground=_CHROME_FG,
+        font=("Segoe UI", 9),
+    )
+    legend.pack(fill=tk.X, pady=(6, 0))
 
     doc_frame = ttk.Frame(body)
     body.add(doc_frame, weight=3)
@@ -173,9 +223,9 @@ def run_review_window(
     hint = ttk.Label(
         doc_frame,
         text=(
-            "Yellow = will be redacted. Light blue = selected in the list. "
-            "Keep clear removes the highlight (plain text). "
-            "Select missed text → Add redaction. “+” in the list = you added."
+            "Yellow = will be redacted. Light blue = selected finding. "
+            "Uncheck a finding to keep it clear. "
+            "Select missed text in the document → choose type → Add redaction."
         ),
         wraplength=720,
         foreground=_CHROME_FG,
@@ -256,7 +306,7 @@ def run_review_window(
         )
 
     def _filtered_findings() -> list[ReviewFinding]:
-        q = search_var.get().strip().casefold()
+        q = _search_query().casefold()
         ft = filter_type.get()
         out: list[ReviewFinding] = []
         for f in session.findings:
@@ -267,42 +317,140 @@ def run_review_window(
             out.append(f)
         return out
 
-    def _style_list_row(index: int, f: ReviewFinding) -> None:
-        """Only mute keep-clear rows; enabled rows use default system colours."""
-        if not f.enabled:
-            listbox.itemconfig(index, foreground=_LIST_CLEAR_FG)
-        # User-added is marked with “+” in the label, not a special ink colour.
+    def _on_search_changed() -> None:
+        if search_is_placeholder[0]:
+            return
+        search_var.set(search_entry.get())
+        _refresh_list()
+
+    def _style_row_selected(ph: str | None) -> None:
+        for key, rw in row_widgets.items():
+            bg = _LIST_SEL_BG if key == ph else ""
+            try:
+                rw["frame"].configure(style="")  # ttk frame has limited bg
+            except tk.TclError:
+                pass
+            # Use tk.Frame for selectable bg — we used ttk; set label fg only
+            f = session.get(key)
+            if f and not f.enabled:
+                rw["label"].configure(foreground=_LIST_CLEAR_FG)
+            else:
+                rw["label"].configure(foreground=_LIST_FG)
+            if key == ph:
+                rw["frame"].configure(relief=tk.SOLID, borderwidth=1)
+            else:
+                rw["frame"].configure(relief=tk.FLAT, borderwidth=0)
+
+    def _set_enabled(ph: str, enabled: bool, *, from_checkbox: bool = False) -> None:
+        session.set_enabled(ph, enabled)
+        selected_ph[0] = ph
+        if not from_checkbox and ph in row_widgets:
+            rebuild_lock[0] = True
+            try:
+                row_widgets[ph]["var"].set(enabled)
+            finally:
+                rebuild_lock[0] = False
+        _style_row_selected(ph)
+        _status()
+        _refresh_doc(scroll_to_selected=True)
+
+    def _toggle_ph(ph: str) -> None:
+        f = session.get(ph)
+        if not f:
+            return
+        _set_enabled(ph, not f.enabled)
+
+    def _focus_ph(ph: str, *, scroll_doc: bool = True) -> None:
+        if ph not in visible_ph:
+            return
+        selected_ph[0] = ph
+        _style_row_selected(ph)
+        # Ensure row visible in canvas
+        rw = row_widgets.get(ph)
+        if rw:
+            try:
+                list_canvas.update_idletasks()
+                y = rw["frame"].winfo_y()
+                h = list_inner.winfo_height() or 1
+                ch = list_canvas.winfo_height() or 1
+                # fraction so row is in view
+                list_canvas.yview_moveto(max(0.0, (y - 20) / max(h, 1)))
+            except tk.TclError:
+                pass
+        _refresh_doc(scroll_to_selected=scroll_doc)
+
+    def _make_row(parent: ttk.Frame, f: ReviewFinding) -> dict:
+        fr = ttk.Frame(parent)
+        fr.pack(fill=tk.X, pady=1, padx=2)
+
+        var = tk.BooleanVar(value=f.enabled)
+
+        def on_check() -> None:
+            if rebuild_lock[0]:
+                return
+            _set_enabled(f.placeholder, bool(var.get()), from_checkbox=True)
+
+        cb = ttk.Checkbutton(fr, variable=var, command=on_check)
+        cb.pack(side=tk.LEFT, padx=(4, 6))
+
+        label = ttk.Label(
+            fr,
+            text=format_finding_label(f),
+            anchor=tk.W,
+            font=("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10),
+            foreground=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
+            cursor="hand2",
+        )
+        label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=2)
+
+        def select_me(_e=None) -> None:
+            _focus_ph(f.placeholder, scroll_doc=True)
+
+        def toggle_me(_e=None) -> str:
+            _toggle_ph(f.placeholder)
+            return "break"
+
+        label.bind("<Button-1>", select_me)
+        label.bind("<Double-Button-1>", toggle_me)
+        fr.bind("<Button-1>", select_me)
+        fr.bind("<Double-Button-1>", toggle_me)
+        cb.bind(
+            "<Button-1>",
+            lambda _e: selected_ph.__setitem__(0, f.placeholder),
+        )
+
+        return {"frame": fr, "var": var, "label": label, "cb": cb}
 
     def _refresh_list(
         select_ph: str | None = None, *, refresh_doc: bool = True
     ) -> None:
-        listbox.delete(0, tk.END)
-        visible_ph.clear()
-        for f in _filtered_findings():
-            listbox.insert(tk.END, format_finding_row(f))
-            visible_ph.append(f.placeholder)
-            _style_list_row(tk.END, f)
+        rebuild_lock[0] = True
+        try:
+            for child in list_inner.winfo_children():
+                child.destroy()
+            row_widgets.clear()
+            visible_ph.clear()
+
+            for f in _filtered_findings():
+                rw = _make_row(list_inner, f)
+                row_widgets[f.placeholder] = rw
+                visible_ph.append(f.placeholder)
+
+            list_inner.update_idletasks()
+            list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+        finally:
+            rebuild_lock[0] = False
+
         _status()
         target = select_ph or selected_ph[0]
         if target and target in visible_ph:
-            idx = visible_ph.index(target)
-            listbox.selection_clear(0, tk.END)
-            listbox.selection_set(idx)
-            listbox.activate(idx)
-            listbox.see(idx)
             selected_ph[0] = target
         elif visible_ph:
-            # Filter hid the previous selection — focus first visible row
             selected_ph[0] = visible_ph[0]
-            listbox.selection_clear(0, tk.END)
-            listbox.selection_set(0)
-            listbox.activate(0)
-            listbox.see(0)
         else:
             selected_ph[0] = None
-            listbox.selection_clear(0, tk.END)
+        _style_row_selected(selected_ph[0])
         if refresh_doc:
-            # Document highlights follow the same filter as the list
             _refresh_doc(scroll_to_selected=False)
 
     def _paint_finding(f: ReviewFinding, tag: str) -> None:
@@ -327,7 +475,6 @@ def run_review_window(
         doc.configure(state=tk.NORMAL)
         doc.delete("1.0", tk.END)
         if preview_redacted.get():
-            # Preview always shows full apply (filter is review-UI only)
             blocks, _ = session.apply(style="placeholder")
             doc.insert("1.0", "\n\n".join(blocks))
             doc.configure(state=tk.DISABLED)
@@ -336,7 +483,6 @@ def run_review_window(
 
         doc.insert("1.0", "\n\n".join(session.original_blocks))
 
-        # Only highlight findings visible under current filter/search
         visible_set = set(visible_ph)
         ordered = sorted(
             (
@@ -377,63 +523,28 @@ def run_review_window(
         ph = selected_ph[0]
         if ph and ph in visible_ph:
             return visible_ph.index(ph)
-        sel = listbox.curselection()
-        if sel:
-            return max(0, min(int(sel[0]), len(visible_ph) - 1))
         return 0
 
     def _focus_index(idx: int, *, scroll_doc: bool = True) -> None:
         if not visible_ph:
             return
         idx = max(0, min(idx, len(visible_ph) - 1))
-        ph = visible_ph[idx]
-        selected_ph[0] = ph
-        listbox.selection_clear(0, tk.END)
-        listbox.selection_set(idx)
-        listbox.activate(idx)
-        listbox.see(idx)
-        _refresh_doc(scroll_to_selected=scroll_doc)
-
-    def _on_list_select(_evt=None) -> None:
-        sel = listbox.curselection()
-        if not sel:
-            return
-        idx = int(sel[0])
-        if idx < 0 or idx >= len(visible_ph):
-            return
-        selected_ph[0] = visible_ph[idx]
-        listbox.activate(idx)
-        _refresh_doc(scroll_to_selected=True)
-
-    def _set_selected(enabled: bool) -> None:
-        ph = selected_ph[0]
-        if not ph:
-            sel = listbox.curselection()
-            if sel and int(sel[0]) < len(visible_ph):
-                ph = visible_ph[int(sel[0])]
-        if not ph:
-            return
-        session.set_enabled(ph, enabled)
-        _refresh_list(select_ph=ph, refresh_doc=False)
-        _refresh_doc(scroll_to_selected=True)
+        _focus_ph(visible_ph[idx], scroll_doc=scroll_doc)
 
     def _is_text_input_focused() -> bool:
-        """True when keystrokes should go to search / combobox, not shortcuts."""
         w = root.focus_get()
         if w is None:
             return False
         if w is search_entry or w is type_menu or w is type_combo:
             return True
-        # ttk.Entry / Combobox internal children (macOS)
         try:
-            if w == search_entry or str(w).startswith(str(search_entry)):
+            if str(w).startswith(str(search_entry)):
                 return True
         except tk.TclError:
             pass
         cls = w.winfo_class()
         if cls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
             return True
-        # Walk parents — focus is often an inner entry of Combobox
         try:
             parent = w.master
             while parent is not None:
@@ -449,21 +560,15 @@ def run_review_window(
 
     def _toggle_selected(_evt=None) -> str | None:
         if _is_text_input_focused():
-            return None  # allow space in search box
+            return None
         ph = selected_ph[0]
-        if not ph:
-            sel = listbox.curselection()
-            if sel and int(sel[0]) < len(visible_ph):
-                ph = visible_ph[int(sel[0])]
         if ph:
-            session.toggle(ph)
-            _refresh_list(select_ph=ph, refresh_doc=False)
-            _refresh_doc(scroll_to_selected=True)
+            _toggle_ph(ph)
         return "break"
 
     def _add_selection(_evt=None) -> str | None:
         if _is_text_input_focused():
-            return None  # type “a” into search normally
+            return None
         try:
             sel_text = doc.get(tk.SEL_FIRST, tk.SEL_LAST)
         except tk.TclError:
@@ -493,13 +598,11 @@ def run_review_window(
             values=["All"]
             + sorted({f.type_label for f in session.findings} | {"PERSON", "ORG"})
         )
-        # Ensure filter still shows the new row
         if filter_type.get() not in {"All", finding.type_label}:
             filter_type.set("All")
         selected_ph[0] = finding.placeholder
         _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
-        listbox.focus_set()
         return "break"
 
     def _save() -> None:
@@ -537,48 +640,57 @@ def run_review_window(
         return "break"
 
     def _nav_if_not_typing(delta: int, event=None) -> str | None:
-        """j/k from root: ignore when typing in search or combobox."""
         if _is_text_input_focused():
             return None
         return _nav(delta)
 
-    def _shortcut_space(_evt=None) -> str | None:
-        return _toggle_selected(_evt)
-
-    def _shortcut_add(_evt=None) -> str | None:
-        return _add_selection(_evt)
-
-    listbox.bind("<<ListboxSelect>>", _on_list_select)
-    # Listbox owns arrow keys (break default so we don't double-step with root)
-    listbox.bind("<Down>", lambda _e: _nav(1))
-    listbox.bind("<Up>", lambda _e: _nav(-1))
-    listbox.bind("j", lambda _e: _nav(1))
-    listbox.bind("k", lambda _e: _nav(-1))
-    listbox.bind("<space>", _toggle_selected)
-    listbox.bind("a", _add_selection)
-    listbox.bind("A", _add_selection)
-
-    # Root shortcuts only when not typing in search / filter combobox
-    root.bind("<space>", _shortcut_space)
+    # Keyboard: bind on root when not typing; also on list canvas
+    root.bind("<space>", lambda e: _toggle_selected(e))
     root.bind("<Escape>", lambda _e: _cancel())
     root.bind(
         "<Command-Return>" if sys.platform == "darwin" else "<Control-Return>",
         lambda _e: _save(),
     )
-    # j/k / a from document focus etc.; never bind root Up/Down (fights Listbox)
     root.bind("j", lambda e: _nav_if_not_typing(1, e))
     root.bind("k", lambda e: _nav_if_not_typing(-1, e))
-    root.bind("a", _shortcut_add)
-    root.bind("A", _shortcut_add)
+    root.bind("<Down>", lambda e: _nav_if_not_typing(1, e))
+    root.bind("<Up>", lambda e: _nav_if_not_typing(-1, e))
+    root.bind("a", lambda e: _add_selection(e))
+    root.bind("A", lambda e: _add_selection(e))
 
-    root.protocol("WM_DELETE_WINDOW", _cancel)
+    list_canvas.bind("<Down>", lambda _e: _nav(1))
+    list_canvas.bind("<Up>", lambda _e: _nav(-1))
+    list_canvas.bind("j", lambda _e: _nav(1))
+    list_canvas.bind("k", lambda _e: _nav(-1))
+    list_canvas.bind("<space>", lambda e: _toggle_selected(e))
 
-    # Initial list build also paints doc for visible findings only
+    def _cleanup_bindings() -> None:
+        try:
+            list_canvas.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
+
+    def _on_close() -> None:
+        _cleanup_bindings()
+        _cancel()
+
+    def _on_save_wrap() -> None:
+        _cleanup_bindings()
+        _save()
+
+    # Rebind save buttons to cleanup mousewheel
+    for child in right.winfo_children():
+        child.destroy()
+    ttk.Button(right, text="Cancel", command=_on_close).pack(side=tk.LEFT, padx=(0, 8))
+    ttk.Button(right, text="Save output", command=_on_save_wrap).pack(side=tk.LEFT)
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+
     _refresh_list(refresh_doc=True)
     if visible_ph:
         _focus_index(0, scroll_doc=True)
 
-    listbox.focus_set()
+    list_canvas.focus_set()
     root.lift()
     try:
         root.attributes("-topmost", True)
@@ -587,4 +699,5 @@ def run_review_window(
         pass
 
     root.mainloop()
+    _cleanup_bindings()
     return result["session"]
