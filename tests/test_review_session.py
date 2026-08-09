@@ -13,7 +13,12 @@ from anonymizer.anonymize.review import (
     placeholder_type_label,
     resolve_surface_in_blocks,
 )
-from anonymizer.gui.review_window import ellipsize_text, format_finding_row
+from anonymizer.gui.review_window import (
+    _save_key_sequences,
+    _shortcut_help_text,
+    ellipsize_text,
+    format_finding_row,
+)
 
 
 def test_placeholder_type_helpers():
@@ -157,3 +162,36 @@ def test_add_redaction_rejects_missing_surface():
     session = ReviewSession.from_mapping(["Hello world"], {})
     with pytest.raises(ValueError, match="Could not find"):
         session.add_redaction("Nobody", "PERSON")
+
+
+def test_save_key_sequences_by_platform(monkeypatch):
+    """Windows must not use Super (invalid keysym → flash-close); mac uses Command."""
+    monkeypatch.setattr("anonymizer.gui.review_window.sys.platform", "win32")
+    win = _save_key_sequences()
+    assert win == ("<Control-s>", "<Control-S>")
+    assert not any("Super" in s for s in win)
+    assert "Ctrl+S" in _shortcut_help_text()
+
+    monkeypatch.setattr("anonymizer.gui.review_window.sys.platform", "darwin")
+    mac = _save_key_sequences()
+    assert mac == ("<Command-s>", "<Command-S>")
+    assert "⌘S" in _shortcut_help_text()
+
+    monkeypatch.setattr("anonymizer.gui.review_window.sys.platform", "linux")
+    linux = _save_key_sequences()
+    assert "<Control-s>" in linux
+
+
+def test_save_key_sequences_bindable_on_this_platform():
+    """Every sequence returned for this OS must be bindable without TclError."""
+    tk = pytest.importorskip("tkinter")
+    from anonymizer.gui.review_window import display_available
+
+    if not display_available():
+        pytest.skip("no display for tkinter bind smoke")
+    root = tk.Tk()
+    try:
+        for seq in _save_key_sequences():
+            root.bind(seq, lambda _e: None)
+    finally:
+        root.destroy()

@@ -132,9 +132,9 @@ def _shortcut_help_text() -> str:
     if sys.platform == "darwin":
         save = "⌘S save"
     elif sys.platform == "win32":
-        save = "Win+S save"
+        save = "Ctrl+S save"
     else:
-        save = "Super+S save"
+        save = "Ctrl+S save"
     return (
         "↑/↓ move  ·  space or double-click toggle  ·  "
         f"select text → a or right-click → choose type  ·  {save}  ·  esc cancel"
@@ -142,12 +142,25 @@ def _shortcut_help_text() -> str:
 
 
 def _save_key_sequences() -> tuple[str, ...]:
-    """Platform save chords: ⌘S (mac) / Win+S (Windows Super) — not Ctrl+S."""
+    """Platform save chords: ⌘S (mac) / Ctrl+S (Windows/Linux).
+
+    Windows Tcl/Tk has no ``Super`` keysym — binding ``<Super-s>`` raises
+    ``TclError`` after the window is built (flash-close). Prefer Control on
+    non-mac platforms; Super/Meta are optional extras where supported.
+    """
     if sys.platform == "darwin":
         return ("<Command-s>", "<Command-S>")
-    # Super = Windows key; Meta fallback for some Tk builds
-    return ("<Super-s>", "<Super-S>", "<Meta-s>", "<Meta-S>")
-
+    if sys.platform == "win32":
+        return ("<Control-s>", "<Control-S>")
+    # Linux / other: Control first; Super/Meta may work on X11
+    return (
+        "<Control-s>",
+        "<Control-S>",
+        "<Super-s>",
+        "<Super-S>",
+        "<Meta-s>",
+        "<Meta-S>",
+    )
 
 def _setup_review_scrollbar_styles(root: tk.Misc) -> None:
     """Make scrollbar troughs match the pane (no darker gutter strip).
@@ -996,12 +1009,18 @@ def run_review_window(
     }
 
     def _is_save_modifier(state: int) -> bool:
-        """True if platform save modifier is held (⌘ / Super-Win — not Control alone)."""
+        """True if platform save modifier is held (⌘ on mac / Ctrl elsewhere)."""
         if sys.platform == "darwin":
             # Command often Mod1 (0x8); some builds Mod2 (0x10)
             return bool(state & 0x8) or bool(state & 0x10)
-        # Super/Win ≈ Mod4 (0x40); Meta/Mod1 as fallback on some Tk builds
-        return bool(state & 0x40) or bool(state & 0x80) or bool(state & 0x8)
+        # Control (0x4) is the primary save modifier on Windows/Linux.
+        # Super/Meta kept as optional extras on some X11/Tk builds.
+        return (
+            bool(state & 0x4)
+            or bool(state & 0x40)
+            or bool(state & 0x80)
+            or bool(state & 0x8)
+        )
 
     def _doc_block_edit(event: tk.Event) -> str | None:
         """Prevent free editing; selection + shortcuts still work."""
@@ -1012,7 +1031,7 @@ def run_review_window(
         if event.keysym in _NAV_KEYS:
             return None
         state = int(getattr(event, "state", 0) or 0)
-        # Save: ⌘S / Win+S (must run even when Text has focus)
+        # Save: ⌘S / Ctrl+S (must run even when Text has focus)
         if event.keysym.lower() == "s" and _is_save_modifier(state):
             _on_save()
             return "break"
@@ -1556,9 +1575,13 @@ def run_review_window(
     root.bind("<space>", lambda e: _toggle_selected(e))
     root.bind("<Escape>", _on_escape)
     for _seq in _save_key_sequences():
-        root.bind(_seq, _on_save_key)
-        list_canvas.bind(_seq, _on_save_key)
-        doc.bind(_seq, _on_save_key)
+        # Skip unknown keysyms (e.g. Super on Windows Tcl/Tk) so one bad
+        # sequence cannot crash the window after it has already been built.
+        for _w in (root, list_canvas, doc):
+            try:
+                _w.bind(_seq, _on_save_key)
+            except tk.TclError:
+                pass
     root.bind("<Down>", lambda e: _nav_if_not_typing(1, e))
     root.bind("<Up>", lambda e: _nav_if_not_typing(-1, e))
     root.bind("a", lambda e: _add_selection(e))
