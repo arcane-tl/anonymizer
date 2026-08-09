@@ -1,7 +1,7 @@
 """Interactive document review window (Tk): accept, reject, add redactions.
 
-High-contrast light UI with explicit colours on tk widgets (avoids macOS
-dark-mode / ttk style fights that make text unreadable). Offline; no network.
+Dark theme, high contrast, rounded cards, screen-fitting window size.
+Explicit tk colours (no global ttk style hacks). Offline; no network.
 """
 
 from __future__ import annotations
@@ -18,29 +18,25 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# ── High-contrast light tokens (explicit; no reliance on system theme) ──
-_BG_APP = "#E8EAED"
-_BG_PANEL = "#FFFFFF"
-_BG_TOOLBAR = "#F1F3F4"
-_BG_SELECTED = "#D2E3FC"  # clear blue selection
-_BG_LIST = "#FFFFFF"
+# ── Dark theme tokens (plain names in comments) ───────────────────
+_BG_APP = "#0F1115"  # near-black charcoal — window
+_BG_PANEL = "#1A1D24"  # dark slate — cards
+_BG_ELEVATED = "#242830"  # raised charcoal — toolbars / footer
+_BG_SELECTED = "#1E3A5F"  # deep navy — selected list row
+_BORDER = "#3A3F4B"  # soft grey border
 
-_BORDER = "#DADCE0"
+_TEXT = "#F3F4F6"  # off-white primary
+_TEXT_MUTED = "#9CA3AF"  # muted silver
+_TEXT_ON_AMBER = "#FFFBEB"  # cream on amber
+_TEXT_ON_BLUE = "#EFF6FF"  # ice white on strong blue
 
-_TEXT = "#202124"  # near-black — always readable on white
-_TEXT_SECONDARY = "#5F6368"  # secondary / hints (still ≥ 4.5:1 on white)
-_TEXT_DISABLED = "#80868B"
+_ACCENT = "#60A5FA"  # sky blue accent
+_HL_REDACT_BG = "#CA8A04"  # warm amber
+_HL_SELECTED_BG = "#1D4ED8"  # strong blue
 
-_ACCENT = "#1A73E8"
-
-# Document highlights — strong enough to see, dark text on top
-_HL_REDACT_BG = "#FDD663"
-_HL_REDACT_FG = "#202124"
-_HL_SELECTED_BG = "#8AB4F8"
-_HL_SELECTED_FG = "#202124"
-
-_PAD = 14
-_GAP = 10
+_PAD = 16
+_GAP = 12
+_RADIUS = 14
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
 
@@ -52,7 +48,6 @@ _FONT_DOC = ("Menlo", 13) if sys.platform == "darwin" else ("Consolas", 12)
 
 
 def display_available() -> bool:
-    """True if a GUI display can be opened for Tk."""
     if tk is None:
         return False
     if sys.platform in {"darwin", "win32"}:
@@ -84,6 +79,76 @@ def _shortcut_help_text() -> str:
     )
 
 
+def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
+    """Draw a rounded rectangle on a canvas."""
+    r = max(0, min(r, (x2 - x1) // 2, (y2 - y1) // 2))
+    points = [
+        x1 + r, y1,
+        x2 - r, y1,
+        x2, y1,
+        x2, y1 + r,
+        x2, y2 - r,
+        x2, y2,
+        x2 - r, y2,
+        x1 + r, y2,
+        x1, y2,
+        x1, y2 - r,
+        x1, y1 + r,
+        x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **kwargs)
+
+
+class RoundedCard(tk.Frame):
+    """Dark card with rounded corners via background canvas."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        bg: str = _BG_PANEL,
+        chrome: str = _BG_APP,
+        radius: int = _RADIUS,
+        pad: int = 12,
+        **kwargs,
+    ) -> None:
+        # Outer frame matches app chrome so rounded corners “float”
+        super().__init__(parent, bg=chrome, **kwargs)
+        self._fill = bg
+        self._radius = radius
+        self._canvas = tk.Canvas(self, bg=chrome, highlightthickness=0, bd=0)
+        self._canvas.pack(fill=tk.BOTH, expand=True)
+        self.inner = tk.Frame(self._canvas, bg=bg)
+        self._win = self._canvas.create_window(pad, pad, window=self.inner, anchor=tk.NW)
+        self._shape = None
+        self._pad = pad
+        self._canvas.bind("<Configure>", self._redraw)
+
+    def _redraw(self, event=None) -> None:
+        w = self._canvas.winfo_width()
+        h = self._canvas.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self._canvas.delete("shape")
+        _round_rect(
+            self._canvas,
+            1,
+            1,
+            w - 2,
+            h - 2,
+            self._radius,
+            fill=self._fill,
+            outline=_BORDER,
+            width=1,
+            tags="shape",
+        )
+        self._canvas.tag_lower("shape")
+        iw = max(10, w - 2 * self._pad)
+        ih = max(10, h - 2 * self._pad)
+        self._canvas.itemconfigure(self._win, width=iw, height=ih)
+        self._canvas.coords(self._win, self._pad, self._pad)
+
+
 def run_review_window(
     session: ReviewSession,
     *,
@@ -102,12 +167,18 @@ def run_review_window(
     if file_label:
         title = f"Anonymizer review — {file_label}"
     root.title(title)
-    root.minsize(1000, 640)
-    root.geometry("1120x720")
     root.configure(bg=_BG_APP)
 
-    # Do NOT recolour global ttk styles (breaks macOS dark mode / aqua).
-    # Use default ttk for Combobox/Button only; paint everything else with tk.
+    # Fit on screen with room for Dock / menu bar
+    root.update_idletasks()
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    w = max(1100, min(1400, int(sw * 0.88)))
+    h = max(740, min(920, int(sh * 0.82)))
+    x = max(0, (sw - w) // 2)
+    y = max(28, (sh - h) // 2 - 24)
+    root.geometry(f"{w}x{h}+{x}+{y}")
+    root.minsize(1040, 720)
 
     selected_ph: list[str | None] = [None]
     filter_type = tk.StringVar(value="All")
@@ -119,14 +190,85 @@ def run_review_window(
     outer = tk.Frame(root, bg=_BG_APP, padx=_PAD, pady=_PAD)
     outer.pack(fill=tk.BOTH, expand=True)
 
-    # ── Header ────────────────────────────────────────────────────
+    # Pack order: footer BOTTOM first, then header TOP, then paned fills middle
+    # (so Cancel/Save/status never get swallowed by the split pane)
+
+    # ── Footer (fixed bottom — always visible) ────────────────────
+    foot_bar = tk.Frame(outer, bg=_BG_ELEVATED, highlightbackground=_BORDER, highlightthickness=1)
+    foot_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(_GAP, 0))
+    foot_inner = tk.Frame(foot_bar, bg=_BG_ELEVATED, padx=14, pady=10)
+    foot_inner.pack(fill=tk.X)
+
+    tk.Label(
+        foot_inner,
+        textvariable=status_var,
+        bg=_BG_ELEVATED,
+        fg=_TEXT,
+        font=_FONT_BOLD,
+        anchor=tk.W,
+    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    act = tk.Frame(foot_inner, bg=_BG_ELEVATED)
+    act.pack(side=tk.RIGHT)
+
+    def _chip_button(
+        parent: tk.Frame,
+        text: str,
+        command,
+        *,
+        primary: bool = False,
+    ) -> tk.Frame:
+        """Label-based button (macOS tk.Button ignores custom colours)."""
+        bg = _HL_SELECTED_BG if primary else _BG_PANEL
+        fg = _TEXT_ON_BLUE if primary else _TEXT
+        chip = tk.Frame(
+            parent,
+            bg=bg,
+            highlightbackground=_BORDER if not primary else _ACCENT,
+            highlightthickness=1,
+            cursor="hand2",
+        )
+        lbl = tk.Label(
+            chip,
+            text=text,
+            bg=bg,
+            fg=fg,
+            font=_FONT_BOLD if primary else _FONT,
+            padx=16,
+            pady=7,
+            cursor="hand2",
+        )
+        lbl.pack()
+
+        def _run(_e=None):
+            command()
+
+        chip.bind("<Button-1>", _run)
+        lbl.bind("<Button-1>", _run)
+        return chip
+
+    _chip_button(act, "Cancel", lambda: _on_close()).pack(side=tk.LEFT, padx=(0, 8))
+    _chip_button(act, "Save output", lambda: _on_save(), primary=True).pack(side=tk.LEFT)
+
+    shortcuts = tk.Label(
+        outer,
+        text=_shortcut_help_text(),
+        bg=_BG_APP,
+        fg=_TEXT_MUTED,
+        font=_FONT_SMALL,
+        anchor=tk.W,
+        justify=tk.LEFT,
+        wraplength=max(900, w - 40),
+    )
+    shortcuts.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+
+    # Header
     header = tk.Frame(outer, bg=_BG_APP)
-    header.pack(fill=tk.X, pady=(0, _GAP))
+    header.pack(side=tk.TOP, fill=tk.X, pady=(0, _GAP))
     tk.Label(
         header, text=title, bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
     ).pack(side=tk.LEFT)
-    # Preview: tk checkbutton with explicit colours
-    preview_cb = tk.Checkbutton(
+    tk.Checkbutton(
         header,
         text="Preview redacted",
         variable=preview_redacted,
@@ -135,56 +277,42 @@ def run_review_window(
         fg=_TEXT,
         activebackground=_BG_APP,
         activeforeground=_TEXT,
-        selectcolor=_BG_PANEL,
+        selectcolor=_BG_ELEVATED,
         font=_FONT,
         highlightthickness=0,
-    )
-    preview_cb.pack(side=tk.RIGHT)
+    ).pack(side=tk.RIGHT)
 
-    # ── Main split (tk paned for colour control) ───────────────────
-    paned = tk.PanedWindow(
-        outer,
-        orient=tk.HORIZONTAL,
-        bg=_BG_APP,
-        sashwidth=6,
-        sashrelief=tk.FLAT,
-        bd=0,
-    )
-    paned.pack(fill=tk.BOTH, expand=True)
+    # Main split: two equal-ish columns (pack is more reliable than PanedWindow+Canvas)
+    main = tk.Frame(outer, bg=_BG_APP)
+    main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     # ── Findings card ─────────────────────────────────────────────
-    side_card = tk.Frame(
-        paned, bg=_BG_PANEL, highlightbackground=_BORDER, highlightthickness=1, bd=0
-    )
-    paned.add(side_card, width=360, minsize=280, stretch="always")
-
-    side = tk.Frame(side_card, bg=_BG_PANEL, padx=12, pady=12)
-    side.pack(fill=tk.BOTH, expand=True)
+    findings_card = RoundedCard(main, bg=_BG_PANEL, radius=_RADIUS, pad=14)
+    findings_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+    side = findings_card.inner
 
     tk.Label(
         side, text="Findings", bg=_BG_PANEL, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
-    ).pack(fill=tk.X, pady=(0, 8))
+    ).pack(fill=tk.X, pady=(0, 10))
 
     tools = tk.Frame(side, bg=_BG_PANEL)
-    tools.pack(fill=tk.X, pady=(0, 8))
+    tools.pack(fill=tk.X, pady=(0, 10))
 
-    # Search: tk.Entry — same visual weight as comboboxes; explicit colours
     search_entry = tk.Entry(
         tools,
         font=_FONT,
-        bg=_BG_PANEL,
-        fg=_TEXT_SECONDARY,
+        bg=_BG_ELEVATED,
+        fg=_TEXT_MUTED,
         insertbackground=_TEXT,
-        relief=tk.SOLID,
-        borderwidth=1,
+        relief=tk.FLAT,
         highlightthickness=1,
         highlightbackground=_BORDER,
         highlightcolor=_ACCENT,
     )
-    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 8))
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 8))
 
     tk.Label(
-        tools, text="Filter", bg=_BG_PANEL, fg=_TEXT_SECONDARY, font=_FONT_SMALL
+        tools, text="Filter", bg=_BG_PANEL, fg=_TEXT_MUTED, font=_FONT_SMALL
     ).pack(side=tk.LEFT, padx=(0, 6))
 
     type_values = ["All"] + sorted(
@@ -198,20 +326,20 @@ def run_review_window(
         state="readonly",
         font=_FONT,
     )
-    type_combo.pack(side=tk.LEFT, ipady=2)
+    type_combo.pack(side=tk.LEFT, ipady=3)
     type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
         search_entry.delete(0, tk.END)
         search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        search_entry.configure(fg=_TEXT_SECONDARY, bg=_BG_PANEL)
+        search_entry.configure(fg=_TEXT_MUTED, bg=_BG_ELEVATED)
 
     def _begin_search_edit(_evt=None) -> None:
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
             search_entry.delete(0, tk.END)
-            search_entry.configure(fg=_TEXT, bg=_BG_PANEL)
+            search_entry.configure(fg=_TEXT, bg=_BG_ELEVATED)
 
     def _on_search_focus_out(_evt=None) -> None:
         if not search_entry.get().strip() or search_is_placeholder[0]:
@@ -232,25 +360,20 @@ def run_review_window(
     search_entry.bind("<KeyRelease>", _on_search_key)
     _show_search_placeholder()
 
-    # List
-    list_frame = tk.Frame(
-        side, bg=_BORDER, highlightthickness=0, bd=0
-    )
+    # List viewport
+    list_frame = tk.Frame(side, bg=_BG_PANEL)
     list_frame.pack(fill=tk.BOTH, expand=True)
-    list_outer = tk.Frame(list_frame, bg=_BG_LIST)
-    list_outer.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
-
     list_canvas = tk.Canvas(
-        list_outer,
+        list_frame,
         highlightthickness=0,
         borderwidth=0,
-        bg=_BG_LIST,
+        bg=_BG_PANEL,
         takefocus=True,
     )
     list_scroll = ttk.Scrollbar(
-        list_outer, orient=tk.VERTICAL, command=list_canvas.yview
+        list_frame, orient=tk.VERTICAL, command=list_canvas.yview
     )
-    list_inner = tk.Frame(list_canvas, bg=_BG_LIST)
+    list_inner = tk.Frame(list_canvas, bg=_BG_PANEL)
     list_inner.bind(
         "<Configure>",
         lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
@@ -285,13 +408,9 @@ def run_review_window(
     row_widgets: dict[str, dict] = {}
 
     # ── Document card ─────────────────────────────────────────────
-    doc_card = tk.Frame(
-        paned, bg=_BG_PANEL, highlightbackground=_BORDER, highlightthickness=1, bd=0
-    )
-    paned.add(doc_card, minsize=400, stretch="always")
-
-    doc_pad = tk.Frame(doc_card, bg=_BG_PANEL, padx=12, pady=12)
-    doc_pad.pack(fill=tk.BOTH, expand=True)
+    doc_card = RoundedCard(main, bg=_BG_PANEL, radius=_RADIUS, pad=14)
+    doc_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+    doc_pad = doc_card.inner
 
     doc_header = tk.Frame(doc_pad, bg=_BG_PANEL)
     doc_header.pack(fill=tk.X, pady=(0, 8))
@@ -300,59 +419,56 @@ def run_review_window(
     ).pack(side=tk.LEFT)
     tk.Label(
         doc_header,
-        text="Yellow = redact  ·  blue = focused  ·  space / double-click toggles",
+        text="Amber = redact  ·  blue = focused  ·  space / double-click toggles",
         bg=_BG_PANEL,
-        fg=_TEXT_SECONDARY,
+        fg=_TEXT_MUTED,
         font=_FONT_SMALL,
     ).pack(side=tk.RIGHT)
 
-    text_border = tk.Frame(doc_pad, bg=_BORDER)
-    text_border.pack(fill=tk.BOTH, expand=True)
-    text_inner = tk.Frame(text_border, bg=_BG_PANEL)
-    text_inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
-
+    text_wrap = tk.Frame(doc_pad, bg=_BG_PANEL)
+    text_wrap.pack(fill=tk.BOTH, expand=True)
     doc = tk.Text(
-        text_inner,
+        text_wrap,
         wrap=tk.WORD,
         font=_FONT_DOC,
         undo=False,
         padx=12,
         pady=12,
-        bg=_BG_PANEL,
+        bg=_BG_ELEVATED,
         fg=_TEXT,
         insertbackground=_TEXT,
         relief=tk.FLAT,
-        highlightthickness=0,
-        borderwidth=0,
+        highlightthickness=1,
+        highlightbackground=_BORDER,
+        highlightcolor=_ACCENT,
         selectbackground=_HL_SELECTED_BG,
-        selectforeground=_TEXT,
+        selectforeground=_TEXT_ON_BLUE,
+        borderwidth=0,
     )
-    doc_scroll = ttk.Scrollbar(text_inner, orient=tk.VERTICAL, command=doc.yview)
+    doc_scroll = ttk.Scrollbar(text_wrap, orient=tk.VERTICAL, command=doc.yview)
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
     doc.bind("<Button-1>", lambda _e: doc.focus_set())
 
     doc.tag_configure(
-        "hl_REDACT", background=_HL_REDACT_BG, foreground=_HL_REDACT_FG
+        "hl_REDACT", background=_HL_REDACT_BG, foreground=_TEXT_ON_AMBER
     )
     doc.tag_configure(
-        "hl_SELECTED", background=_HL_SELECTED_BG, foreground=_HL_SELECTED_FG
+        "hl_SELECTED", background=_HL_SELECTED_BG, foreground=_TEXT_ON_BLUE
     )
     doc.tag_raise("hl_SELECTED")
 
-    # Add toolbar
-    add_bar = tk.Frame(
-        doc_pad, bg=_BG_TOOLBAR, highlightbackground=_BORDER, highlightthickness=1
-    )
+    # Add bar (elevated)
+    add_bar = tk.Frame(doc_pad, bg=_BG_ELEVATED, highlightbackground=_BORDER, highlightthickness=1)
     add_bar.pack(fill=tk.X, pady=(10, 0))
-    add_inner = tk.Frame(add_bar, bg=_BG_TOOLBAR, padx=10, pady=8)
+    add_inner = tk.Frame(add_bar, bg=_BG_ELEVATED, padx=10, pady=8)
     add_inner.pack(fill=tk.X)
     tk.Label(
         add_inner,
         text="Add redaction",
-        bg=_BG_TOOLBAR,
-        fg=_TEXT_SECONDARY,
+        bg=_BG_ELEVATED,
+        fg=_TEXT_MUTED,
         font=_FONT_SMALL,
     ).pack(side=tk.LEFT, padx=(0, 8))
     type_menu = ttk.Combobox(
@@ -367,41 +483,6 @@ def run_review_window(
     ttk.Button(
         add_inner, text="Add selection", command=lambda: _add_selection()
     ).pack(side=tk.LEFT)
-
-    # ── Footer (same white panel language as cards) ───────────────
-    foot = tk.Frame(
-        outer, bg=_BG_PANEL, highlightbackground=_BORDER, highlightthickness=1
-    )
-    foot.pack(fill=tk.X, pady=(_GAP, 0))
-    foot_inner = tk.Frame(foot, bg=_BG_PANEL, padx=12, pady=10)
-    foot_inner.pack(fill=tk.X)
-
-    tk.Label(
-        foot_inner,
-        textvariable=status_var,
-        bg=_BG_PANEL,
-        fg=_TEXT,
-        font=_FONT_BOLD,
-        anchor=tk.W,
-    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    act = tk.Frame(foot_inner, bg=_BG_PANEL)
-    act.pack(side=tk.RIGHT)
-    ttk.Button(act, text="Cancel", command=lambda: _on_close()).pack(
-        side=tk.LEFT, padx=(0, 8)
-    )
-    ttk.Button(act, text="Save output", command=lambda: _on_save()).pack(side=tk.LEFT)
-
-    tk.Label(
-        outer,
-        text=_shortcut_help_text(),
-        bg=_BG_APP,
-        fg=_TEXT_SECONDARY,
-        font=_FONT_SMALL,
-        anchor=tk.W,
-        justify=tk.LEFT,
-        wraplength=1060,
-    ).pack(fill=tk.X, pady=(8, 0))
 
     # ── Logic ─────────────────────────────────────────────────────
     def _status() -> None:
@@ -430,8 +511,8 @@ def run_review_window(
         for key, rw in row_widgets.items():
             f = session.get(key)
             selected = key == ph
-            bg = _BG_SELECTED if selected else _BG_LIST
-            fg = _TEXT_DISABLED if (f and not f.enabled) else _TEXT
+            bg = _BG_SELECTED if selected else _BG_PANEL
+            fg = _TEXT_MUTED if (f and not f.enabled) else _TEXT
             try:
                 rw["frame"].configure(bg=bg)
                 rw["label"].configure(bg=bg, fg=fg)
@@ -463,16 +544,16 @@ def run_review_window(
             try:
                 list_canvas.update_idletasks()
                 y = rw["frame"].winfo_y()
-                h = list_inner.winfo_height() or 1
-                list_canvas.yview_moveto(max(0.0, (y - 20) / max(h, 1)))
+                hgt = list_inner.winfo_height() or 1
+                list_canvas.yview_moveto(max(0.0, (y - 20) / max(hgt, 1)))
             except tk.TclError:
                 pass
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
-        fr = tk.Frame(parent, bg=_BG_LIST)
-        fr.pack(fill=tk.X)
-        accent = tk.Frame(fr, bg=_BG_LIST, width=4)
+        fr = tk.Frame(parent, bg=_BG_PANEL)
+        fr.pack(fill=tk.X, pady=1)
+        accent = tk.Frame(fr, bg=_BG_PANEL, width=4)
         accent.pack(side=tk.LEFT, fill=tk.Y)
         accent.pack_propagate(False)
 
@@ -482,8 +563,8 @@ def run_review_window(
             anchor=tk.W,
             justify=tk.LEFT,
             font=_FONT_MONO,
-            bg=_BG_LIST,
-            fg=_TEXT if f.enabled else _TEXT_DISABLED,
+            bg=_BG_PANEL,
+            fg=_TEXT if f.enabled else _TEXT_MUTED,
             cursor="hand2",
             padx=10,
             pady=8,
@@ -516,8 +597,8 @@ def run_review_window(
             tk.Label(
                 list_inner,
                 text="No findings match this filter.",
-                bg=_BG_LIST,
-                fg=_TEXT_SECONDARY,
+                bg=_BG_PANEL,
+                fg=_TEXT_MUTED,
                 font=_FONT_SMALL,
                 pady=28,
             ).pack(fill=tk.X)
