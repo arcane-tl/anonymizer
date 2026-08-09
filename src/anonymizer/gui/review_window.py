@@ -218,37 +218,72 @@ def run_review_window(
         *,
         primary: bool = False,
     ) -> tk.Frame:
-        """Label-based button (macOS tk.Button ignores custom colours)."""
+        """Rounded pill button drawn on canvas (macOS-safe colours)."""
         bg = _HL_SELECTED_BG if primary else _BG_PANEL
         fg = _TEXT_ON_BLUE if primary else _TEXT
-        chip = tk.Frame(
-            parent,
-            bg=bg,
-            highlightbackground=_BORDER if not primary else _ACCENT,
-            highlightthickness=1,
+        outline = _ACCENT if primary else _BORDER
+        font = _FONT_BOLD if primary else _FONT
+        pad_x, pad_y, radius = 18, 8, 10
+
+        # Measure text for canvas size
+        probe = tk.Label(parent, text=text, font=font)
+        probe.update_idletasks()
+        tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
+        probe.destroy()
+        bw = tw + pad_x * 2
+        bh = max(th + pad_y * 2, 34)
+
+        wrap = tk.Frame(parent, bg=_BG_ELEVATED, width=bw, height=bh, cursor="hand2")
+        wrap.pack_propagate(False)
+        canvas = tk.Canvas(
+            wrap,
+            width=bw,
+            height=bh,
+            bg=_BG_ELEVATED,
+            highlightthickness=0,
+            bd=0,
             cursor="hand2",
         )
-        lbl = tk.Label(
-            chip,
-            text=text,
-            bg=bg,
-            fg=fg,
-            font=_FONT_BOLD if primary else _FONT,
-            padx=16,
-            pady=7,
-            cursor="hand2",
-        )
-        lbl.pack()
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        def _paint(*, hover: bool = False) -> None:
+            fill = _ACCENT if (primary and hover) else bg
+            if not primary and hover:
+                fill = _BORDER
+            canvas.delete("all")
+            _round_rect(
+                canvas,
+                1,
+                1,
+                bw - 2,
+                bh - 2,
+                radius,
+                fill=fill,
+                outline=outline,
+                width=1,
+            )
+            canvas.create_text(
+                bw // 2,
+                bh // 2,
+                text=text,
+                fill=fg,
+                font=font,
+            )
 
         def _run(_e=None):
             command()
 
-        chip.bind("<Button-1>", _run)
-        lbl.bind("<Button-1>", _run)
-        return chip
+        _paint()
+        canvas.bind("<Button-1>", _run)
+        canvas.bind("<Enter>", lambda _e: _paint(hover=True))
+        canvas.bind("<Leave>", lambda _e: _paint(hover=False))
+        wrap.bind("<Button-1>", _run)
+        return wrap
 
     _chip_button(act, "Cancel", lambda: _on_close()).pack(side=tk.LEFT, padx=(0, 8))
-    _chip_button(act, "Save output", lambda: _on_save(), primary=True).pack(side=tk.LEFT)
+    _chip_button(act, "Save output", lambda: _on_save(), primary=True).pack(
+        side=tk.LEFT
+    )
 
     shortcuts = tk.Label(
         outer,
