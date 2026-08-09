@@ -10,11 +10,16 @@ block_cipher = None
 root = Path(SPECPATH).resolve().parents[1]
 gui_entry = root / "src" / "anonymizer" / "gui" / "__main__.py"
 
+_gui_assets = root / "src" / "anonymizer" / "gui" / "assets"
+_datas = []
+if _gui_assets.is_dir():
+    _datas.append((str(_gui_assets), "anonymizer/gui/assets"))
+
 a = Analysis(
     [str(gui_entry)],
     pathex=[str(root / "src")],
     binaries=[],
-    datas=[],
+    datas=_datas,
     hiddenimports=[
         "anonymizer",
         "anonymizer.gui",
