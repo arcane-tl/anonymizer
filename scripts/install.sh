@@ -284,13 +284,19 @@ setup_python_env() {
     pip install -e "${INSTALL_ROOT}"
   fi
 
-  info "Installing spaCy models (en+fi, size=$MODELS; may take several minutes)…"
-  if python -m anonymizer.install_models --langs en,fi --size "$MODELS" --fallback; then
-    ok "spaCy EN+FI models ready"
+  if python -m anonymizer.install_models --check --langs en,fi >/dev/null 2>&1; then
+    ok "spaCy models already ready (EN+FI); skipping download"
   else
-    warn "spaCy model install incomplete — CLI is installed; retry:"
-    warn "  $venv/bin/python -m anonymizer.install_models --langs en,fi --size $MODELS --fallback"
-    warn "  See docs/models.md"
+    info "Installing spaCy models (en+fi, size=$MODELS; may take several minutes)…"
+    if python -m anonymizer.install_models --langs en,fi --size "$MODELS" --fallback; then
+      ok "spaCy EN+FI models ready"
+    elif python -m anonymizer.install_models --check --langs en,fi >/dev/null 2>&1; then
+      ok "spaCy models ready"
+    else
+      warn "Required spaCy models not loadable yet (CLI is installed)."
+      warn "  Fix (not a reinstall): $venv/bin/python -m anonymizer.install_models --langs en,fi --size $MODELS --fallback"
+      warn "  Then: anonymize doctor  ·  docs/models.md"
+    fi
   fi
   ok "Python package installed"
 }

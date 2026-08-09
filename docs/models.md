@@ -5,11 +5,13 @@ Anonymizer uses **spaCy** for neural NER (people, organisations, places).
 
 ## Default install (quality-first)
 
-Installers download **English + Finnish large** models by default via:
+Installers ensure **English + Finnish large** models via:
 
 ```bash
 python -m anonymizer.install_models --langs en,fi --size lg --fallback
 ```
+
+**Precheck:** if models already load, installers **skip download** and print that they are ready (safe to re-run; no reinstall needed). If `anonymize doctor` is green for EN+FI, you can ignore older brew “model install” warnings.
 
 | Language | Default package |
 |----------|-----------------|

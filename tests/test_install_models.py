@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
+from anonymizer import install_models as im
 from anonymizer.install_models import (
     candidates_for,
     check_langs,
+    first_loadable,
     model_loadable,
     model_name,
+    precheck_langs,
     resolve_wheel_url,
 )
 
@@ -57,3 +62,32 @@ def test_check_langs_returns_bools() -> None:
     status = check_langs(["en"], "lg")
     assert "en" in status
     assert isinstance(status["en"], bool)
+
+
+def test_precheck_short_circuits_without_pip() -> None:
+    """If models already load, install_langs must not call pip."""
+    with (
+        patch.object(im, "model_loadable", side_effect=lambda n: n.endswith("_lg")),
+        patch.object(im, "pip_install") as pip,
+    ):
+        result = im.install_langs(["en", "fi"], "lg", fallback=True, quiet=True)
+    assert result["en"] == "en_core_web_lg"
+    assert result["fi"] == "fi_core_news_lg"
+    pip.assert_not_called()
+
+
+def test_precheck_langs_maps_packages() -> None:
+    with patch.object(
+        im, "model_loadable", side_effect=lambda n: n == "en_core_web_sm"
+    ):
+        pre = precheck_langs(["en"], "lg", fallback=True)
+        assert pre["en"] == "en_core_web_sm"
+        assert first_loadable("en", "lg", fallback=True) == "en_core_web_sm"
+
+
+def test_main_exits_zero_when_precheck_ok(capsys: pytest.CaptureFixture[str]) -> None:
+    with patch.object(im, "model_loadable", return_value=True):
+        code = im.main(["--langs", "en,fi", "--size", "lg"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "already ready" in out

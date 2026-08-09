@@ -194,14 +194,20 @@ function Setup-PythonEnv {
         Pop-Location
     }
 
-    Write-Info "Installing spaCy models (en+fi, size=$Models; may take several minutes)..."
-    & $pyVenv -m anonymizer.install_models --langs en,fi --size $Models --fallback
+    & $pyVenv -m anonymizer.install_models --check --langs en,fi 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Ok "spaCy EN+FI models ready"
+        Write-Ok "spaCy models already ready (EN+FI); skipping download"
     } else {
-        Write-Warn "spaCy model install incomplete — CLI is installed; retry:"
-        Write-Warn "  & `"$pyVenv`" -m anonymizer.install_models --langs en,fi --size $Models --fallback"
-        Write-Warn "  See docs/models.md"
+        Write-Info "Installing spaCy models (en+fi, size=$Models; may take several minutes)..."
+        & $pyVenv -m anonymizer.install_models --langs en,fi --size $Models --fallback
+        & $pyVenv -m anonymizer.install_models --check --langs en,fi 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "spaCy EN+FI models ready"
+        } else {
+            Write-Warn "Required spaCy models not loadable yet (CLI is installed)."
+            Write-Warn "  Fix (not a reinstall): & `"$pyVenv`" -m anonymizer.install_models --langs en,fi --size $Models --fallback"
+            Write-Warn "  Then: anonymize doctor  ·  docs/models.md"
+        }
     }
     Write-Ok "Python package installed"
 }

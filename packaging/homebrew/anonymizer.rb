@@ -17,7 +17,7 @@ class Anonymizer < Formula
   # update-for-release.sh rewrites url / sha256 / version at publish time.
   url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.3.3.tar.gz"
   sha256 "59074ce201c64c923fd8c359c28d74124ffd7e3bdf48d73413157bde0a28d3e5"
-  version "1.3.3"
+  version "1.3.4"
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 
@@ -53,23 +53,33 @@ class Anonymizer < Formula
     bin.install_symlink libexec/"bin/anonymize"
   end
 
+  def models_ok?
+    # Same criterion as doctor: can we load EN+FI models?
+    quiet_system venv_python, "-m", "anonymizer.install_models",
+                 "--check", "--langs", "en,fi"
+  end
+
   def post_install
-    # Single professional path: shared Python module (GitHub wheels + verify load).
-    # Soft-fail: CLI remains usable; doctor tells how to retry models.
+    # 1) Preemptive: if models already load, do not download or warn
+    if models_ok?
+      ohai "spaCy models already ready (EN+FI); skipping download"
+      return
+    end
+
+    # 2) Install only when needed (module also prechecks per language)
     ohai "Installing spaCy models (English + Finnish, large; may take several minutes)"
-    if system venv_python, "-m", "anonymizer.install_models",
-             "--langs", "en,fi", "--size", "lg", "--fallback"
-      ohai "spaCy models ready (run: anonymize doctor)"
+    system venv_python, "-m", "anonymizer.install_models",
+           "--langs", "en,fi", "--size", "lg", "--fallback"
+
+    # 3) Trust final load check — not install exit code alone
+    if models_ok?
+      ohai "spaCy models ready"
     else
       opoo <<~EOS
-        spaCy model install did not fully succeed (network or disk).
-        The CLI is installed. To finish model setup:
+        Required spaCy models are not loadable yet.
+        One-time fix (not a full reinstall of the app or cask):
 
           #{venv_python} -m anonymizer.install_models --langs en,fi --size lg --fallback
-
-        or:
-
-          brew postinstall anonymizer
 
         Then: anonymize doctor
       EOS
@@ -96,10 +106,9 @@ class Anonymizer < Formula
         Installed during post_install via:
           #{venv_python} -m anonymizer.install_models --langs en,fi --size lg --fallback
 
-      If models are missing:
-        brew postinstall anonymizer
-        # or:
+      If doctor reports missing EN/FI models (not a full reinstall):
         #{venv_python} -m anonymizer.install_models --langs en,fi --size lg --fallback
+        # or: brew postinstall anonymizer
 
       Smaller models:
         #{venv_python} -m anonymizer.install_models --langs en,fi --size sm
