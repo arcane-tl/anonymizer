@@ -405,35 +405,38 @@ def run_review_window(
     funnel.create_line(*_f(8, 11), *_f(10, 11), fill=_TEXT_MUTED, width=max(1.5, s))
     funnel.create_line(*_f(9, 11), *_f(9, 16), fill=_TEXT_MUTED, width=max(1.5, s))
 
-    # --- Filter combobox in same-height rounded shell ---
-    filter_shell, filter_canvas = _rounded_shell(tools, expand=False)
+    # --- Filter: one seamless rounded field (value + chevron), no nested combobox ---
     type_values = ["All"] + sorted(
         {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
     )
-    type_combo = ttk.Combobox(
+    filter_shell, filter_canvas = _rounded_shell(tools, expand=False)
+    filter_label = tk.Label(
         filter_canvas,
         textvariable=filter_type,
-        values=type_values,
-        width=11,
-        state="readonly",
         font=_FONT,
+        bg=_BG_ELEVATED,
+        fg=_TEXT,
+        anchor=tk.W,
+        cursor="hand2",
     )
-    filter_win = filter_canvas.create_window(
-        8, _CTRL_H // 2, window=type_combo, anchor=tk.W
+    filter_lbl_win = filter_canvas.create_window(
+        12, _CTRL_H // 2, window=filter_label, anchor=tk.W
     )
-    type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
 
     def _redraw_filter_shell(_event=None) -> None:
-        # Size shell to combobox + padding; force combobox vertical center
+        # Measure label text width for shell size; draw value + chevron as one field
         filter_canvas.update_idletasks()
-        tw = max(type_combo.winfo_reqwidth(), 90)
-        pad_x = 8
-        shell_w = tw + pad_x * 2
-        filter_shell.configure(width=shell_w, height=_CTRL_H)
+        sample = filter_type.get() or "All"
+        # Approximate text width
+        tw = max(filter_label.winfo_reqwidth(), 56)
+        pad_l, pad_r = 12, 28  # room for chevron
+        shell_w = tw + pad_l + pad_r
+        filter_shell.configure(width=max(shell_w, 88), height=_CTRL_H)
         cw = max(filter_canvas.winfo_width(), shell_w)
         ch = _CTRL_H
         filter_canvas.configure(height=ch)
         filter_canvas.delete("shell")
+        filter_canvas.delete("chevron")
         _round_rect(
             filter_canvas,
             1,
@@ -447,10 +450,53 @@ def run_review_window(
             tags="shell",
         )
         filter_canvas.tag_lower("shell")
-        filter_canvas.itemconfigure(filter_win, width=tw)
-        filter_canvas.coords(filter_win, pad_x, ch // 2)
+        # Value text
+        filter_canvas.itemconfigure(filter_lbl_win, width=max(40, cw - pad_l - pad_r))
+        filter_canvas.coords(filter_lbl_win, pad_l, ch // 2)
+        # Chevron (part of same field, not a second control)
+        cx, cy = cw - 14, ch // 2
+        filter_canvas.create_polygon(
+            cx - 5,
+            cy - 2,
+            cx + 5,
+            cy - 2,
+            cx,
+            cy + 4,
+            fill=_TEXT_MUTED,
+            outline=_TEXT_MUTED,
+            tags="chevron",
+        )
 
     filter_canvas.bind("<Configure>", _redraw_filter_shell)
+
+    def _set_filter(value: str) -> None:
+        filter_type.set(value)
+        _redraw_filter_shell()
+        _refresh_list()
+
+    def _open_filter_menu(_event=None) -> None:
+        menu = tk.Menu(
+            root,
+            tearoff=0,
+            bg=_BG_ELEVATED,
+            fg=_TEXT,
+            activebackground=_BG_SELECTED,
+            activeforeground=_TEXT,
+            bd=0,
+            font=_FONT,
+        )
+        for val in type_values:
+            menu.add_command(label=val, command=lambda v=val: _set_filter(v))
+        # Pop below the filter field
+        try:
+            x = filter_shell.winfo_rootx()
+            y = filter_shell.winfo_rooty() + filter_shell.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    for w in (filter_canvas, filter_label):
+        w.bind("<Button-1>", _open_filter_menu)
 
     def _layout_toolbar() -> None:
         _redraw_search_shell()
@@ -835,7 +881,7 @@ def run_review_window(
         w = root.focus_get()
         if w is None:
             return False
-        if w is search_entry or w is type_menu or w is type_combo:
+        if w is search_entry or w is type_menu or w is filter_label:
             return True
         try:
             if str(w).startswith(str(search_entry)):
@@ -848,7 +894,7 @@ def run_review_window(
         try:
             parent = w.master
             while parent is not None:
-                if parent in (search_entry, type_menu, type_combo):
+                if parent in (search_entry, type_menu, filter_label, filter_canvas):
                     return True
                 pcls = parent.winfo_class()
                 if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
@@ -893,12 +939,14 @@ def run_review_window(
         except ValueError as exc:
             messagebox.showerror("Add redaction", str(exc), parent=root)
             return "break"
-        type_combo.configure(
-            values=["All"]
-            + sorted({f.type_label for f in session.findings} | {"PERSON", "ORG"})
+        # Refresh filter menu choices when new types appear
+        nonlocal type_values
+        type_values = ["All"] + sorted(
+            {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
         )
         if filter_type.get() not in {"All", finding.type_label}:
             filter_type.set("All")
+            _redraw_filter_shell()
         selected_ph[0] = finding.placeholder
         _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
