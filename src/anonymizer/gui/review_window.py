@@ -9,7 +9,13 @@ from __future__ import annotations
 import sys
 from typing import Callable
 
-from anonymizer.anonymize.review import REVIEW_ADD_TYPES, ReviewFinding, ReviewSession
+from anonymizer.anonymize.review import (
+    REVIEW_ADD_TYPES,
+    ReviewFinding,
+    ReviewSession,
+    count_surface_occurrences,
+    resolve_surface_in_blocks,
+)
 
 try:
     import tkinter as tk
@@ -74,8 +80,8 @@ def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MA
 def _shortcut_help_text() -> str:
     save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
     return (
-        "↑/↓ or j/k move  ·  spacebar or double-click toggle  ·  "
-        f"a add selection  ·  {save}  ·  esc cancel"
+        "↑/↓ or j/k move  ·  space or double-click toggle  ·  "
+        f"select text then a or right-click to redact  ·  {save}  ·  esc cancel"
     )
 
 
@@ -183,9 +189,9 @@ def run_review_window(
     selected_ph: list[str | None] = [None]
     filter_type = tk.StringVar(value="All")
     preview_redacted = tk.BooleanVar(value=False)
-    type_var = tk.StringVar(value="PERSON")
     status_var = tk.StringVar(value="")
     search_is_placeholder = [True]
+    last_add_type: list[str] = ["PERSON"]  # sticky last-used entity type
 
     outer = tk.Frame(root, bg=_BG_APP, padx=_PAD, pady=_PAD)
     outer.pack(fill=tk.BOTH, expand=True)
@@ -584,7 +590,7 @@ def run_review_window(
     ).pack(side=tk.LEFT)
     tk.Label(
         doc_header,
-        text="Amber = redact  ·  blue = focused  ·  space / double-click toggles",
+        text="Amber = redact  ·  blue = focused  ·  a / right-click adds",
         bg=_BG_PANEL,
         fg=_TEXT_MUTED,
         font=_FONT_SMALL,
@@ -615,6 +621,9 @@ def run_review_window(
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
     doc.bind("<Button-1>", lambda _e: doc.focus_set())
+    # Right-click selection → type menu (add redaction)
+    doc.bind("<Button-3>", lambda e: _open_add_type_menu(e))
+    doc.bind("<Control-Button-1>", lambda e: _open_add_type_menu(e))  # mac trackpad alt
 
     doc.tag_configure(
         "hl_REDACT", background=_HL_REDACT_BG, foreground=_TEXT_ON_AMBER
@@ -624,38 +633,28 @@ def run_review_window(
     )
     doc.tag_raise("hl_SELECTED")
 
-    # Add bar (elevated)
-    add_bar = tk.Frame(doc_pad, bg=_BG_ELEVATED, highlightbackground=_BORDER, highlightthickness=1)
-    add_bar.pack(fill=tk.X, pady=(10, 0))
-    add_inner = tk.Frame(add_bar, bg=_BG_ELEVATED, padx=10, pady=8)
-    add_inner.pack(fill=tk.X)
+    # One-line hint (no combobox bar)
     tk.Label(
-        add_inner,
-        text="Add redaction",
-        bg=_BG_ELEVATED,
+        doc_pad,
+        text="Select text → press a or right-click → choose type to redact",
+        bg=_BG_PANEL,
         fg=_TEXT_MUTED,
         font=_FONT_SMALL,
-    ).pack(side=tk.LEFT, padx=(0, 8))
-    type_menu = ttk.Combobox(
-        add_inner,
-        textvariable=type_var,
-        values=[t[0] for t in REVIEW_ADD_TYPES],
-        width=16,
-        state="readonly",
-        font=_FONT,
-    )
-    type_menu.pack(side=tk.LEFT, padx=(0, 8), ipady=2)
-    ttk.Button(
-        add_inner, text="Add selection", command=lambda: _add_selection()
-    ).pack(side=tk.LEFT)
+        anchor=tk.W,
+    ).pack(fill=tk.X, pady=(10, 0))
 
     # ── Logic ─────────────────────────────────────────────────────
-    def _status() -> None:
+    def _status(extra: str = "") -> None:
         c = session.summary_counts()
-        status_var.set(
+        base = (
             f"{c['redact']} redacting  ·  {c['keep_clear']} keep clear  ·  "
             f"{c['user_added']} added  ·  {c['total']} total"
         )
+        status_var.set(f"{base}  ·  {extra}" if extra else base)
+
+    def _status_flash(msg: str, ms: int = 4000) -> None:
+        _status(msg)
+        root.after(ms, lambda: _status())
 
     def _filtered_findings() -> list[ReviewFinding]:
         q = _search_query().casefold()
@@ -868,7 +867,7 @@ def run_review_window(
         w = root.focus_get()
         if w is None:
             return False
-        if w is search_entry or w is type_menu:
+        if w is search_entry:
             return True
         try:
             if str(w).startswith(str(search_entry)):
@@ -881,7 +880,7 @@ def run_review_window(
         try:
             parent = w.master
             while parent is not None:
-                if parent in (search_entry, type_menu):
+                if parent is search_entry:
                     return True
                 pcls = parent.winfo_class()
                 if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
@@ -899,34 +898,20 @@ def run_review_window(
             _toggle_ph(ph)
         return "break"
 
-    def _add_selection(_evt=None) -> str | None:
-        if _is_text_input_focused():
-            return None
+    def _current_selection() -> str | None:
         try:
-            sel_text = doc.get(tk.SEL_FIRST, tk.SEL_LAST)
+            sel = doc.get(tk.SEL_FIRST, tk.SEL_LAST)
         except tk.TclError:
-            messagebox.showinfo(
-                "Add redaction",
-                "Select text in the document first, then click Add selection.",
-                parent=root,
-            )
-            return "break"
-        if not sel_text.strip():
-            return "break"
-        if len(sel_text.strip()) > 500:
-            if not messagebox.askyesno(
-                "Long selection",
-                f"Redact {len(sel_text.strip())} characters as one finding?",
-                parent=root,
-            ):
-                return "break"
-        ent = type_var.get().strip() or "CUSTOM"
+            return None
+        return sel if sel and sel.strip() else None
+
+    def _commit_add(sel_text: str, entity_type: str) -> None:
         try:
-            finding = session.add_redaction(sel_text, ent)
+            finding = session.add_redaction(sel_text, entity_type)
         except ValueError as exc:
-            messagebox.showerror("Add redaction", str(exc), parent=root)
-            return "break"
-        # Refresh filter menu choices when new types appear
+            _status_flash(str(exc))
+            return
+        last_add_type[0] = entity_type
         nonlocal type_values
         type_values = ["All"] + sorted(
             {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
@@ -937,7 +922,98 @@ def run_review_window(
         _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
         _focus_list()
+        n = finding.occurrence_count
+        extra = f"Added {finding.placeholder}" + (
+            f" (×{n} places)" if n > 1 else ""
+        )
+        if finding.source == "auto" or (
+            finding.source == "user" and n >= 1
+        ):
+            # Re-enable existing shows as user still; keep simple message
+            pass
+        _status_flash(extra)
+
+    def _open_add_type_menu(event=None) -> str | None:
+        """Type pick list for current document selection (a / right-click)."""
+        if _is_text_input_focused():
+            return None
+        sel_text = _current_selection()
+        if not sel_text:
+            _status_flash("Select text in the document, then press a or right-click")
+            return "break"
+
+        surface = resolve_surface_in_blocks(session.original_blocks, sel_text)
+        if not surface:
+            _status_flash(
+                "Could not match that selection in the document — try a continuous phrase"
+            )
+            return "break"
+
+        n = count_surface_occurrences(session.original_blocks, surface)
+        preview = surface.replace("\n", " ")
+        if len(preview) > 40:
+            preview = preview[:39] + "…"
+
+        menu = tk.Menu(
+            root,
+            tearoff=0,
+            bg=_BG_ELEVATED,
+            fg=_TEXT,
+            activebackground=_BG_SELECTED,
+            activeforeground=_TEXT,
+            bd=0,
+            font=_FONT,
+        )
+        # Disabled header lines (preview + occurrence count)
+        menu.add_command(
+            label=f"Redact “{preview}”",
+            state=tk.DISABLED,
+        )
+        if n > 1:
+            menu.add_command(
+                label=f"  also matches ×{n} places in this document",
+                state=tk.DISABLED,
+            )
+        menu.add_separator()
+
+        # Last-used type first
+        last = last_add_type[0]
+        last_label = next(
+            (lab for code, lab in REVIEW_ADD_TYPES if code == last), last
+        )
+        menu.add_command(
+            label=f"★  {last_label}  (last used)",
+            command=lambda: _commit_add(sel_text, last),
+        )
+        menu.add_separator()
+
+        for code, lab in REVIEW_ADD_TYPES:
+            if code == last:
+                continue  # already shown at top
+            menu.add_command(
+                label=f"    {lab}",
+                command=lambda c=code: _commit_add(sel_text, c),
+            )
+
+        try:
+            if event is not None and getattr(event, "x_root", None):
+                menu.tk_popup(int(event.x_root), int(event.y_root))
+            else:
+                # Keyboard: near bottom of document pane
+                menu.tk_popup(
+                    doc.winfo_rootx() + 40,
+                    doc.winfo_rooty() + min(120, doc.winfo_height() // 3),
+                )
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
         return "break"
+
+    def _add_selection(_evt=None) -> str | None:
+        """Keyboard shortcut a — open type menu for selection."""
+        return _open_add_type_menu(_evt)
 
     def _save() -> None:
         kept = session.keep_clear_placeholders()
