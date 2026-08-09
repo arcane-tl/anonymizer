@@ -17,26 +17,33 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# --- Readable colour system ---
-# Document: soft fills + dark text (never dark-on-dark).
+# --- Colours ---
 _HL_REDACT_BG = "#F6E05E"
 _HL_REDACT_FG = "#1A202C"
-_HL_SELECTED_BG = "#63B3ED"  # stronger light blue for focus
+_HL_SELECTED_BG = "#63B3ED"
 _HL_SELECTED_FG = "#1A202C"
 
-# Sidebar list: white text on dark background (selected = slightly lighter)
 _LIST_FG = "#FFFFFF"
-_LIST_CLEAR_FG = "#A0AEC0"  # muted white-grey for keep-clear
+_LIST_CLEAR_FG = "#A0AEC0"
 _LIST_ROW_BG = "#1A202C"
-_LIST_SEL_BG = "#2B6CB0"  # selected finding — blue, still white text
+_LIST_SEL_BG = "#2B6CB0"
 _LIST_SEL_FG = "#FFFFFF"
 
-_CHROME_FG = "#4A5568"  # hints, shortcuts, search placeholder
-_STATUS_BG = "#2D3748"  # totals strip
+_CHROME_FG = "#4A5568"  # instructions + search placeholder
+_STATUS_BG = "#2D3748"
 _STATUS_FG = "#FFFFFF"
+_FIELD_LIGHT_BG = "#FFFFFF"
+_FIELD_DARK_BG = "#1A202C"
 
+_PAD = 12
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
+
+_UI_FONT = ("Segoe UI", 11) if sys.platform != "darwin" else ("SF Pro Text", 12)
+_UI_FONT_BOLD = ("Segoe UI", 12, "bold") if sys.platform != "darwin" else ("SF Pro Text", 13, "bold")
+_UI_FONT_SMALL = ("Segoe UI", 10) if sys.platform != "darwin" else ("SF Pro Text", 11)
+_MONO = ("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10)
+_MONO_DOC = ("Menlo", 12) if sys.platform == "darwin" else ("Consolas", 11)
 
 
 def display_available() -> bool:
@@ -53,7 +60,7 @@ def display_available() -> bool:
 
 
 def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    """Label text without checkbox: ``[PERSON_1] — Tomi Lindroos`` (+ for user-added)."""
+    """Label: ``[PERSON_1] — Tomi Lindroos`` (+ for user-added)."""
     origin = "+ " if f.source == "user" else ""
     snippet = f.original.replace("\n", " ").replace("\r", "")
     if len(snippet) > max_original:
@@ -62,9 +69,8 @@ def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_
     return f"{origin}{f.placeholder} — {snippet}{count}"
 
 
-# Back-compat alias for tests that imported the old name
 def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    """Include a simple [x]/[ ] prefix for pure-function tests."""
+    """Test helper: include simple enabled mark."""
     mark = "[x]" if f.enabled else "[ ]"
     return f"{mark} {format_finding_label(f, max_original=max_original)}"
 
@@ -72,8 +78,8 @@ def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MA
 def _shortcut_help_text() -> str:
     save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
     return (
-        "↑/↓ or j/k  move  ·  spacebar or double-click row  toggle redact / keep clear  ·  "
-        f"a  add selection  ·  {save}  ·  esc  cancel"
+        "↑/↓ or j/k  move   ·   spacebar or double-click  toggle redact / keep clear   ·   "
+        f"a  add selection   ·   {save}   ·   esc  cancel"
     )
 
 
@@ -95,28 +101,36 @@ def run_review_window(
     if file_label:
         title = f"Anonymizer review — {file_label}"
     root.title(title)
-    root.minsize(960, 580)
-    root.geometry("1120x700")
+    root.minsize(1000, 640)
+    root.geometry("1120x720")
+
+    # ttk style — shared padding so Entry-like and Combobox align
+    style = ttk.Style(root)
+    try:
+        style.configure("Review.TEntry", padding=(8, 5))
+        style.configure("Review.TCombobox", padding=(6, 5))
+        style.configure("Review.TButton", padding=(10, 5))
+        style.configure("Review.Header.TLabel", font=_UI_FONT_BOLD)
+        style.configure("Review.Section.TLabel", font=_UI_FONT_BOLD)
+        style.configure("Review.Hint.TLabel", foreground=_CHROME_FG, font=_UI_FONT_SMALL)
+    except tk.TclError:
+        pass
 
     selected_ph: list[str | None] = [None]
     filter_type = tk.StringVar(value="All")
-    search_var = tk.StringVar(value="")
     preview_redacted = tk.BooleanVar(value=False)
     type_var = tk.StringVar(value="PERSON")
     status_var = tk.StringVar(value="")
-    # Prevent search placeholder from filtering
     search_is_placeholder = [True]
 
-    outer = ttk.Frame(root, padding=8)
+    # ── Outer layout ──────────────────────────────────────────────
+    outer = ttk.Frame(root, padding=_PAD)
     outer.pack(fill=tk.BOTH, expand=True)
 
+    # Header
     header = ttk.Frame(outer)
-    header.pack(fill=tk.X, pady=(0, 6))
-    ttk.Label(
-        header,
-        text=title,
-        font=("Segoe UI", 13, "bold"),
-    ).pack(side=tk.LEFT)
+    header.pack(fill=tk.X, pady=(0, 10))
+    ttk.Label(header, text=title, style="Review.Header.TLabel").pack(side=tk.LEFT)
     ttk.Checkbutton(
         header,
         text="Preview redacted",
@@ -124,38 +138,86 @@ def run_review_window(
         command=lambda: _refresh_doc(),
     ).pack(side=tk.RIGHT)
 
+    # Body: sidebar | document
     body = ttk.Panedwindow(outer, orient=tk.HORIZONTAL)
     body.pack(fill=tk.BOTH, expand=True)
 
-    side = ttk.Frame(body, width=380)
+    # ── Sidebar: Findings ─────────────────────────────────────────
+    side = ttk.Frame(body, width=360, padding=(0, 0, 8, 0))
     body.add(side, weight=1)
 
-    # One row: Findings | search (expand, placeholder) | Filter combobox
-    filt_row = ttk.Frame(side)
-    filt_row.pack(fill=tk.X, pady=(0, 6))
-    ttk.Label(filt_row, text="Findings").pack(side=tk.LEFT, padx=(0, 8))
+    ttk.Label(side, text="Findings", style="Review.Section.TLabel").pack(
+        anchor=tk.W, pady=(0, 6)
+    )
 
-    # Same layout as original ttk.Entry row; only colours change for typing vs placeholder
-    search_entry = tk.Entry(filt_row)
-    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+    # Toolbar: search + filter (matching ttk family)
+    tools = ttk.Frame(side)
+    tools.pack(fill=tk.X, pady=(0, 8))
+
+    # Use tk.Entry sized like combobox via shared vertical padding frame,
+    # so we can set white-on-black when typing (ttk fieldbackground is unreliable).
+    search_wrap = ttk.Frame(tools)
+    search_wrap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+    search_entry = tk.Entry(
+        search_wrap,
+        font=_UI_FONT,
+        relief=tk.FLAT,
+        highlightthickness=1,
+        highlightbackground="#CBD5E0",
+        highlightcolor="#A0AEC0",
+    )
+    search_entry.pack(fill=tk.X, ipady=4)
+
+    filter_wrap = ttk.Frame(tools)
+    filter_wrap.pack(side=tk.LEFT)
+    ttk.Label(filter_wrap, text="Filter", style="Review.Hint.TLabel").pack(
+        side=tk.LEFT, padx=(0, 6)
+    )
+    type_values = ["All"] + sorted(
+        {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
+    )
+    type_combo = ttk.Combobox(
+        filter_wrap,
+        textvariable=filter_type,
+        values=type_values,
+        width=12,
+        state="readonly",
+        style="Review.TCombobox",
+        font=_UI_FONT,
+    )
+    type_combo.pack(side=tk.LEFT)
+    type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
+
+    def _apply_search_placeholder_style() -> None:
+        search_entry.configure(
+            fg=_CHROME_FG,
+            bg=_FIELD_LIGHT_BG,
+            insertbackground=_CHROME_FG,
+            highlightbackground="#CBD5E0",
+        )
+
+    def _apply_search_typing_style() -> None:
+        search_entry.configure(
+            fg="#FFFFFF",
+            bg=_FIELD_DARK_BG,
+            insertbackground="#FFFFFF",
+            highlightbackground="#4A5568",
+        )
 
     def _show_search_placeholder() -> None:
         search_is_placeholder[0] = True
         search_entry.delete(0, tk.END)
         search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        # Placeholder: chrome grey (unchanged intent)
-        search_entry.configure(fg=_CHROME_FG, bg="#FFFFFF", insertbackground=_CHROME_FG)
+        _apply_search_placeholder_style()
 
-    def _hide_search_placeholder(_evt=None) -> None:
+    def _begin_search_edit(_evt=None) -> None:
         if search_is_placeholder[0]:
             search_is_placeholder[0] = False
             search_entry.delete(0, tk.END)
-            # Typed text only: white on black (no layout change)
-            search_entry.configure(
-                fg="#FFFFFF", bg="#1A202C", insertbackground="#FFFFFF"
-            )
+            _apply_search_typing_style()
 
     def _on_search_focus_out(_evt=None) -> None:
+        # Do not re-grab focus; only restore placeholder when empty
         if not search_entry.get().strip() or search_is_placeholder[0]:
             _show_search_placeholder()
 
@@ -164,30 +226,20 @@ def run_review_window(
             return ""
         return search_entry.get().strip()
 
-    search_entry.bind("<FocusIn>", _hide_search_placeholder)
+    search_entry.bind("<FocusIn>", _begin_search_edit)
     search_entry.bind("<FocusOut>", _on_search_focus_out)
     search_entry.bind("<KeyRelease>", lambda _e: _on_search_changed())
     _show_search_placeholder()
 
-    type_values = ["All"] + sorted(
-        {f.type_label for f in session.findings} | {"PERSON", "ORG", "CUSTOM"}
-    )
-    ttk.Label(filt_row, text="Filter").pack(side=tk.LEFT, padx=(0, 4))
-    type_combo = ttk.Combobox(
-        filt_row,
-        textvariable=filter_type,
-        values=type_values,
-        width=11,
-        state="readonly",
-    )
-    type_combo.pack(side=tk.LEFT)
-    type_combo.bind("<<ComboboxSelected>>", lambda _e: _refresh_list())
-
-    # Scrollable findings list (no checkboxes — spacebar / double-click toggle)
+    # Findings list
     list_outer = ttk.Frame(side)
     list_outer.pack(fill=tk.BOTH, expand=True)
     list_canvas = tk.Canvas(
-        list_outer, highlightthickness=0, borderwidth=0, bg=_LIST_ROW_BG
+        list_outer,
+        highlightthickness=0,
+        borderwidth=0,
+        bg=_LIST_ROW_BG,
+        takefocus=True,
     )
     list_scroll = ttk.Scrollbar(
         list_outer, orient=tk.VERTICAL, command=list_canvas.yview
@@ -213,115 +265,129 @@ def run_review_window(
         else:
             list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    def _bind_wheel(_e=None) -> None:
+        list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    def _unbind_wheel(_e=None) -> None:
+        list_canvas.unbind_all("<MouseWheel>")
+
+    list_canvas.bind("<Enter>", _bind_wheel)
+    list_canvas.bind("<Leave>", _unbind_wheel)
+    list_canvas.bind("<Button-1>", lambda _e: _focus_list())
 
     visible_ph: list[str] = []
     row_widgets: dict[str, dict] = {}
 
-    legend = ttk.Label(
-        side,
-        text="spacebar or double-click row  ·  toggle redact / keep clear",
-        foreground=_CHROME_FG,
-        font=("Segoe UI", 9),
-    )
-    legend.pack(fill=tk.X, pady=(6, 0))
-
-    doc_frame = ttk.Frame(body)
+    # ── Document pane ─────────────────────────────────────────────
+    doc_frame = ttk.Frame(body, padding=(8, 0, 0, 0))
     body.add(doc_frame, weight=3)
 
-    hint = ttk.Label(
-        doc_frame,
-        text=(
-            "Yellow = will be redacted. Blue highlight = focused finding in the list. "
-            "Press spacebar or double-click a row to toggle redact / keep clear. "
-            "Select missed text → choose type → Add redaction."
-        ),
-        wraplength=720,
-        foreground=_CHROME_FG,
+    doc_header = ttk.Frame(doc_frame)
+    doc_header.pack(fill=tk.X, pady=(0, 6))
+    ttk.Label(doc_header, text="Document", style="Review.Section.TLabel").pack(
+        side=tk.LEFT
     )
-    hint.pack(anchor=tk.W, pady=(0, 4))
+    ttk.Label(
+        doc_header,
+        text="Yellow = redact  ·  blue = focused  ·  space / double-click toggles",
+        style="Review.Hint.TLabel",
+    ).pack(side=tk.RIGHT)
 
     text_wrap = ttk.Frame(doc_frame)
     text_wrap.pack(fill=tk.BOTH, expand=True)
     doc = tk.Text(
         text_wrap,
         wrap=tk.WORD,
-        font=("Menlo", 12) if sys.platform == "darwin" else ("Consolas", 11),
+        font=_MONO_DOC,
         undo=False,
-        padx=8,
-        pady=8,
+        padx=10,
+        pady=10,
+        bg="#FAFAFA",
+        fg="#1A202C",
+        insertbackground="#1A202C",
+        relief=tk.FLAT,
+        highlightthickness=1,
+        highlightbackground="#E2E8F0",
     )
     doc_scroll = ttk.Scrollbar(text_wrap, orient=tk.VERTICAL, command=doc.yview)
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    doc.bind("<Button-1>", lambda _e: doc.focus_set())
 
     doc.tag_configure(
-        "hl_REDACT",
-        background=_HL_REDACT_BG,
-        foreground=_HL_REDACT_FG,
+        "hl_REDACT", background=_HL_REDACT_BG, foreground=_HL_REDACT_FG
     )
     doc.tag_configure(
-        "hl_SELECTED",
-        background=_HL_SELECTED_BG,
-        foreground=_HL_SELECTED_FG,
+        "hl_SELECTED", background=_HL_SELECTED_BG, foreground=_HL_SELECTED_FG
     )
     doc.tag_raise("hl_SELECTED")
 
-    add_row = ttk.Frame(doc_frame)
-    add_row.pack(fill=tk.X, pady=6)
-    ttk.Label(add_row, text="Redact selection as").pack(side=tk.LEFT)
+    # Add-redaction toolbar (under document)
+    add_bar = ttk.Frame(doc_frame)
+    add_bar.pack(fill=tk.X, pady=(10, 0))
+    ttk.Label(add_bar, text="Add redaction", style="Review.Hint.TLabel").pack(
+        side=tk.LEFT, padx=(0, 8)
+    )
     type_menu = ttk.Combobox(
-        add_row,
+        add_bar,
         textvariable=type_var,
         values=[t[0] for t in REVIEW_ADD_TYPES],
         width=16,
         state="readonly",
+        style="Review.TCombobox",
+        font=_UI_FONT,
     )
-    type_menu.pack(side=tk.LEFT, padx=6)
-    ttk.Button(add_row, text="Add redaction", command=lambda: _add_selection()).pack(
-        side=tk.LEFT, padx=4
-    )
+    type_menu.pack(side=tk.LEFT, padx=(0, 8))
+    ttk.Button(
+        add_bar,
+        text="Add selection",
+        style="Review.TButton",
+        command=lambda: _add_selection(),
+    ).pack(side=tk.LEFT)
 
+    # ── Footer: status + actions + one shortcuts line ─────────────
     foot = ttk.Frame(outer)
-    foot.pack(fill=tk.X, pady=(8, 0))
+    foot.pack(fill=tk.X, pady=(12, 0))
 
-    # Totals report: dark bar + white text so counts stand out
-    status_bar = tk.Frame(foot, bg=_STATUS_BG, padx=10, pady=6)
+    status_bar = tk.Frame(foot, bg=_STATUS_BG)
     status_bar.pack(fill=tk.X)
-    status_label = tk.Label(
-        status_bar,
+    status_inner = tk.Frame(status_bar, bg=_STATUS_BG, padx=12, pady=8)
+    status_inner.pack(fill=tk.X)
+    tk.Label(
+        status_inner,
         textvariable=status_var,
         bg=_STATUS_BG,
         fg=_STATUS_FG,
-        font=("Segoe UI", 11, "bold"),
+        font=_UI_FONT_BOLD,
         anchor=tk.W,
-    )
-    status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    actions_row = ttk.Frame(foot)
-    actions_row.pack(fill=tk.X, pady=(8, 0))
-    right = ttk.Frame(actions_row)
-    right.pack(side=tk.RIGHT)
-    ttk.Button(right, text="Cancel", command=lambda: _cancel()).pack(
+    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+    # Actions on the same dark bar for a single footer band
+    act = tk.Frame(status_inner, bg=_STATUS_BG)
+    act.pack(side=tk.RIGHT)
+    # ttk buttons on dark bar — pack in nested ttk frame for native look
+    act_ttk = ttk.Frame(act)
+    act_ttk.pack()
+    ttk.Button(act_ttk, text="Cancel", command=lambda: _on_close()).pack(
         side=tk.LEFT, padx=(0, 8)
     )
-    ttk.Button(right, text="Save output", command=lambda: _save()).pack(side=tk.LEFT)
+    ttk.Button(
+        act_ttk, text="Save output", style="Review.TButton", command=lambda: _on_save()
+    ).pack(side=tk.LEFT)
 
-    shortcuts_row = ttk.Frame(foot)
-    shortcuts_row.pack(fill=tk.X, pady=(6, 0))
     ttk.Label(
-        shortcuts_row,
+        foot,
         text=_shortcut_help_text(),
-        foreground=_CHROME_FG,
+        style="Review.Hint.TLabel",
         wraplength=1080,
-    ).pack(anchor=tk.W)
+    ).pack(anchor=tk.W, pady=(8, 0))
 
+    # ── Logic ─────────────────────────────────────────────────────
     def _status() -> None:
         c = session.summary_counts()
         status_var.set(
-            f"{c['redact']} redacting · {c['keep_clear']} keep clear · "
-            f"{c['user_added']} added by you · {c['total']} total"
+            f"{c['redact']} redacting  ·  {c['keep_clear']} keep clear  ·  "
+            f"{c['user_added']} added  ·  {c['total']} total"
         )
 
     def _filtered_findings() -> list[ReviewFinding]:
@@ -339,11 +405,12 @@ def run_review_window(
     def _on_search_changed() -> None:
         if search_is_placeholder[0]:
             return
-        search_var.set(search_entry.get())
         _refresh_list()
 
+    def _focus_list() -> None:
+        list_canvas.focus_set()
+
     def _style_row_selected(ph: str | None) -> None:
-        """Selected list row: light blue bg + dark text (never black-on-black)."""
         for key, rw in row_widgets.items():
             f = session.get(key)
             selected = key == ph
@@ -362,16 +429,6 @@ def run_review_window(
         session.set_enabled(ph, enabled)
         selected_ph[0] = ph
         _style_row_selected(ph)
-        # Update label style for keep-clear vs redacting
-        rw = row_widgets.get(ph)
-        if rw:
-            f = session.get(ph)
-            if f and not f.enabled:
-                rw["label"].configure(fg=_LIST_CLEAR_FG)
-            elif ph == selected_ph[0]:
-                rw["label"].configure(fg=_LIST_SEL_FG)
-            else:
-                rw["label"].configure(fg=_LIST_FG)
         _status()
         _refresh_doc(scroll_to_selected=True)
 
@@ -385,31 +442,29 @@ def run_review_window(
         if ph not in visible_ph:
             return
         selected_ph[0] = ph
+        _focus_list()  # leave search box so keyboard works on list
         _style_row_selected(ph)
-        # Ensure row visible in canvas
         rw = row_widgets.get(ph)
         if rw:
             try:
                 list_canvas.update_idletasks()
                 y = rw["frame"].winfo_y()
                 h = list_inner.winfo_height() or 1
-                ch = list_canvas.winfo_height() or 1
-                # fraction so row is in view
                 list_canvas.yview_moveto(max(0.0, (y - 20) / max(h, 1)))
             except tk.TclError:
                 pass
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
-        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=6, pady=4)
-        fr.pack(fill=tk.X, pady=1, padx=2)
+        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=8, pady=5)
+        fr.pack(fill=tk.X, pady=0)
 
         label = tk.Label(
             fr,
             text=format_finding_label(f),
             anchor=tk.W,
             justify=tk.LEFT,
-            font=("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10),
+            font=_MONO,
             bg=_LIST_ROW_BG,
             fg=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
             cursor="hand2",
@@ -423,10 +478,9 @@ def run_review_window(
             _toggle_ph(f.placeholder)
             return "break"
 
-        label.bind("<Button-1>", select_me)
-        label.bind("<Double-Button-1>", toggle_me)
-        fr.bind("<Button-1>", select_me)
-        fr.bind("<Double-Button-1>", toggle_me)
+        for w in (label, fr):
+            w.bind("<Button-1>", select_me)
+            w.bind("<Double-Button-1>", toggle_me)
 
         return {"frame": fr, "label": label}
 
@@ -468,7 +522,6 @@ def run_review_window(
                 break
             end = f"{idx}+{len(f.original)}c"
             doc.tag_add(tag, idx, end)
-            doc.tag_add(f"ph::{f.placeholder}", idx, end)
             start = end
 
     def _refresh_doc(*, scroll_to_selected: bool = False) -> None:
@@ -553,7 +606,7 @@ def run_review_window(
         try:
             parent = w.master
             while parent is not None:
-                if parent in (search_entry, type_menu, type_combo):
+                if parent in (search_entry, type_menu, type_combo, search_wrap):
                     return True
                 pcls = parent.winfo_class()
                 if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
@@ -579,23 +632,22 @@ def run_review_window(
         except tk.TclError:
             messagebox.showinfo(
                 "Add redaction",
-                "Select text in the document first, then click Add redaction.",
+                "Select text in the document first, then click Add selection.",
                 parent=root,
             )
             return "break"
-        surface = sel_text
-        if not surface.strip():
+        if not sel_text.strip():
             return "break"
-        if len(surface.strip()) > 500:
+        if len(sel_text.strip()) > 500:
             if not messagebox.askyesno(
                 "Long selection",
-                f"Redact {len(surface.strip())} characters as one finding?",
+                f"Redact {len(sel_text.strip())} characters as one finding?",
                 parent=root,
             ):
                 return "break"
         ent = type_var.get().strip() or "CUSTOM"
         try:
-            finding = session.add_redaction(surface, ent)
+            finding = session.add_redaction(sel_text, ent)
         except ValueError as exc:
             messagebox.showerror("Add redaction", str(exc), parent=root)
             return "break"
@@ -608,6 +660,7 @@ def run_review_window(
         selected_ph[0] = finding.placeholder
         _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
+        _focus_list()
         return "break"
 
     def _save() -> None:
@@ -637,24 +690,52 @@ def run_review_window(
         result["session"] = None
         root.destroy()
 
+    def _cleanup() -> None:
+        try:
+            list_canvas.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
+
+    def _on_close() -> None:
+        _cleanup()
+        _cancel()
+
+    def _on_save() -> None:
+        _cleanup()
+        _save()
+
     def _nav(delta: int) -> str:
         if not visible_ph:
             return "break"
-        idx = _current_list_index() + delta
-        _focus_index(idx, scroll_doc=True)
+        _focus_index(_current_list_index() + delta, scroll_doc=True)
         return "break"
 
-    def _nav_if_not_typing(delta: int, event=None) -> str | None:
+    def _nav_if_not_typing(delta: int, _event=None) -> str | None:
         if _is_text_input_focused():
             return None
         return _nav(delta)
 
-    # Keyboard: bind on root when not typing; also on list canvas
+    def _on_escape(_evt=None) -> str:
+        # Escape in search: clear + return to list (don't cancel the window)
+        if _is_text_input_focused() and (
+            root.focus_get() is search_entry
+            or (
+                root.focus_get() is not None
+                and str(root.focus_get()).startswith(str(search_entry))
+            )
+        ):
+            _show_search_placeholder()
+            _refresh_list()
+            _focus_list()
+            return "break"
+        _on_close()
+        return "break"
+
     root.bind("<space>", lambda e: _toggle_selected(e))
-    root.bind("<Escape>", lambda _e: _cancel())
+    root.bind("<Escape>", _on_escape)
     root.bind(
         "<Command-Return>" if sys.platform == "darwin" else "<Control-Return>",
-        lambda _e: _save(),
+        lambda _e: _on_save(),
     )
     root.bind("j", lambda e: _nav_if_not_typing(1, e))
     root.bind("k", lambda e: _nav_if_not_typing(-1, e))
@@ -669,33 +750,14 @@ def run_review_window(
     list_canvas.bind("k", lambda _e: _nav(-1))
     list_canvas.bind("<space>", lambda e: _toggle_selected(e))
 
-    def _cleanup_bindings() -> None:
-        try:
-            list_canvas.unbind_all("<MouseWheel>")
-        except tk.TclError:
-            pass
-
-    def _on_close() -> None:
-        _cleanup_bindings()
-        _cancel()
-
-    def _on_save_wrap() -> None:
-        _cleanup_bindings()
-        _save()
-
-    # Rebind action buttons to cleanup mousewheel on close/save
-    for child in right.winfo_children():
-        child.destroy()
-    ttk.Button(right, text="Cancel", command=_on_close).pack(side=tk.LEFT, padx=(0, 8))
-    ttk.Button(right, text="Save output", command=_on_save_wrap).pack(side=tk.LEFT)
-
     root.protocol("WM_DELETE_WINDOW", _on_close)
 
     _refresh_list(refresh_doc=True)
     if visible_ph:
         _focus_index(0, scroll_doc=True)
+    else:
+        _focus_list()
 
-    list_canvas.focus_set()
     root.lift()
     try:
         root.attributes("-topmost", True)
@@ -704,5 +766,5 @@ def run_review_window(
         pass
 
     root.mainloop()
-    _cleanup_bindings()
+    _cleanup()
     return result["session"]
