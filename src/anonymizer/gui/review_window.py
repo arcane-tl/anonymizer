@@ -17,16 +17,23 @@ except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
 
 
-# --- Readable colour system (light theme, dark text always) ---
+# --- Readable colour system ---
+# Document: soft fills + dark text (never dark-on-dark).
 _HL_REDACT_BG = "#F6E05E"
 _HL_REDACT_FG = "#1A202C"
-_HL_SELECTED_BG = "#90CDF4"
+_HL_SELECTED_BG = "#63B3ED"  # stronger light blue for focus
 _HL_SELECTED_FG = "#1A202C"
 
+# Sidebar list rows (tk.Frame so we can set real backgrounds)
 _LIST_FG = "#1A202C"
-_LIST_CLEAR_FG = "#718096"
-_LIST_SEL_BG = "#E2E8F0"  # focused row background
-_CHROME_FG = "#4A5568"
+_LIST_CLEAR_FG = "#4A5568"
+_LIST_ROW_BG = "#FFFFFF"
+_LIST_SEL_BG = "#BEE3F8"  # selected finding — light blue, dark text
+_LIST_SEL_FG = "#1A202C"
+
+_CHROME_FG = "#4A5568"  # hints, shortcuts, search placeholder
+_STATUS_BG = "#2D3748"  # totals strip
+_STATUS_FG = "#FFFFFF"
 
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
@@ -136,7 +143,7 @@ def run_review_window(
         search_is_placeholder[0] = True
         search_entry.delete(0, tk.END)
         search_entry.insert(0, _SEARCH_PLACEHOLDER)
-        search_entry.configure(foreground="#A0AEC0")
+        search_entry.configure(foreground=_CHROME_FG)
 
     def _hide_search_placeholder(_evt=None) -> None:
         if search_is_placeholder[0]:
@@ -175,7 +182,9 @@ def run_review_window(
     # Scrollable checklist (native checkboxes)
     list_outer = ttk.Frame(side)
     list_outer.pack(fill=tk.BOTH, expand=True)
-    list_canvas = tk.Canvas(list_outer, highlightthickness=0, borderwidth=0)
+    list_canvas = tk.Canvas(
+        list_outer, highlightthickness=0, borderwidth=0, bg=_LIST_ROW_BG
+    )
     list_scroll = ttk.Scrollbar(
         list_outer, orient=tk.VERTICAL, command=list_canvas.yview
     )
@@ -277,12 +286,22 @@ def run_review_window(
     foot = ttk.Frame(outer)
     foot.pack(fill=tk.X, pady=(8, 0))
 
-    status_row = ttk.Frame(foot)
-    status_row.pack(fill=tk.X)
-    ttk.Label(status_row, textvariable=status_var, foreground="#44403C").pack(
-        side=tk.LEFT
+    # Totals report: dark bar + white text so counts stand out
+    status_bar = tk.Frame(foot, bg=_STATUS_BG, padx=10, pady=6)
+    status_bar.pack(fill=tk.X)
+    status_label = tk.Label(
+        status_bar,
+        textvariable=status_var,
+        bg=_STATUS_BG,
+        fg=_STATUS_FG,
+        font=("Segoe UI", 11, "bold"),
+        anchor=tk.W,
     )
-    right = ttk.Frame(status_row)
+    status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    actions_row = ttk.Frame(foot)
+    actions_row.pack(fill=tk.X, pady=(8, 0))
+    right = ttk.Frame(actions_row)
     right.pack(side=tk.RIGHT)
     ttk.Button(right, text="Cancel", command=lambda: _cancel()).pack(
         side=tk.LEFT, padx=(0, 8)
@@ -324,22 +343,20 @@ def run_review_window(
         _refresh_list()
 
     def _style_row_selected(ph: str | None) -> None:
+        """Selected list row: light blue bg + dark text (never black-on-black)."""
         for key, rw in row_widgets.items():
-            bg = _LIST_SEL_BG if key == ph else ""
+            f = session.get(key)
+            selected = key == ph
+            bg = _LIST_SEL_BG if selected else _LIST_ROW_BG
+            if f and not f.enabled:
+                fg = _LIST_CLEAR_FG
+            else:
+                fg = _LIST_SEL_FG if selected else _LIST_FG
             try:
-                rw["frame"].configure(style="")  # ttk frame has limited bg
+                rw["frame"].configure(bg=bg)
+                rw["label"].configure(bg=bg, fg=fg)
             except tk.TclError:
                 pass
-            # Use tk.Frame for selectable bg — we used ttk; set label fg only
-            f = session.get(key)
-            if f and not f.enabled:
-                rw["label"].configure(foreground=_LIST_CLEAR_FG)
-            else:
-                rw["label"].configure(foreground=_LIST_FG)
-            if key == ph:
-                rw["frame"].configure(relief=tk.SOLID, borderwidth=1)
-            else:
-                rw["frame"].configure(relief=tk.FLAT, borderwidth=0)
 
     def _set_enabled(ph: str, enabled: bool, *, from_checkbox: bool = False) -> None:
         session.set_enabled(ph, enabled)
@@ -380,7 +397,8 @@ def run_review_window(
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: ttk.Frame, f: ReviewFinding) -> dict:
-        fr = ttk.Frame(parent)
+        # tk.Frame + tk.Label so selected row can use a real light-blue background
+        fr = tk.Frame(parent, bg=_LIST_ROW_BG, padx=2, pady=2)
         fr.pack(fill=tk.X, pady=1, padx=2)
 
         var = tk.BooleanVar(value=f.enabled)
@@ -393,12 +411,14 @@ def run_review_window(
         cb = ttk.Checkbutton(fr, variable=var, command=on_check)
         cb.pack(side=tk.LEFT, padx=(4, 6))
 
-        label = ttk.Label(
+        label = tk.Label(
             fr,
             text=format_finding_label(f),
             anchor=tk.W,
+            justify=tk.LEFT,
             font=("Menlo", 11) if sys.platform == "darwin" else ("Consolas", 10),
-            foreground=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
+            bg=_LIST_ROW_BG,
+            fg=_LIST_FG if f.enabled else _LIST_CLEAR_FG,
             cursor="hand2",
         )
         label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=2)
@@ -678,7 +698,7 @@ def run_review_window(
         _cleanup_bindings()
         _save()
 
-    # Rebind save buttons to cleanup mousewheel
+    # Rebind action buttons to cleanup mousewheel on close/save
     for child in right.winfo_children():
         child.destroy()
     ttk.Button(right, text="Cancel", command=_on_close).pack(side=tk.LEFT, padx=(0, 8))
