@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Diagnose why anonymize-gui does not open on Windows.
@@ -54,7 +54,7 @@ if (Test-Path $venvPy) {
     & $venvPy -c "import anonymizer; print('anonymizer', anonymizer.__version__)" 2>&1
     & $venvPy -c "import anonymizer.gui; print('anonymizer.gui OK')" 2>&1
 } else {
-    Write-Host "No venv python at $venvPy — re-run scripts\install.ps1 -Yes -FromSource" -ForegroundColor Yellow
+    Write-Host "No venv python at $venvPy - re-run scripts\install.ps1 -Yes -FromSource" -ForegroundColor Yellow
 }
 
 Section "Log file"

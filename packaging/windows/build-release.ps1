@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Build Windows release layout + optional Inno Setup installer.
@@ -215,16 +215,16 @@ function Install-SpacyChain([string[]] $Candidates, [string] $Label) {
             Write-Ok "Installed $m"
             return $true
         }
-        Write-Warn "Failed $m — trying next fallback if any"
+        Write-Warn "Failed $m - trying next fallback if any"
     }
     return $false
 }
-Write-Info "Downloading spaCy models (size=$Models; default lg for best NER quality)..."
+Write-Info ("Downloading spaCy models (size={0}; default lg for best NER quality)..." -f $Models)
 if (-not (Install-SpacyChain $enCandidates "English")) { Die "Could not install English spaCy model" }
 if (-not (Install-SpacyChain $fiCandidates "Finnish")) { Die "Could not install Finnish spaCy model" }
 
 # Sanity: package imports without host Python
-& $PyEmbed -c "import anonymizer, spacy; print('runtime ok', anonymizer.__version__)"
+& $PyEmbed -c 'import anonymizer, spacy; print("runtime ok", anonymizer.__version__)'
 if ($LASTEXITCODE -ne 0) { Die "runtime import check failed" }
 Write-Ok "Embeddable runtime ready"
 
@@ -306,7 +306,7 @@ foreach ($c in @(
 }
 if (-not $iscc) {
     Write-Warn "Inno Setup (ISCC.exe) not found - install from https://jrsoftware.org/isinfo.php"
-    Write-Warn "Stage is ready at $Stage; zip at $zip"
+    Write-Warn ("Stage is ready at {0}; zip at {1}" -f $Stage, $zip)
     exit 0
 }
 

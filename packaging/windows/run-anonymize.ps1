@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Resolve anonymize CLI and process one or more files (Windows helper for GUI).
@@ -136,7 +136,7 @@ foreach ($f in $files) {
         }
         $ok++
     } catch {
-        Write-Host "error: anonymize failed for: $abs — $_" -ForegroundColor Red
+        Write-Host "error: anonymize failed for: $abs - $_" -ForegroundColor Red
         $fail++
     }
 }
