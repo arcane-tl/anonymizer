@@ -1079,9 +1079,10 @@ def main(
         typer.Option(
             "--format",
             help=(
-                "Output format: md (default Markdown), source (redacted PDF/DOCX), "
-                "or both. Native is best-effort (text-layer search; metadata scrubbed; "
-                "images/forms/comments may remain). Text inputs stay Markdown-only."
+                "Output: md (default Markdown only), source (redacted original PDF "
+                "or Word, same type as input), or both. Source redaction is "
+                "best-effort (text-layer search; metadata scrubbed; images/forms/"
+                "comments may remain). Text inputs stay Markdown-only."
             ),
             rich_help_panel="Common",
         ),

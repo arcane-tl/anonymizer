@@ -63,12 +63,12 @@ sharp custom square and breaks size/shape next to other apps.
 1. Drop files onto **Anonymizer** (or double-click → pick files).
 2. A **single window** shows:
    - File list  
-   - **Mode** as a visible radio list (all three choices at once — not a menu)  
-   - **Output style** — tags `[PERSON_1]` or **delete text entirely**  
-   - List summary + **Lists…** button → separate editor for allowlist / denylist  
-   - ☑ **Review findings before saving** (Terminal checklist; works with tags and delete)  
+   - **Mode** pop-up — Strict / Standard / Extract  
+   - **Output style** pop-up — stable placeholders or delete redacted data  
+   - **Output format** pop-up — Markdown / Source filetype / Both  
+   - ☑ **Review findings before saving** (default on; document review window)  
    - ☑ **Open result when finished**  
-   - ☑ **Also save redacted original (PDF/DOCX)** → writes Markdown **and** `{stem}.anonymized.pdf|.docx`  
+   - **Lists…** — allowlist / denylist editor (not shown on the main panel)  
 
 **Allowlist / denylist** open in a second dialog. **Done** saves them to  
 `~/.config/anonymizer/config.yaml` (merged; other keys kept). Same file works with  
@@ -82,13 +82,13 @@ sharp custom square and breaks size/shape next to other apps.
 Drop → [ Options window ] → work → [ Done ]
 ```
 
-### Modes (in-window list)
+### Modes (pop-up)
 
 | Label | CLI |
 |-------|-----|
-| Remove personal details (recommended) | `strict` |
-| Remove identity only (keep company names) | `standard` |
-| Convert to text only (no privacy scrub) | `extract` |
+| Strict - Remove all sensitive data (recommended) | `strict` |
+| Standard - Remove sensitive personal data | `standard` |
+| Extract - Keep all the data | `extract` |
 
 ### Review
 

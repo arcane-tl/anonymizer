@@ -9,10 +9,19 @@ use framework "AppKit"
 use scripting additions
 
 property modeTitles : {¬
-	"Remove personal details (recommended)", ¬
-	"Remove identity only (keep company names)", ¬
-	"Convert to text only (no privacy scrub)"}
+	"Strict - Remove all sensitive data (recommended)", ¬
+	"Standard - Remove sensitive personal data", ¬
+	"Extract - Keep all the data"}
 property modeArgs : {"strict", "standard", "extract"}
+property styleTitles : {¬
+	"Replace redacted data with stable placeholders", ¬
+	"Delete redacted data"}
+property styleArgs : {"placeholder", "remove"}
+property formatTitles : {¬
+	"Markdown", ¬
+	"Source filetype", ¬
+	"Both (Markdown & source filetype)"}
+property formatArgs : {"md", "source", "both"}
 -- Modal result for custom options panel buttons (0=cancel, 1=start, 2=lists)
 property optionsModalCode : 0
 
@@ -127,11 +136,15 @@ on processFiles(theFiles)
 	set modeArg to modeArg of choices
 	set wantReview to wantReview of choices
 	set wantOpen to wantOpen of choices
-	set wantNative to wantNative of choices
+	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
 	set allowText to allowText of choices
 	set denyText to denyText of choices
-	if modeArg is "extract" then set wantReview to false
+	if modeArg is "extract" then
+		set wantReview to false
+		-- Extract has no native redaction
+		set outputFormat to "md"
+	end if
 
 	set helper to resourcePath("run-anonymize.sh")
 	set fileArgs to my joinSpace(posixFiles)
@@ -144,9 +157,7 @@ on processFiles(theFiles)
 	writeTextToFile(allowText, allowFile)
 	writeTextToFile(denyText, denyFile)
 
-	set extraOpts to " --redact-style " & quoted form of redactStyle & " --allow-from " & quoted form of allowFile & " --deny-from " & quoted form of denyFile
-	-- Also save redacted PDF/DOCX (Markdown still written with --format both)
-	if wantNative then set extraOpts to extraOpts & " --format both"
+	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat & " --allow-from " & quoted form of allowFile & " --deny-from " & quoted form of denyFile
 
 	if wantReview then
 		display notification "Complete the checklist in Terminal (space / enter)." with title "Anonymizer" subtitle "Review"
@@ -201,7 +212,7 @@ on processFiles(theFiles)
 	-- Open was unchecked: one result dialog so they can still reveal in Finder
 	set resultBody to "Done" & return & return
 	if nOut is 0 then
-		set resultBody to resultBody & "Finished. Check next to your original files for .md output."
+		set resultBody to resultBody & "Finished. Check next to your original files for Markdown and/or redacted source output."
 	else
 		set resultBody to resultBody & "Created:" & return & fileListSummary(basenameList(outPaths))
 	end if
@@ -394,6 +405,23 @@ on makeFinePrint(titleText, x, y, w, h)
 	return lab
 end makeFinePrint
 
+-- Exclusive choice pop-up (pull-down list). selectedIndex is 0-based.
+on makeOptionsPopup(titles, selectedIndex, x, y, w, h)
+	set popup to current application's NSPopUpButton's alloc()'s initWithFrame:{{x, y}, {w, h}} pullsDown:false
+	popup's removeAllItems()
+	repeat with t in titles
+		popup's addItemWithTitle:(t as text)
+	end repeat
+	set idx to selectedIndex as integer
+	if idx < 0 then set idx to 0
+	if idx > ((count of titles) - 1) then set idx to 0
+	popup's selectItemAtIndex:idx
+	try
+		popup's setFont:(current application's NSFont's systemFontOfSize:13)
+	end try
+	return popup
+end makeOptionsPopup
+
 on makeScrollText(initialText, x, y, w, h)
 	set scroll to current application's NSScrollView's alloc()'s initWithFrame:{{x, y}, {w, h}}
 	scroll's setHasVerticalScroller:true
@@ -523,9 +551,9 @@ on showOptionsPanel(fileNames)
 
 	set lastModeRow to 0
 	set lastStyleRow to 0
-	set lastReview to false
+	set lastFormatRow to 0 -- 0=md, 1=source, 2=both
+	set lastReview to true
 	set lastOpen to true
-	set lastNative to false
 
 	-- Design scale (comfortable, not sparse)
 	set margin to 24
@@ -541,18 +569,16 @@ on showOptionsPanel(fileNames)
 	set filesLabelH to 18
 	set filesH to 72
 	set modeLabelH to 18
-	set modeMatrixH to 90 -- 3 radio rows with room to breathe
 	set styleLabelH to 18
-	set styleMatrixH to 54 -- 2 radio rows
-	set listsLabelH to 18
-	set listsStatusH to 16
+	set formatLabelH to 18
+	set popupH to 28 -- NSPopUpButton row height
 	set checkH to 22
 	set btnH to 32
 	set btnW to 96
 	set btnGap to 10
 
-	-- Exact height: sum of blocks + gaps (top → bottom); 3 checkboxes
-	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + modeMatrixH + gapLg + styleLabelH + gapXs + styleMatrixH + gapLg + listsLabelH + gapXs + listsStatusH + gapMd + checkH + gapSm + checkH + gapSm + checkH + gapXl + btnH + margin
+	-- Compact: popups for mode/style/format + 2 checkboxes (no lists status block)
+	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
 
 	repeat
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
@@ -599,66 +625,28 @@ on showOptionsPanel(fileNames)
 		set y to y - gapLg - modeLabelH
 		content's addSubview:(makeLabel("Mode", margin, y, innerW, modeLabelH))
 
-		set y to y - gapXs - modeMatrixH
-		set proto to current application's NSButtonCell's alloc()'s init()
-		proto's setButtonType:(current application's NSButtonTypeRadio)
-		proto's setFont:(current application's NSFont's systemFontOfSize:13)
-		proto's setControlSize:(current application's NSControlSizeRegular)
-		proto's setWraps:true
-
-		set matrix to current application's NSMatrix's alloc()'s initWithFrame:{{margin, y}, {innerW, modeMatrixH}} ¬
-			mode:(current application's NSRadioModeMatrix) ¬
-			prototype:proto ¬
-			numberOfRows:3 ¬
-			numberOfColumns:1
-		matrix's setAutosizesCells:true
-		matrix's setMode:(current application's NSRadioModeMatrix)
-		try
-			matrix's setIntercellSpacing:{0, 4}
-		end try
-		repeat with i from 0 to 2
-			set cell to matrix's cellAtRow:i column:0
-			cell's setTitle:(item (i + 1) of modeTitles)
-			cell's setTag:i
-		end repeat
-		matrix's selectCellAtRow:lastModeRow column:0
-		matrix's setFrame:{{margin, y}, {innerW, modeMatrixH}}
-		content's addSubview:matrix
+		set y to y - gapXs - popupH
+		set modePopup to makeOptionsPopup(modeTitles, lastModeRow, margin, y, innerW, popupH)
+		content's addSubview:modePopup
 
 		set y to y - gapLg - styleLabelH
 		content's addSubview:(makeLabel("Output style", margin, y, innerW, styleLabelH))
 
-		set y to y - gapXs - styleMatrixH
-		set styleProto to current application's NSButtonCell's alloc()'s init()
-		styleProto's setButtonType:(current application's NSButtonTypeRadio)
-		styleProto's setFont:(current application's NSFont's systemFontOfSize:13)
-		styleProto's setWraps:true
-		set styleMatrix to current application's NSMatrix's alloc()'s initWithFrame:{{margin, y}, {innerW, styleMatrixH}} ¬
-			mode:(current application's NSRadioModeMatrix) ¬
-			prototype:styleProto ¬
-			numberOfRows:2 ¬
-			numberOfColumns:1
-		styleMatrix's setAutosizesCells:true
-		try
-			styleMatrix's setIntercellSpacing:{0, 4}
-		end try
-		(styleMatrix's cellAtRow:0 column:0)'s setTitle:"Replace with tags  [PERSON_1]"
-		(styleMatrix's cellAtRow:0 column:0)'s setTag:0
-		(styleMatrix's cellAtRow:1 column:0)'s setTitle:"Delete text entirely (no tags)"
-		(styleMatrix's cellAtRow:1 column:0)'s setTag:1
-		styleMatrix's selectCellAtRow:lastStyleRow column:0
-		styleMatrix's setFrame:{{margin, y}, {innerW, styleMatrixH}}
-		content's addSubview:styleMatrix
+		set y to y - gapXs - popupH
+		set stylePopup to makeOptionsPopup(styleTitles, lastStyleRow, margin, y, innerW, popupH)
+		content's addSubview:stylePopup
 
-		set y to y - gapLg - listsLabelH
-		content's addSubview:(makeLabel("Custom lists", margin, y, innerW, listsLabelH))
-		set y to y - gapXs - listsStatusH
-		content's addSubview:(makeFinePrint(listsStatusLine(allowText, denyText), margin, y, innerW, listsStatusH))
+		set y to y - gapLg - formatLabelH
+		content's addSubview:(makeLabel("Output format", margin, y, innerW, formatLabelH))
+
+		set y to y - gapXs - popupH
+		set formatPopup to makeOptionsPopup(formatTitles, lastFormatRow, margin, y, innerW, popupH)
+		content's addSubview:formatPopup
 
 		set y to y - gapMd - checkH
 		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
-		reviewBox's setTitle:"Review findings before saving (document window)"
+		reviewBox's setTitle:"Review findings before saving"
 		if lastReview then
 			reviewBox's setState:(current application's NSControlStateValueOn)
 		else
@@ -678,18 +666,6 @@ on showOptionsPanel(fileNames)
 		end if
 		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:openBox
-
-		set y to y - gapSm - checkH
-		set nativeBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
-		nativeBox's setButtonType:(current application's NSButtonTypeSwitch)
-		nativeBox's setTitle:"Also save redacted original (PDF/DOCX)"
-		if lastNative then
-			nativeBox's setState:(current application's NSControlStateValueOn)
-		else
-			nativeBox's setState:(current application's NSControlStateValueOff)
-		end if
-		nativeBox's setFont:(current application's NSFont's systemFontOfSize:13)
-		content's addSubview:nativeBox
 
 		-- Action bar (HIG): Cancel left · Lists… + Start right
 		set y to margin
@@ -716,32 +692,35 @@ on showOptionsPanel(fileNames)
 		current application's NSApp's runModalForWindow_(thePanel)
 		set response to optionsModalCode
 
-		set lastModeRow to matrix's selectedRow() as integer
+		set lastModeRow to modePopup's indexOfSelectedItem() as integer
 		if lastModeRow < 0 then set lastModeRow to 0
 		if lastModeRow > 2 then set lastModeRow to 0
-		set lastStyleRow to styleMatrix's selectedRow() as integer
+		set lastStyleRow to stylePopup's indexOfSelectedItem() as integer
 		if lastStyleRow < 0 then set lastStyleRow to 0
+		if lastStyleRow > 1 then set lastStyleRow to 0
+		set lastFormatRow to formatPopup's indexOfSelectedItem() as integer
+		if lastFormatRow < 0 then set lastFormatRow to 0
+		if lastFormatRow > 2 then set lastFormatRow to 0
 		set lastReview to false
 		if (reviewBox's state() as integer) is 1 then set lastReview to true
 		if (reviewBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastReview to true
 		set lastOpen to false
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
-		set lastNative to false
-		if (nativeBox's state() as integer) is 1 then set lastNative to true
-		if (nativeBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastNative to true
 
 		thePanel's orderOut_(missing value)
 
 		if response is 1 then
 			set modeArg to item (lastModeRow + 1) of modeArgs
-			set redactStyle to "placeholder"
-			if lastStyleRow is 1 then set redactStyle to "remove"
+			set redactStyle to item (lastStyleRow + 1) of styleArgs
+			set outputFormat to item (lastFormatRow + 1) of formatArgs
 			set wantReview to lastReview
 			set wantOpen to lastOpen
-			set wantNative to lastNative
-			if modeArg is "extract" then set wantReview to false
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantNative:wantNative, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
+			if modeArg is "extract" then
+				set wantReview to false
+				set outputFormat to "md"
+			end if
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
 		else if response is 2 then
 			set edited to showListsPanel(allowText, denyText)
 			if edited is not missing value then

@@ -47,7 +47,7 @@ Release assets (from **1.2.0** onward): Mac zip, Windows Setup.exe, and Windows 
 
 - **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM (`--llm`)  
 - **Real office formats** — PDF (including OCR for scans), Word (`.docx`), and text/Markdown  
-- **Optional native redaction** — keep layout with redacted `.pdf` / `.docx` (`--format source` or `both`)  
+- **Optional source redaction** — redacted `.pdf` / `.docx` matching the input type (`--format source` or `both`)  
 - **Modes that match the job** — full scrub, identity-only, or plain text extract  
 - **Stable placeholders** — the same person stays `[PERSON_1]` throughout a document  
 - **English + Finnish** — auto language detection, patterns + neural NER + domain false-positive filters  
@@ -177,9 +177,9 @@ anonymize contract.pdf --review
 # Delete findings instead of [PERSON_1] tags
 anonymize contract.pdf --redact-style remove
 
-# Also keep layout: redacted PDF/DOCX next to Markdown
+# Both: Markdown + redacted source (PDF→PDF, DOCX→DOCX)
 anonymize contract.pdf --format both
-# Native only (no Markdown): --format source
+# Source only (no Markdown): --format source
 
 anonymize examples    # more copy-paste commands
 anonymize --help
@@ -192,7 +192,7 @@ anonymize --help
 | **Mac** | Open **Anonymizer** from Applications / `~/Applications`, drop files (or pick files). Needs CLI on PATH for the droplet. |
 | **Windows** | Start Menu **Anonymizer** (after Setup.exe). Choose documents → same options as Mac. |
 
-GUI options: mode, output style (tags vs delete), **Lists…**, review, open when finished, **Also save redacted original (PDF/DOCX)**.
+GUI options: mode / output style / output format pop-ups, **Review findings before saving** (default on), open when finished, **Lists…**.
 
 ---
 
@@ -265,13 +265,13 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--review-window` | Document review UI (used by Mac/Windows GUIs) |
 | `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
 | `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
-| `--format` | `md` (default), `source` (redacted PDF/DOCX), or `both`. PDF = black boxes + metadata scrub; DOCX = tags/delete + property scrub. **Best-effort** (not forensic): images, some forms/comments, wrap misses may remain. |
+| `--format` | `md` (default Markdown only), `source` (redacted original PDF or Word, same type as input), or `both`. PDF = black boxes + metadata scrub; DOCX = tags/delete + property scrub. **Best-effort** (not forensic): images, some forms/comments, wrap misses may remain. Text inputs stay Markdown-only. |
 | `--llm` | Opt-in LLM layer only (YAML `use_llm` alone is ignored). `--offline` blocks remote xAI and non-local Ollama URLs. |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
 | `--config` | YAML: mode, allowlist, denylist, `redact_style`, `format`, … |
 
-**GUIs (Mac + Windows):** output style (tags vs delete), **Also save redacted original (PDF/DOCX)**, review, open when finished. **Lists…** saves allow/deny to `~/.config/anonymizer/config.yaml` (same on both platforms).
+**GUIs (Mac + Windows):** mode / style / format as pop-ups, **Review findings before saving** (default on), open when finished. **Lists…** saves allow/deny to `~/.config/anonymizer/config.yaml` (same on both platforms).
 
 ---
 

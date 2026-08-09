@@ -27,13 +27,19 @@ from anonymizer import __version__
 from anonymizer.lists_io import load_lists, save_lists
 
 MODE_LABELS = [
-    ("strict", "Remove personal details (recommended)"),
-    ("standard", "Remove identity only (keep company names)"),
-    ("extract", "Convert to text only (no privacy scrub)"),
+    ("strict", "Strict - Remove all sensitive data (recommended)"),
+    ("standard", "Standard - Remove sensitive personal data"),
+    ("extract", "Extract - Keep all the data"),
 ]
 STYLE_LABELS = [
-    ("placeholder", "Replace with tags  [PERSON_1]"),
-    ("remove", "Delete text entirely (no tags)"),
+    ("placeholder", "Replace redacted data with stable placeholders"),
+    ("remove", "Delete redacted data"),
+]
+# Output format (CLI --format md|source|both).
+FORMAT_LABELS = [
+    ("md", "Markdown"),
+    ("source", "Source filetype"),
+    ("both", "Both (Markdown & source filetype)"),
 ]
 
 SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".text", ".markdown"}
@@ -377,6 +383,65 @@ def _dark_radio(
     return rb
 
 
+def _label_for(choices: list[tuple[str, str]], value: str) -> str:
+    for val, label in choices:
+        if val == value:
+            return label
+    return choices[0][1]
+
+
+def _value_for(choices: list[tuple[str, str]], label: str) -> str:
+    for val, lab in choices:
+        if lab == label:
+            return val
+    return choices[0][0]
+
+
+def _dark_popup(
+    parent: "tk.Misc",
+    variable: "tk.StringVar",
+    choices: list[tuple[str, str]],
+) -> "tk.OptionMenu":
+    """Exclusive dropdown; *variable* holds the CLI value key (not the display label)."""
+    labels = [lab for _, lab in choices]
+    display = tk.StringVar(value=_label_for(choices, variable.get()))
+
+    def _on_pick(lab: str) -> None:
+        display.set(lab)
+        variable.set(_value_for(choices, lab))
+
+    om = tk.OptionMenu(parent, display, *labels, command=_on_pick)
+    om.configure(
+        bg=_BG_WELL,
+        fg=_TEXT,
+        activebackground=_BG_BTN_HOVER,
+        activeforeground=_TEXT,
+        highlightthickness=1,
+        highlightbackground=_BORDER,
+        highlightcolor=_BORDER,
+        bd=0,
+        font=_FONT,
+        anchor=tk.W,
+        cursor="hand2",
+        indicatoron=True,
+        direction="below",
+    )
+    try:
+        menu = om["menu"]
+        menu.configure(
+            bg=_BG_WELL,
+            fg=_TEXT,
+            activebackground=_SELECT,
+            activeforeground=_TEXT,
+            font=_FONT,
+            bd=0,
+        )
+    except tk.TclError:
+        pass
+    om.pack(fill=tk.X, pady=(0, 2))
+    return om
+
+
 def _dark_check(
     parent: "tk.Misc",
     text: str,
@@ -589,9 +654,9 @@ class OptionsApp(tk.Tk):
 
         self.mode_var = tk.StringVar(value="strict")
         self.style_var = tk.StringVar(value="placeholder")
-        self.review_var = tk.BooleanVar(value=False)
+        self.format_var = tk.StringVar(value="md")
+        self.review_var = tk.BooleanVar(value=True)
         self.open_var = tk.BooleanVar(value=True)
-        self.native_var = tk.BooleanVar(value=False)
 
         pad = 24
         root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
@@ -644,8 +709,7 @@ class OptionsApp(tk.Tk):
         tk.Label(
             root, text="Mode", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
         ).pack(anchor=tk.W, pady=(16, 4))
-        for val, label in MODE_LABELS:
-            _dark_radio(root, label, variable=self.mode_var, value=val)
+        _dark_popup(root, self.mode_var, MODE_LABELS)
 
         tk.Label(
             root,
@@ -655,38 +719,24 @@ class OptionsApp(tk.Tk):
             font=_FONT_BOLD,
             anchor=tk.W,
         ).pack(anchor=tk.W, pady=(16, 4))
-        for val, label in STYLE_LABELS:
-            _dark_radio(root, label, variable=self.style_var, value=val)
+        _dark_popup(root, self.style_var, STYLE_LABELS)
 
         tk.Label(
             root,
-            text="Custom lists",
+            text="Output format",
             bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_BOLD,
             anchor=tk.W,
         ).pack(anchor=tk.W, pady=(16, 4))
-        self.lists_lbl = tk.Label(
-            root,
-            text=_lists_status(self.allow_text, self.deny_text),
-            bg=_BG_APP,
-            fg=_TEXT_MUTED,
-            font=_FONT_SMALL,
-            anchor=tk.W,
-        )
-        self.lists_lbl.pack(anchor=tk.W, pady=(0, 10))
+        _dark_popup(root, self.format_var, FORMAT_LABELS)
 
         _dark_check(
             root,
-            "Review findings before saving (document window)",
+            "Review findings before saving",
             variable=self.review_var,
         )
         _dark_check(root, "Open result when finished", variable=self.open_var)
-        _dark_check(
-            root,
-            "Also save redacted original (PDF/DOCX)",
-            variable=self.native_var,
-        )
 
         # Action bar (Mac HIG): Cancel left · Lists… + Start right, compact chips
         bar = tk.Frame(root, bg=_BG_APP)
@@ -763,9 +813,6 @@ class OptionsApp(tk.Tk):
         dlg = ListsDialog(self, self.allow_text, self.deny_text)
         if dlg.result is not None:
             self.allow_text, self.deny_text = dlg.result
-            self.lists_lbl.configure(
-                text=_lists_status(self.allow_text, self.deny_text)
-            )
 
     def _start(self) -> None:
         if self._busy:
@@ -798,9 +845,12 @@ class OptionsApp(tk.Tk):
 
         mode = self.mode_var.get()
         style = self.style_var.get()
+        # Extract has no native redaction; force Markdown-only.
+        out_fmt = "md" if mode == "extract" else self.format_var.get()
+        if out_fmt not in {"md", "source", "both"}:
+            out_fmt = "md"
         want_review = self.review_var.get() and mode != "extract"
         want_open = self.open_var.get()
-        want_native = self.native_var.get() and mode != "extract"
 
         allow_f = tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8"
@@ -816,9 +866,14 @@ class OptionsApp(tk.Tk):
             deny_f.close()
 
         cfg_path = self._write_temp_config(style, allow_f.name, deny_f.name)
-        common_flags = ["--config", str(cfg_path), "--redact-style", style]
-        if want_native:
-            common_flags.extend(["--format", "both"])
+        common_flags = [
+            "--config",
+            str(cfg_path),
+            "--redact-style",
+            style,
+            "--format",
+            out_fmt,
+        ]
 
         if want_review:
             cmds = [
@@ -848,7 +903,7 @@ class OptionsApp(tk.Tk):
                     continue
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs:
-                    outs = _guess_outputs([fpath], mode, want_native)
+                    outs = _guess_outputs([fpath], mode, out_fmt)
                 outputs.extend(outs)
         finally:
             for p in (allow_f.name, deny_f.name, str(cfg_path)):
@@ -886,7 +941,8 @@ class OptionsApp(tk.Tk):
             msg += "Created:\n" + "\n".join(f"• {Path(o).name}" for o in outputs)
         else:
             msg += (
-                "Finished. Check next to your original files for .md / native output."
+                "Finished. Check next to your original files for Markdown "
+                "and/or redacted source output."
             )
         if errors:
             msg += "\n\nSome files failed:\n" + "\n".join(errors[:5])
@@ -1062,18 +1118,27 @@ def _parse_outputs(stdout: str, stderr: str) -> list[str]:
     return out
 
 
-def _guess_outputs(files: list[Path], mode: str, native: bool) -> list[str]:
+def _guess_outputs(
+    files: list[Path],
+    mode: str,
+    output_format: str = "md",
+) -> list[str]:
+    """Best-effort paths when CLI OUTPUT: lines are missing."""
+    fmt = "md" if mode == "extract" else (output_format or "md")
+    write_md = fmt in ("md", "both")
+    write_native = fmt in ("source", "both") and mode != "extract"
     paths: list[str] = []
     for f in files:
-        if mode == "extract":
-            cand = f.with_name(f"{f.stem}.md")
-            if cand.resolve() == f.resolve():
-                cand = f.with_name(f"{f.stem}.extracted.md")
-        else:
-            cand = f.with_name(f"{f.stem}.anonymized.md")
-        if cand.is_file():
-            paths.append(str(cand))
-        if native and f.suffix.lower() in {".pdf", ".docx"}:
+        if write_md:
+            if mode == "extract":
+                cand = f.with_name(f"{f.stem}.md")
+                if cand.resolve() == f.resolve():
+                    cand = f.with_name(f"{f.stem}.extracted.md")
+            else:
+                cand = f.with_name(f"{f.stem}.anonymized.md")
+            if cand.is_file():
+                paths.append(str(cand))
+        if write_native and f.suffix.lower() in {".pdf", ".docx"}:
             n = f.with_name(f"{f.stem}.anonymized{f.suffix.lower()}")
             if n.is_file():
                 paths.append(str(n))

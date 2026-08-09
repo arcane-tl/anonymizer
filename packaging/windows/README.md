@@ -102,12 +102,12 @@ Use a **new** PowerShell window after install.
 
 Options (same as Mac):
 
-- Mode: strict / standard / extract  
-- Output style: tags vs delete  
-- Lists… (allow / deny → config YAML)  
-- Review (document review window)  
+- Mode pop-up: Strict / Standard / Extract  
+- Output style pop-up: stable placeholders or delete redacted data  
+- Output format pop-up: Markdown / Source filetype / Both  
+- Review findings before saving (default on)  
 - Open result when finished  
-- Also save redacted original (PDF/DOCX) → `--format both`  
+- Lists… (allow / deny → config YAML; not on main panel)  
 
 ## Helper (advanced)
 

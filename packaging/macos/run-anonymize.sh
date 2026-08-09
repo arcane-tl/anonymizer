@@ -8,7 +8,7 @@
 # Options:
 #   --review              Document review window (via --review-window on the CLI)
 #   --redact-style STYLE  placeholder (default) | remove
-#   --format FMT          md (default) | source | both (native PDF/DOCX)
+#   --format FMT          md (default) | source | both (source = redacted PDF/DOCX)
 #   --config PATH         YAML config (allowlist, denylist, …)
 #   --allow-from PATH     One allowlist string per line → temp config merge
 #   --deny-from PATH      One denylist string per line → temp config merge

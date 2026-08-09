@@ -52,11 +52,12 @@ denylist:
 #   remove — delete the text entirely (no tags; --review not available)
 # redact_style: placeholder
 
-# Output format:
+# Output format (choose one):
 #   md (default) — Markdown only
-#   source       — redacted original PDF/DOCX (best-effort; metadata scrubbed;
-#                  images/forms/comments may remain — not a forensic wipe)
-#   both         — Markdown + native when input is PDF/DOCX
+#   source       — redacted original PDF or Word (same type as input;
+#                  best-effort; metadata scrubbed; images/forms/comments may
+#                  remain — not a forensic wipe). Text inputs stay Markdown-only.
+#   both         — Markdown + source when input is PDF/DOCX
 # format: md
 
 # Language for NER: auto | en | fi | sv | en,fi | en,sv | …
