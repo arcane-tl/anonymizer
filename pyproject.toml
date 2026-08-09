@@ -52,9 +52,10 @@ packages = ["src/anonymizer"]
 [tool.hatch.build.targets.wheel.sources]
 "src/anonymizer" = "anonymizer"
 
-# Ship GUI dialog icon (Mac parity title-row asset)
+# Non-.py package data (dialog icon). Do not also force-include the same
+# path under packages/ or hatchling errors on duplicate wheel entries.
 [tool.hatch.build.targets.wheel.force-include]
-"src/anonymizer/gui/assets" = "anonymizer/gui/assets"
+"src/anonymizer/gui/assets/Anonymizer-dialog.png" = "anonymizer/gui/assets/Anonymizer-dialog.png"
 
 [tool.hatch.build.targets.sdist]
 include = [
