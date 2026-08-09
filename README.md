@@ -243,7 +243,7 @@ Dates are off by default (`--include-dates` to enable).
 
 ### How detection works (short)
 
-Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people. Use `allowlist_extra` in YAML to append terms without wiping built-in label defaults.
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people. Use `allowlist_extra` / `lexicon_extra` for keep-clear and FP lexicon (see `config.example.yaml`). Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
 
 ---
 

@@ -775,14 +775,18 @@ def cmd_doctor() -> None:
             if loaded:
                 rows.append((f"spaCy ({lang})", loaded, True))
             else:
+                # EN+FI required for default install; extra langs (sv, …) optional
+                required = lang in {"en", "fi"}
                 rows.append(
                     (
                         f"spaCy ({lang})",
-                        f"missing — python -m spacy download {primary}",
-                        False,
+                        f"missing — python -m spacy download {primary}"
+                        + ("" if required else " (optional)"),
+                        not required,
                     )
                 )
-                ok_all = False
+                if required:
+                    ok_all = False
     except Exception as exc:
         rows.append(("spaCy", f"import failed: {exc}", False))
         ok_all = False
@@ -952,7 +956,7 @@ def main(
         str,
         typer.Option(
             "--lang",
-            help="Language: auto | en | fi | en,fi",
+            help="Language: auto | en | fi | sv | en,fi | en,sv | …",
             rich_help_panel="Common",
         ),
     ] = "auto",
@@ -960,7 +964,7 @@ def main(
         Optional[Path],
         typer.Option(
             "--config",
-            help="YAML config (mode, allowlist, denylist, …). Supports ~/… paths.",
+            help="YAML config (mode, allowlist, denylist, recognizers, …). Supports ~/… paths.",
             # exists checked after expand_user_path in _run_pipeline
             # (Typer does not expand ~ before exists=True validation).
             dir_okay=False,

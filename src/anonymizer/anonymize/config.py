@@ -8,7 +8,19 @@ from typing import Any
 
 import yaml
 
-from anonymizer.anonymize.domain_lexicon import DEFAULT_ALLOWLIST_SEEDS
+# Avoid circular imports at type-check time for plugin list
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from presidio_analyzer import EntityRecognizer
+
+from anonymizer.anonymize.domain_lexicon import (
+    DEFAULT_ALLOWLIST_SEEDS,
+    LexiconView,
+    builtin_lexicon,
+    merge_lexicon_extra,
+)
+from anonymizer.anonymize.entity_types import EntityTypeRegistry, builtin_entity_registry
 
 # ---------------------------------------------------------------------------
 # Entity presets per operating mode
@@ -93,13 +105,18 @@ OPTIONAL_DATE_ENTITY = "DATE_TIME"
 SPACY_MODELS = {
     "en": "en_core_web_lg",
     "fi": "fi_core_news_lg",
+    "sv": "sv_core_news_lg",
 }
 
 # Lighter fallbacks if large models missing
 SPACY_FALLBACKS = {
     "en": ["en_core_web_md", "en_core_web_sm"],
     "fi": ["fi_core_news_md", "fi_core_news_sm"],
+    "sv": ["sv_core_news_md", "sv_core_news_sm"],
 }
+
+# Languages supported for --lang / auto-detect (spaCy NER + lingua)
+SUPPORTED_LANGS: tuple[str, ...] = ("en", "fi", "sv")
 
 
 @dataclass
@@ -141,9 +158,13 @@ def normalize_redact_style(style: str | None) -> str:
     return _REDACT_STYLE_ALIASES[key]
 
 
-def entities_for_mode(mode: str) -> list[str]:
+def entities_for_mode(
+    mode: str, registry: EntityTypeRegistry | None = None
+) -> list[str]:
     """Return a copy of the entity list for a canonical mode."""
     canonical = normalize_mode(mode)
+    if registry is not None:
+        return registry.codes_for_mode(canonical)
     return list(MODE_ENTITY_PRESETS[canonical])
 
 
@@ -158,8 +179,16 @@ class AnonymizerConfig:
     allowlist: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWLIST))
     # Appended after allowlist load (does not replace defaults)
     allowlist_extra: list[str] = field(default_factory=list)
+    # Built-in domain FP lexicon ∪ optional YAML lexicon_extra
+    lexicon: LexiconView = field(default_factory=builtin_lexicon)
+    # Entity labels / priorities / mode membership (plugins register here)
+    entity_registry: EntityTypeRegistry = field(default_factory=builtin_entity_registry)
+    # Extra Presidio recognizers from YAML/Python plugins
+    plugin_recognizers: list[Any] = field(default_factory=list)
     denylist: list[DenylistEntry] = field(default_factory=list)
     lang: str = "auto"
+    # Optional spaCy primary model overrides: {lang: model_name}
+    spacy_models: dict[str, str] = field(default_factory=dict)
     include_dates: bool = False
     # Optional LLM layer (off by default)
     use_llm: bool = False
@@ -181,7 +210,7 @@ class AnonymizerConfig:
         else:
             self.mode = normalize_mode(self.mode)
         if not self.entities_explicit:
-            self.entities = entities_for_mode(self.mode)
+            self.entities = entities_for_mode(self.mode, self.entity_registry)
 
     def effective_entities(self) -> list[str]:
         if self.mode == "extract":
@@ -252,6 +281,48 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.allowlist = [str(x) for x in data["allowlist"]]
         if "allowlist_extra" in data and data["allowlist_extra"] is not None:
             cfg.allowlist_extra = [str(x) for x in data["allowlist_extra"]]
+        if "lexicon_extra" in data and data["lexicon_extra"] is not None:
+            extra = data["lexicon_extra"]
+            if not isinstance(extra, dict):
+                raise ConfigError(
+                    f"lexicon_extra in {path} must be a mapping of lists "
+                    f"(roles, legal_phrases, …), not {type(extra).__name__}."
+                )
+            cfg.lexicon = merge_lexicon_extra(extra)
+            # Optional allowlist_seeds inside lexicon_extra append like allowlist_extra
+            seeds = extra.get("allowlist_seeds")
+            if seeds:
+                for item in seeds:
+                    s = str(item).strip()
+                    if s:
+                        cfg.allowlist_extra.append(s)
+        if "spacy_models" in data and data["spacy_models"]:
+            if not isinstance(data["spacy_models"], dict):
+                raise ConfigError(
+                    f"spacy_models in {path} must be a mapping of lang → model name"
+                )
+            cfg.spacy_models = {
+                str(k).lower(): str(v) for k, v in data["spacy_models"].items() if v
+            }
+        if "recognizers" in data and data["recognizers"] is not None:
+            from anonymizer.anonymize.plugins import load_recognizer_plugins
+
+            entries = data["recognizers"]
+            if not isinstance(entries, list):
+                raise ConfigError(
+                    f"recognizers in {path} must be a list of path/module entries"
+                )
+            loaded = load_recognizer_plugins(
+                entries,
+                base_dir=path.parent,
+                registry=cfg.entity_registry,
+            )
+            if loaded.errors:
+                raise ConfigError(
+                    "Failed to load recognizer plugin(s):\n  - "
+                    + "\n  - ".join(loaded.errors)
+                )
+            cfg.plugin_recognizers = list(loaded.recognizers)
         if "denylist" in data and data["denylist"]:
             entries: list[DenylistEntry] = []
             for item in data["denylist"]:
@@ -296,8 +367,9 @@ def load_config(path: Path | None) -> AnonymizerConfig:
         raise ConfigError(f"Invalid config in {path}: {exc}") from exc
 
     # Apply mode preset when entities were not explicitly listed
+    # (includes plugin entity types registered into entity_registry)
     if not cfg.entities_explicit:
-        cfg.entities = entities_for_mode(cfg.mode)
+        cfg.entities = entities_for_mode(cfg.mode, cfg.entity_registry)
     # Normalize style even if default
     cfg.redact_style = normalize_redact_style(cfg.redact_style)
     from anonymizer.output.native import normalize_output_format

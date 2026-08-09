@@ -32,6 +32,16 @@ allowlist:
   - Y-tunnus
   - Hetu
 
+# Optional domain FP lexicon extras (roles / legal phrases / noise tokens).
+# Merged with built-ins at load time — not a company/person catalog.
+# lexicon_extra:
+#   roles: [broker, asiamies]
+#   legal_phrases: [governing law, sovellettava laki]
+#   legalish_tokens: [deductible, omavastuu]
+#   formish_tokens: []
+#   weak_org_stems: []
+#   allowlist_seeds: [My Internal Product Label]
+
 # Always redact these (your known suppliers, etc.)
 denylist:
   # - text: "Your Supplier Name Here"
@@ -49,7 +59,19 @@ denylist:
 #   both         — Markdown + native when input is PDF/DOCX
 # format: md
 
+# Language for NER: auto | en | fi | sv | en,fi | en,sv | …
 # lang: auto
+
+# Optional spaCy model overrides (defaults: en_core_web_lg, fi_core_news_lg, sv_core_news_lg)
+# spacy_models:
+#   sv: sv_core_news_md
+
+# Custom pattern / Python recognizers (local files only — see docs/plugins.md)
+# recognizers:
+#   - path: ./patterns/employee_id.yaml
+#   # - module: mypkg.recs:MyRecognizer
+#   # - python: ./plugins/my_rec.py
+#   #   class: MyRecognizer
 
 # Optional LLM layer. CLI requires --llm even if use_llm is true here
 # (prevents surprise remote sends from shared configs).

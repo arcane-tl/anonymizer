@@ -53,6 +53,19 @@ def test_tesseract_langs():
     assert tesseract_lang_string("auto") == "eng+fin"
     assert tesseract_lang_string("en") == "eng"
     assert tesseract_lang_string("fi") == "fin"
+    assert tesseract_lang_string("sv") == "swe"
+    assert tesseract_lang_string("en,sv") == "eng+swe"
+
+
+def test_forced_sv():
+    d = resolve_language("sv", "x")
+    assert d.mode == "forced"
+    assert d.nlp_passes == ["sv"]
+
+
+def test_forced_en_sv():
+    d = resolve_language("en,sv", "x")
+    assert d.nlp_passes == ["en", "sv"]
 
 
 def test_sample_long_text():

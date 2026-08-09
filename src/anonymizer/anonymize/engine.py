@@ -15,14 +15,18 @@ from anonymizer.anonymize.config import (
     SPACY_MODELS,
     AnonymizerConfig,
 )
+from anonymizer.anonymize.entity_types import EntityTypeRegistry, builtin_entity_registry
 from anonymizer.anonymize.domain_lexicon import (
     COMMERCIAL_LOC_SUFFIX,
     CONTRACT_ROLES,
     DOC_TITLE_TAILS,
     LEGAL_PHRASES,
     ORG_ROLE_PREFIXES,
+    LexiconView,
+    builtin_lexicon,
     is_contract_role_surface,
     is_legal_phrase_surface,
+    is_weak_org_stem,
     tokens_all_domain_noise,
 )
 from anonymizer.anonymize.language import resolve_language
@@ -64,30 +68,67 @@ _SPACY_LABEL_MAP = {
 }
 
 
-def _resolve_spacy_model(lang: str) -> str:
+def _resolve_spacy_model(
+    lang: str, overrides: dict[str, str] | None = None
+) -> str:
     import spacy
 
-    primary = SPACY_MODELS[lang]
+    overrides = overrides or {}
+    primary = overrides.get(lang) or SPACY_MODELS.get(lang)
+    if not primary:
+        raise RuntimeError(
+            f"No spaCy model configured for language '{lang}'. "
+            f"Known: {', '.join(sorted(SPACY_MODELS))} "
+            f"(or set spacy_models: in config)."
+        )
     candidates = [primary, *SPACY_FALLBACKS.get(lang, [])]
+    # Dedupe while preserving order
+    seen: set[str] = set()
+    ordered: list[str] = []
     for name in candidates:
+        if name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    for name in ordered:
         try:
             spacy.load(name)
             return name
         except OSError:
             continue
     raise RuntimeError(
-        f"No spaCy model found for language '{lang}'. Tried: {candidates}. "
+        f"No spaCy model found for language '{lang}'. Tried: {ordered}. "
         f"Install with: python -m spacy download {primary}"
     )
 
 
-@lru_cache(maxsize=2)
-def _pattern_analyzer() -> AnalyzerEngine:
+def _builtin_recognizer_classes() -> list[type]:
+    return [
+        FiHetuRecognizer,
+        FiBusinessIdRecognizer,
+        FiVatRecognizer,
+        FiPhoneRecognizer,
+        FiPlateRecognizer,
+        FiPostalCodeRecognizer,
+        WebUrlRecognizer,
+        StreetRecognizer,
+        CompanyRecognizer,
+        BrandOrgRecognizer,
+        VehicleVinRecognizer,
+        PersonNameRecognizer,
+    ]
+
+
+@lru_cache(maxsize=4)
+def _pattern_analyzer_cached(plugin_key: str = "") -> AnalyzerEngine:
     """
     English Presidio engine used for language-agnostic pattern recognizers
     (email, phone, IBAN, cards) plus Finnish custom ID recognizers.
     NER from this engine is used only when 'en' is in nlp_passes.
+
+    *plugin_key* busts the cache when custom plugins are configured (plugins
+    themselves are run via standalone analyze, not this registry).
     """
+    del plugin_key  # cache key only
     model_name = _resolve_spacy_model("en")
     configuration = {
         "nlp_engine_name": "spacy",
@@ -118,11 +159,19 @@ def _pattern_analyzer() -> AnalyzerEngine:
     )
 
 
-@lru_cache(maxsize=4)
-def _spacy_nlp(lang: str):
+def _pattern_analyzer(config: AnonymizerConfig | None = None) -> AnalyzerEngine:
+    key = ""
+    if config is not None and config.plugin_recognizers:
+        key = f"plugins:{len(config.plugin_recognizers)}"
+    return _pattern_analyzer_cached(key)
+
+
+@lru_cache(maxsize=8)
+def _spacy_nlp(lang: str, model_override: str = ""):
     import spacy
 
-    return spacy.load(_resolve_spacy_model(lang))
+    overrides = {lang: model_override} if model_override else None
+    return spacy.load(_resolve_spacy_model(lang, overrides))
 
 
 # Role prefixes for span trimming (domain lexicon)
@@ -263,33 +312,41 @@ def _looks_like_legal_boilerplate_org(nlp, surface: str) -> bool:
     return False
 
 
-def _looks_like_false_location(surface: str) -> bool:
+def _looks_like_false_location(
+    surface: str, lexicon: LexiconView | None = None
+) -> bool:
     """Commercial field names mis-tagged as LOCATION/CITY."""
+    lex = lexicon or builtin_lexicon()
     s = surface.strip()
     if not s:
         return True
-    if _COMMERCIAL_LOC_SUFFIX.search(s):
+    if lex.commercial_loc_suffix.search(s) or _COMMERCIAL_LOC_SUFFIX.search(s):
         return True
     if len(s) > 18 and " " not in s and "-" not in s and s[0].isupper():
         # Long single-token compounds (Ylikilometriveloitus)
-        if re.search(r"(?i)(veloitus|maksu|palkkio|raja|kilometri)", s):
+        if re.search(
+            r"(?i)(veloitus|maksu|palkkio|raja|kilometri|omavastuu|vakuutus)", s
+        ):
             return True
     return False
 
 
-def _looks_like_false_person(nlp, surface: str, span_toks) -> bool:
+def _looks_like_false_person(
+    nlp, surface: str, span_toks, lexicon: LexiconView | None = None
+) -> bool:
     """Drop capitalised common nouns / legal roles mis-tagged as PERSON."""
+    lex = lexicon or builtin_lexicon()
     surface = surface.strip()
     if not surface:
         return True
     # Formal names are capitalised; "lien" mid-clause is not a name
     if surface == surface.casefold():
         return True
-    if is_contract_role_surface(surface) or is_legal_phrase_surface(surface):
+    if is_contract_role_surface(surface, lex) or is_legal_phrase_surface(surface, lex):
         return True
     toks = [t.strip(".,;:'\"") for t in surface.split() if t.strip(".,;:'\"")]
     # Multi-token: all role/legalish/formish → not a person name
-    if len(toks) >= 2 and tokens_all_domain_noise(toks):
+    if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
         return True
     if len(span_toks) != 1 and len(toks) != 1:
         # Keep multi-token Title Case with at least one non-domain token
@@ -316,10 +373,12 @@ def _spacy_ner_results(
     lang: str,
     entities: list[str],
     score: float = 0.75,
+    *,
+    model_override: str = "",
 ) -> list[RecognizerResult]:
     """Neural NER layer (spaCy). No hard-coded entity catalogs."""
     try:
-        nlp = _spacy_nlp(lang)
+        nlp = _spacy_nlp(lang, model_override)
     except Exception as exc:
         logger.warning("spaCy load failed for %s: %s", lang, exc)
         return []
@@ -461,14 +520,16 @@ def _pattern_results(
     entities: list[str],
     score_threshold: float,
     include_ner: bool,
+    *,
+    config: AnonymizerConfig | None = None,
 ) -> list[RecognizerResult]:
     """Run Presidio (EN) for patterns; optionally include EN NER."""
     try:
-        analyzer = _pattern_analyzer()
+        analyzer = _pattern_analyzer(config)
     except RuntimeError as exc:
         logger.warning("%s", exc)
         # Still run custom pattern recognizers standalone
-        return _standalone_pattern_recognizers(text, entities)
+        return _standalone_pattern_recognizers(text, entities, config=config)
 
     if include_ner:
         ent_list = list(entities)
@@ -480,7 +541,7 @@ def _pattern_results(
         ner_types = {"PERSON", "ORG", "LOCATION", "NRP", "DATE_TIME"}
         ent_list = [e for e in entities if e not in ner_types]
         if not ent_list:
-            return _standalone_pattern_recognizers(text, entities)
+            return _standalone_pattern_recognizers(text, entities, config=config)
 
     # Pull phones slightly below the default threshold so unlabeled
     # international numbers are not dropped; non-phone types are re-filtered.
@@ -502,15 +563,19 @@ def _pattern_results(
     found = [r for r in found if _keep_pattern_result(r, text, score_threshold)]
 
     # Always run custom patterns (FI IDs, plates, URLs, streets, company suffixes)
-    found.extend(_standalone_pattern_recognizers(text, entities))
+    found.extend(_standalone_pattern_recognizers(text, entities, config=config))
     return found
 
 
 def _standalone_pattern_recognizers(
-    text: str, entities: list[str]
+    text: str,
+    entities: list[str],
+    *,
+    config: AnonymizerConfig | None = None,
 ) -> list[RecognizerResult]:
     """Custom regex/suffix recognizers that must run for every document."""
     results: list[RecognizerResult] = []
+    # Built-in class specs: (class, entity codes they may emit)
     specs: list[tuple[type, list[str]]] = [
         (FiHetuRecognizer, ["FI_HETU"]),
         (FiBusinessIdRecognizer, ["FI_BUSINESS_ID"]),
@@ -533,10 +598,21 @@ def _standalone_pattern_recognizers(
             continue
         # Pass full entity filter so StreetRecognizer can emit STREET/CITY/POSTAL
         results.extend(Rec().analyze(text, entities=entities or ents))
+
+    # Config plugins (YAML patterns / Python EntityRecognizer instances)
+    if config is not None:
+        for rec in config.plugin_recognizers:
+            rec_ents = list(getattr(rec, "supported_entities", None) or [])
+            if entities and rec_ents and not any(e in entities for e in rec_ents):
+                continue
+            try:
+                results.extend(rec.analyze(text, entities=entities or rec_ents))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Plugin recognizer %s failed: %s", getattr(rec, "name", rec), exc)
     return results
 
 
-# Structured address types beat residual LOCATION on ties
+# Structured address types beat residual LOCATION on ties (fallback if no registry)
 _ENTITY_PRIORITY = {
     "STREET": 3,
     "CITY": 3,
@@ -556,7 +632,18 @@ _ENTITY_PRIORITY = {
 }
 
 
-def _merge_results(results: list[RecognizerResult]) -> list[RecognizerResult]:
+def _type_priority(
+    entity_type: str, registry: EntityTypeRegistry | None = None
+) -> int:
+    if registry is not None:
+        return registry.priority_for(entity_type, default=_ENTITY_PRIORITY.get(entity_type, 0))
+    return _ENTITY_PRIORITY.get(entity_type, 0)
+
+
+def _merge_results(
+    results: list[RecognizerResult],
+    registry: EntityTypeRegistry | None = None,
+) -> list[RecognizerResult]:
     """Resolve overlapping spans: higher score, then type priority, then longer."""
     if not results:
         return []
@@ -566,7 +653,7 @@ def _merge_results(results: list[RecognizerResult]) -> list[RecognizerResult]:
             r.start,
             -(r.end - r.start),
             -r.score,
-            -_ENTITY_PRIORITY.get(r.entity_type, 0),
+            -_type_priority(r.entity_type, registry),
         )
 
     ordered = sorted(results, key=sort_key)
@@ -578,8 +665,8 @@ def _merge_results(results: list[RecognizerResult]) -> list[RecognizerResult]:
                 conflict = True
                 r_len = r.end - r.start
                 e_len = existing.end - existing.start
-                r_pri = _ENTITY_PRIORITY.get(r.entity_type, 0)
-                e_pri = _ENTITY_PRIORITY.get(existing.entity_type, 0)
+                r_pri = _type_priority(r.entity_type, registry)
+                e_pri = _type_priority(existing.entity_type, registry)
                 replace = False
                 if r.score > existing.score:
                     replace = True
@@ -725,47 +812,112 @@ def _filter_false_org_location(
     return _filter_entity_false_positives(text, results)
 
 
+# Window (chars) for cheap boilerplate neighbourhood checks
+_BOILERPLATE_WINDOW = 64
+
+
+def _has_legal_form(surface: str) -> bool:
+    return bool(_LEGAL_FORM_RE.search(surface))
+
+
+def _boilerplate_neighbourhood(
+    text: str,
+    start: int,
+    end: int,
+    lexicon: LexiconView,
+) -> bool:
+    """True if span sits next to legal section cues (§, clause, liite, …)."""
+    left = text[max(0, start - _BOILERPLATE_WINDOW) : start]
+    right = text[end : min(len(text), end + _BOILERPLATE_WINDOW)]
+    window = f"{left} {right}".casefold()
+    if "§" in left or "§" in right:
+        return True
+    # Word-ish tokens in the window
+    for raw in re.findall(r"[\wÅÄÖåäö-]+", window, flags=re.UNICODE):
+        t = raw.casefold().strip("-")
+        if t in lexicon.boilerplate_cues:
+            return True
+    return False
+
+
 def _filter_entity_false_positives(
-    text: str, results: list[RecognizerResult]
+    text: str,
+    results: list[RecognizerResult],
+    lexicon: LexiconView | None = None,
 ) -> list[RecognizerResult]:
     """Drop role/legal boilerplate ORG, false PERSON, commercial LOCATION.
 
     Applied after merge and after org-stem expansion so BrandOrg / Company /
     stem hits get the same discipline as spaCy-time gates.
     """
+    lex = lexicon or builtin_lexicon()
     kept: list[RecognizerResult] = []
     for r in results:
         surface = text[r.start : r.end]
         if r.entity_type == "ORG":
-            if is_contract_role_surface(surface):
+            if is_contract_role_surface(surface, lex):
                 continue
-            if is_legal_phrase_surface(surface):
+            if is_legal_phrase_surface(surface, lex):
                 continue
             if _is_all_caps_section_header(surface):
                 continue
-            if not _LEGAL_FORM_RE.search(surface) and re.search(
-                r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot)\b",
+            if not _has_legal_form(surface) and re.search(
+                r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot|"
+                r"yleiset\s+sopimusehdot|vastuunrajoitus|salassapito)\b",
                 surface,
             ):
                 continue
             # Multi-token ORG with no legal form and only domain noise tokens
-            if not _LEGAL_FORM_RE.search(surface):
+            if not _has_legal_form(surface):
                 toks = [t for t in surface.split() if t.strip(".,;:'\"")]
-                if len(toks) >= 2 and tokens_all_domain_noise(toks):
+                if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
                     continue
-                # Single-token commercial compound tails
-                if len(toks) == 1 and _COMMERCIAL_LOC_SUFFIX.search(toks[0]):
+                # Single-token: weak stem / commercial compound / role
+                if len(toks) == 1:
+                    if _COMMERCIAL_LOC_SUFFIX.search(toks[0]):
+                        continue
+                    if is_weak_org_stem(toks[0], lex) and len(toks[0]) <= 24:
+                        continue
+                # Domain-noise surface next to § / clause / liite → boilerplate
+                if tokens_all_domain_noise(toks, lex) and _boilerplate_neighbourhood(
+                    text, r.start, r.end, lex
+                ):
+                    continue
+                if (
+                    len(toks) <= 3
+                    and not _has_legal_form(surface)
+                    and _boilerplate_neighbourhood(text, r.start, r.end, lex)
+                    and tokens_all_domain_noise(toks, lex)
+                ):
                     continue
         if r.entity_type == "PERSON":
-            if is_contract_role_surface(surface) or is_legal_phrase_surface(surface):
+            if is_contract_role_surface(surface, lex) or is_legal_phrase_surface(
+                surface, lex
+            ):
                 continue
             toks = [t for t in surface.split() if t.strip(".,;:'\"")]
-            if len(toks) >= 2 and tokens_all_domain_noise(toks):
+            if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
                 continue
             if surface == surface.casefold():
                 continue
+            # Single-token Title Case role / legalish label ("Broker", "Publisher")
+            if len(toks) == 1:
+                t0 = toks[0]
+                low = t0.casefold()
+                if is_contract_role_surface(t0, lex) or is_legal_phrase_surface(t0, lex):
+                    continue
+                if low in (
+                    lex.legalish_tokens | lex.formish_tokens | lex.doc_title_tails
+                ):
+                    continue
+            if (
+                len(toks) <= 3
+                and tokens_all_domain_noise(toks, lex)
+                and _boilerplate_neighbourhood(text, r.start, r.end, lex)
+            ):
+                continue
         if r.entity_type in {"LOCATION", "CITY"} and _looks_like_false_location(
-            surface
+            surface, lex
         ):
             continue
         kept.append(r)
@@ -837,7 +989,8 @@ def apply_stable_placeholders(
     from anonymizer.anonymize.config import normalize_redact_style
 
     style = normalize_redact_style(style)
-    entity_map = entity_map or EntityMap()
+    if entity_map is None:
+        entity_map = EntityMap()
     forward = sorted(results, key=lambda r: (r.start, r.end))
     planned: list[tuple[RecognizerResult, str, str]] = []
     hits: list[EntityHit] = []
@@ -919,13 +1072,20 @@ class DocumentAnonymizer:
 
         entities = self.config.effective_entities()
         all_results: list[RecognizerResult] = []
+        reg = getattr(self.config, "entity_registry", None) or builtin_entity_registry()
+        model_overrides = getattr(self.config, "spacy_models", None) or {}
 
-        # Neural NER
+        # Neural NER (one pass per language in nlp_passes)
         for lang in decision.nlp_passes:
             _p(f"Neural NER ({lang})…")
-            all_results.extend(_spacy_ner_results(text, lang, entities))
+            override = model_overrides.get(lang, "")
+            all_results.extend(
+                _spacy_ner_results(
+                    text, lang, entities, model_override=override
+                )
+            )
 
-        # Patterns + heuristics
+        # Patterns + heuristics (+ config plugin recognizers)
         _p("Patterns & heuristics…")
         all_results.extend(
             _pattern_results(
@@ -933,6 +1093,7 @@ class DocumentAnonymizer:
                 entities,
                 score_threshold=self.config.score_threshold,
                 include_ner=False,
+                config=self.config,
             )
         )
 
@@ -962,10 +1123,12 @@ class DocumentAnonymizer:
             _denylist_hits(text, self.config.denylist, set(entities))
         )
 
+        lex = getattr(self.config, "lexicon", None) or builtin_lexicon()
+
         _p("Merging entities…")
-        merged = _merge_results(all_results)
+        merged = _merge_results(all_results, reg)
         merged = _filter_field_labels(text, merged)
-        merged = _filter_entity_false_positives(text, merged)
+        merged = _filter_entity_false_positives(text, merged, lex)
         merged = _drop_noisy_surfaces(text, merged)
 
         # Propagate company stems (LähiTapiola Rahoitus Oy → LähiTapiola / LähiTapiolan)
@@ -973,8 +1136,10 @@ class DocumentAnonymizer:
             stems = collect_stems_from_results(text, merged)
             if stems:
                 _p("Expanding company short forms…")
-                merged = _merge_results(merged + expand_org_stems_in_text(text, stems))
-                merged = _filter_entity_false_positives(text, merged)
+                merged = _merge_results(
+                    merged + expand_org_stems_in_text(text, stems), reg
+                )
+                merged = _filter_entity_false_positives(text, merged, lex)
 
         merged = _allowlist_filter(text, merged, self.config.allowlist)
         return merged, decision
@@ -992,8 +1157,11 @@ class DocumentAnonymizer:
         )
         if progress:
             progress("Applying redactions…")
+        emap = EntityMap(
+            registry=getattr(self.config, "entity_registry", None)
+        )
         anonymized, entity_map, hits = apply_stable_placeholders(
-            text, results, style=self.config.redact_style
+            text, results, entity_map=emap, style=self.config.redact_style
         )
         type_counts: dict[str, int] = {}
         seen_keys: set[tuple[str, str]] = set()
@@ -1076,7 +1244,9 @@ class DocumentAnonymizer:
             if style == "remove"
             else "Applying placeholders…"
         )
-        entity_map = EntityMap()
+        entity_map = EntityMap(
+            registry=getattr(self.config, "entity_registry", None)
+        )
         all_hits: list[EntityHit] = []
         out_blocks: list[str] = []
         type_counts: dict[str, int] = {}

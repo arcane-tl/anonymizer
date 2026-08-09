@@ -44,13 +44,21 @@ def normalize_entity_text(text: str) -> str:
     return _WS_RE.sub(" ", text.strip()).casefold()
 
 
-def placeholder_label(entity_type: str) -> str:
+def placeholder_label(
+    entity_type: str,
+    registry: object | None = None,
+) -> str:
     """Return placeholder type label (e.g. PERSON, PLATE_FI).
 
     Vehicle plates use ``PLATE_{COUNTRYCODE}`` so numbers look like
     ``[PLATE_FI_1]``. Unknown plate entities named ``XX_LICENSE_PLATE``
     map to ``PLATE_XX`` automatically.
+
+    Optional *registry* is an :class:`~anonymizer.anonymize.entity_types.EntityTypeRegistry`
+    (used when custom plugins register labels).
     """
+    if registry is not None and hasattr(registry, "label_for"):
+        return registry.label_for(entity_type)  # type: ignore[no-any-return]
     key = entity_type.upper()
     if key in TYPE_LABELS:
         return TYPE_LABELS[key]
@@ -72,8 +80,11 @@ class EntityMap:
     # placeholder -> original first-seen text
     reverse: dict[str, str] = field(default_factory=dict)
 
+    # Optional EntityTypeRegistry for custom plugin labels
+    registry: object | None = None
+
     def get_or_assign(self, entity_type: str, text: str) -> str:
-        label = placeholder_label(entity_type)
+        label = placeholder_label(entity_type, self.registry)
         key = (label, normalize_entity_text(text))
         if key in self._forward:
             return self._forward[key]

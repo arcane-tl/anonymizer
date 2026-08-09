@@ -1,0 +1,19 @@
+# Example custom recognizer — synthetic employee badge IDs only.
+# Load via config:
+#   recognizers:
+#     - path: examples/plugins/employee_id.yaml
+#
+# Patterns must stay simple (\b…\b). Not a real HR system format.
+
+name: EmployeeIdPatterns
+entity_type: EMPLOYEE_ID
+label: EMP_ID
+priority: 3
+modes: [strict, standard]
+patterns:
+  - name: emp_badge
+    regex: '\bEMP-\d{6}\b'
+    score: 0.9
+  - name: emp_alt
+    regex: '\bE\d{8}\b'
+    score: 0.85
