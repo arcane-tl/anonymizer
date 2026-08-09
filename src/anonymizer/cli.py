@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -31,11 +32,12 @@ from anonymizer.anonymize.config import (
 )
 from anonymizer.anonymize.engine import DocumentAnonymizer
 from anonymizer.anonymize.review import (
-    apply_review_to_blocks,
+    ReviewSession,
     interactive_review,
     parse_reject_list,
     recount_entities,
-    require_tty_for_review,
+    require_review_capable,
+    resolve_review_surface,
     strip_placeholders_in_blocks,
 )
 from anonymizer.extract import extract_document
@@ -65,7 +67,9 @@ Modes:
   strict    full scrub — default when you just pass a file
 
 Review:
-  --review / -r   checkbox list (space = keep clear, enter = write)
+  --review / -r       terminal checklist (toggle false positives)
+  --review-window     document window UI (GUIs use this)
+  --review-cli        same as default terminal checklist (explicit)
   --reject ORG_1,PHONE_2   non-interactive un-redact
 
 Tip: run "anonymize doctor" after install if anything looks wrong.
@@ -287,6 +291,8 @@ def _run_pipeline(
     no_ocr: bool,
     keep_headers: bool,
     review: bool,
+    review_cli: bool,
+    review_window: bool,
     reject: str | None,
     redact_style: str | None,
     output_format: str | None,
@@ -408,16 +414,21 @@ def _run_pipeline(
             "[dim]Note:[/dim] --map is empty in extract mode (nothing redacted)."
         )
 
-    do_review = review and cfg.mode != "extract"
+    review_surface = resolve_review_surface(
+        review=review,
+        review_cli=review_cli,
+        review_window=review_window,
+    )
+    do_review = review_surface is not None and cfg.mode != "extract"
     if do_review:
         try:
-            require_tty_for_review()
+            require_review_capable(review_surface or "cli")
         except SystemExit as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
 
-    # Final render style (placeholder tags vs delete). Review always uses tags
-    # first so the checklist works; we strip remaining tags if style is remove.
+    # Final render style (placeholder tags vs delete). Review uses original
+    # blocks + session map; final remove style applied after session apply.
     final_redact_style = cfg.redact_style
     needs_placeholder_review = (do_review or bool(reject)) and cfg.mode != "extract"
 
@@ -493,15 +504,16 @@ def _run_pipeline(
         # Front matter / result should reflect the user's chosen final style
         result.redact_style = final_redact_style
 
-        # --- Optional review / --reject (restore false positives) ---
-        keep_clear: list[str] = []
+        # --- Optional review / --reject (session: un-redact + add) ---
+        pre_keep: list[str] = []
         if reject and result.mapping:
             accepted, unknown = parse_reject_list(reject, set(result.mapping.keys()))
             for u in unknown:
                 console.print(
                     f"[yellow]--reject unknown tag ignored:[/yellow] {u}"
                 )
-            keep_clear.extend(accepted)
+            pre_keep.extend(accepted)
+
         if do_review and result.mapping:
             progress.substep("Review redactions…")
             label = (
@@ -510,36 +522,56 @@ def _run_pipeline(
                 else input_path.name
             )
             try:
-                keep_clear.extend(
-                    interactive_review(
-                        result.mapping, console=console, file_label=label
-                    )
+                session = interactive_review(
+                    result.mapping,
+                    console=console,
+                    file_label=label,
+                    original_blocks=block_texts,
+                    surface=review_surface or "cli",
+                    pre_keep_clear=pre_keep,
                 )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 130
                 raise typer.Exit(code) from exc
+            # Apply from originals so user-added redactions are included
+            apply_style = (
+                "placeholder"
+                if final_redact_style == "remove"
+                else final_redact_style
+            )
+            anon_blocks, new_map = session.apply(style=apply_style)
+            result.mapping = new_map
+            result.entity_counts = recount_entities(new_map)
+            result.anonymized_text = "\n\n".join(anon_blocks)
+            kept_n = session.summary_counts()["keep_clear"]
+            added_n = session.summary_counts()["user_added"]
+            if not quiet and (kept_n or added_n):
+                bits = []
+                if kept_n:
+                    bits.append(f"{kept_n} kept clear")
+                if added_n:
+                    bits.append(f"{added_n} added")
+                console.print(f"[dim]Review: {', '.join(bits)}.[/dim]")
         elif do_review and not result.mapping:
             console.print("[dim]No redactions to review.[/dim]")
-
-        if keep_clear:
-            # Dedupe preserving order
-            seen_k: set[str] = set()
-            uniq: list[str] = []
-            for k in keep_clear:
-                if k not in seen_k and k in result.mapping:
-                    seen_k.add(k)
-                    uniq.append(k)
-            if uniq:
-                anon_blocks, new_map = apply_review_to_blocks(
-                    anon_blocks, result.mapping, uniq
+        elif pre_keep and result.mapping:
+            # --reject only (no interactive review)
+            session = ReviewSession.from_mapping(
+                block_texts, result.mapping, pre_keep_clear=pre_keep
+            )
+            apply_style = (
+                "placeholder"
+                if final_redact_style == "remove"
+                else final_redact_style
+            )
+            anon_blocks, new_map = session.apply(style=apply_style)
+            result.mapping = new_map
+            result.entity_counts = recount_entities(new_map)
+            result.anonymized_text = "\n\n".join(anon_blocks)
+            if not quiet:
+                console.print(
+                    f"[dim]Restored {len(pre_keep)} tag(s) to clear text.[/dim]"
                 )
-                result.mapping = new_map
-                result.entity_counts = recount_entities(new_map)
-                result.anonymized_text = "\n\n".join(anon_blocks)
-                if not quiet:
-                    console.print(
-                        f"[dim]Restored {len(uniq)} tag(s) to clear text.[/dim]"
-                    )
 
         # Final render: delete remaining findings if user chose remove style
         if final_redact_style == "remove" and result.mapping:
@@ -966,8 +998,30 @@ def main(
             "--review/--no-review",
             "-r",
             help=(
-                "Interactive checkbox review before writing: space toggles "
-                "items to keep in clear text (all start unchecked)."
+                "Interactive review before writing (terminal checklist by default). "
+                "Use --review-window for the document UI; GUIs pass that flag."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = False,
+    review_cli: Annotated[
+        bool,
+        typer.Option(
+            "--review-cli",
+            help=(
+                "Terminal checklist review (same as default --review). "
+                "Implies review; useful to force CLI if ANONYMIZER_REVIEW=window."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = False,
+    review_window: Annotated[
+        bool,
+        typer.Option(
+            "--review-window",
+            help=(
+                "Document review window (toggle false positives, select text to add). "
+                "Implies review. Used by anonymize-gui / desktop apps."
             ),
             rich_help_panel="Common",
         ),
@@ -1130,6 +1184,8 @@ def main(
         no_ocr=no_ocr,
         keep_headers=keep_headers,
         review=review,
+        review_cli=review_cli,
+        review_window=review_window,
         reject=reject,
         redact_style=redact_style,
         output_format=output_format,

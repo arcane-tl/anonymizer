@@ -658,7 +658,7 @@ on showOptionsPanel(fileNames)
 		set y to y - gapMd - checkH
 		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
-		reviewBox's setTitle:"Review findings before saving (opens Terminal)"
+		reviewBox's setTitle:"Review findings before saving (document window)"
 		if lastReview then
 			reviewBox's setState:(current application's NSControlStateValueOn)
 		else

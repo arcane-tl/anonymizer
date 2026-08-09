@@ -1,6 +1,7 @@
 """Anonymizer options window — layout/copy parity with Mac droplet.
 
 Thin wrapper: collects options, invokes anonymize CLI. Target: Windows.
+Dark charcoal chrome + app icon matches the Mac ASObjC options panel.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import filedialog, messagebox
 except ImportError as _tk_err:  # pragma: no cover
     tk = None  # type: ignore[assignment]
     _TK_IMPORT_ERROR = _tk_err
@@ -44,6 +45,25 @@ _FILETYPES = [
     ("Text / Markdown", "*.txt *.md"),
     ("All files", "*.*"),
 ]
+
+# ── Dark theme (Mac options panel parity) ─────────────────────────
+_BG_APP = "#2C2C2E"  # charcoal panel
+_BG_WELL = "#1C1C1E"  # files / text wells
+_BG_BTN = "#3A3A3C"  # secondary buttons
+_BG_BTN_HOVER = "#48484A"
+_BORDER = "#3A3A3C"
+_TEXT = "#F5F5F7"
+_TEXT_MUTED = "#98989D"
+_ACCENT = "#0A84FF"  # macOS system blue
+_ACCENT_HOVER = "#409CFF"
+_TEXT_ON_ACCENT = "#FFFFFF"
+_SELECT = "#1E3A5F"
+
+_FONT = ("Segoe UI", 11)
+_FONT_BOLD = ("Segoe UI", 12, "bold")
+_FONT_TITLE = ("Segoe UI", 16, "bold")
+_FONT_SMALL = ("Segoe UI", 10)
+_ICON_TITLE_PX = 44
 
 
 def _log_path() -> Path:
@@ -209,6 +229,236 @@ def _filter_paths(paths: list[str] | tuple[str, ...]) -> list[Path]:
     return files
 
 
+def resolve_dialog_icon_path() -> Path | None:
+    """Locate the dialog/app icon PNG (packaged asset, frozen, or Mac packaging)."""
+    candidates: list[Path] = [
+        Path(__file__).resolve().parent / "assets" / "Anonymizer-dialog.png",
+    ]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            base = Path(meipass)
+            candidates.extend(
+                [
+                    base / "anonymizer" / "gui" / "assets" / "Anonymizer-dialog.png",
+                    base / "assets" / "Anonymizer-dialog.png",
+                ]
+            )
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / "assets" / "Anonymizer-dialog.png")
+        candidates.append(exe_dir / "Anonymizer-dialog.png")
+    # Dev tree: packaging/macos/icons next to repo root
+    for parent in Path(__file__).resolve().parents:
+        icons = parent / "packaging" / "macos" / "icons"
+        candidates.append(icons / "Anonymizer-readme.png")
+        candidates.append(icons / "Anonymizer-256.png")
+    seen: set[str] = set()
+    for cand in candidates:
+        try:
+            key = str(cand.resolve())
+        except OSError:
+            key = str(cand)
+        if key in seen:
+            continue
+        seen.add(key)
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _photo_scaled(
+    path: Path, size_px: int, *, master: "tk.Misc | None" = None
+) -> "tk.PhotoImage | None":
+    """Load PNG and nearest-neighbour scale to ~size_px (Tk PhotoImage)."""
+    if tk is None:
+        return None
+    try:
+        kw: dict = {"file": str(path)}
+        if master is not None:
+            kw["master"] = master
+        img = tk.PhotoImage(**kw)
+    except (tk.TclError, RuntimeError):
+        return None
+    w, h = int(img.width()), int(img.height())
+    if w <= 0 or h <= 0:
+        return img
+    # subsample then zoom to get close to size_px
+    if w > size_px:
+        factor = max(1, round(w / size_px))
+        if factor > 1:
+            img = img.subsample(factor, factor)
+            w, h = int(img.width()), int(img.height())
+    if w < size_px and w > 0:
+        factor = max(1, size_px // w)
+        if factor > 1:
+            img = img.zoom(factor, factor)
+    return img
+
+
+def _apply_window_icons(window: "tk.Misc") -> list["tk.PhotoImage"]:
+    """Set title-bar/taskbar icon; return PhotoImage refs that must be kept alive."""
+    kept: list[tk.PhotoImage] = []
+    path = resolve_dialog_icon_path()
+    if path is None or tk is None:
+        return kept
+    # Larger image for taskbar; title-bar uses same when possible
+    for px in (64, 32, _ICON_TITLE_PX):
+        photo = _photo_scaled(path, px, master=window)
+        if photo is not None:
+            kept.append(photo)
+    if not kept:
+        return kept
+    try:
+        # First image is default; pass all sizes when available
+        window.iconphoto(True, *kept)  # type: ignore[attr-defined]
+    except tk.TclError:
+        try:
+            window.iconphoto(True, kept[0])  # type: ignore[attr-defined]
+        except tk.TclError:
+            pass
+    return kept
+
+
+def _title_icon_image(master: "tk.Misc") -> "tk.PhotoImage | None":
+    path = resolve_dialog_icon_path()
+    if path is None:
+        return None
+    return _photo_scaled(path, _ICON_TITLE_PX, master=master)
+
+
+def _privacy_caption() -> str:
+    if sys.platform == "darwin":
+        return "Private on this Mac"
+    return "Private on this PC"
+
+
+def _dark_label(
+    parent: "tk.Misc",
+    text: str,
+    *,
+    font=_FONT,
+    fg: str = _TEXT,
+    **pack_kw,
+) -> "tk.Label":
+    lbl = tk.Label(parent, text=text, bg=_BG_APP, fg=fg, font=font, anchor=tk.W)
+    if pack_kw:
+        lbl.pack(**pack_kw)
+    return lbl
+
+
+def _section_label(parent: "tk.Misc", text: str) -> "tk.Label":
+    return _dark_label(parent, text, font=_FONT_BOLD, pady=(14, 4))
+
+
+def _dark_radio(
+    parent: "tk.Misc",
+    text: str,
+    *,
+    variable: "tk.Variable",
+    value: str,
+) -> "tk.Radiobutton":
+    rb = tk.Radiobutton(
+        parent,
+        text=text,
+        value=value,
+        variable=variable,
+        bg=_BG_APP,
+        fg=_TEXT,
+        activebackground=_BG_APP,
+        activeforeground=_TEXT,
+        selectcolor=_BG_WELL,
+        font=_FONT,
+        highlightthickness=0,
+        bd=0,
+        anchor=tk.W,
+        cursor="hand2",
+    )
+    rb.pack(anchor=tk.W, pady=2)
+    return rb
+
+
+def _dark_check(
+    parent: "tk.Misc",
+    text: str,
+    *,
+    variable: "tk.BooleanVar",
+) -> "tk.Checkbutton":
+    cb = tk.Checkbutton(
+        parent,
+        text=text,
+        variable=variable,
+        bg=_BG_APP,
+        fg=_TEXT,
+        activebackground=_BG_APP,
+        activeforeground=_TEXT,
+        selectcolor=_BG_WELL,
+        font=_FONT,
+        highlightthickness=0,
+        bd=0,
+        anchor=tk.W,
+        cursor="hand2",
+    )
+    cb.pack(anchor=tk.W, pady=2)
+    return cb
+
+
+def _chip_button(
+    parent: "tk.Misc",
+    text: str,
+    command,
+    *,
+    primary: bool = False,
+    width: int | None = 11,
+) -> "tk.Button":
+    """Compact action chip (~Mac 96×32 dialog buttons when width=11)."""
+    if primary:
+        bg, fg, active = _ACCENT, _TEXT_ON_ACCENT, _ACCENT_HOVER
+    else:
+        bg, fg, active = _BG_BTN, _TEXT, _BG_BTN_HOVER
+    kw: dict = dict(
+        text=text,
+        command=command,
+        bg=bg,
+        fg=fg,
+        activebackground=active,
+        activeforeground=fg,
+        disabledforeground=_TEXT_MUTED,
+        font=_FONT,  # same size for Cancel / Lists… / Start (Mac HIG-ish)
+        relief=tk.FLAT,
+        bd=0,
+        padx=10,
+        pady=4,
+        cursor="hand2",
+        highlightthickness=0,
+    )
+    if width is not None:
+        kw["width"] = width
+    return tk.Button(parent, **kw)
+
+
+def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Frame":
+    """Icon (44px) + title text — Mac addTitleRow parity."""
+    row = tk.Frame(parent, bg=_BG_APP)
+    row.pack(fill=tk.X, pady=(0, 6))
+    # Prefer the toplevel that owns the window for PhotoImage master
+    root = parent.winfo_toplevel() if hasattr(parent, "winfo_toplevel") else parent
+    photo = _title_icon_image(root)
+    if photo is not None:
+        icon_holder.append(photo)
+        tk.Label(row, image=photo, bg=_BG_APP, bd=0).pack(
+            side=tk.LEFT, padx=(0, 12)
+        )
+    tk.Label(
+        row,
+        text=title,
+        bg=_BG_APP,
+        fg=_TEXT,
+        font=_FONT_TITLE,
+        anchor=tk.W,
+    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+    return row
+
+
 class ListsDialog(tk.Toplevel):
     def __init__(self, master: tk.Misc, allow: str, deny: str) -> None:
         super().__init__(master)
@@ -216,39 +466,86 @@ class ListsDialog(tk.Toplevel):
         self.resizable(True, True)
         self.result: tuple[str, str] | None = None
         self.transient(master)
+        self.configure(bg=_BG_APP)
+        self._icon_refs = _apply_window_icons(self)
         self.grab_set()
 
-        frm = ttk.Frame(self, padding=16)
+        frm = tk.Frame(self, bg=_BG_APP, padx=20, pady=18)
         frm.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(
+        tk.Label(
             frm,
             text=(
                 "One phrase per line. Allowlist is never redacted; "
                 "denylist is always redacted. Done saves to "
                 "~/.config/anonymizer/config.yaml."
             ),
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
             wraplength=420,
-        ).pack(anchor=tk.W, pady=(0, 10))
+            justify=tk.LEFT,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(0, 12))
 
-        ttk.Label(frm, text="Allowlist — never redact", font=("", 11, "bold")).pack(
-            anchor=tk.W
+        tk.Label(
+            frm,
+            text="Allowlist — never redact",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W)
+        self.allow_txt = tk.Text(
+            frm,
+            height=8,
+            width=52,
+            font=_FONT_SMALL,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+            bd=0,
+            padx=8,
+            pady=8,
         )
-        self.allow_txt = tk.Text(frm, height=8, width=52, font=("Segoe UI", 10))
         self.allow_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
         self.allow_txt.insert("1.0", allow)
 
-        ttk.Label(frm, text="Denylist — always redact", font=("", 11, "bold")).pack(
-            anchor=tk.W
+        tk.Label(
+            frm,
+            text="Denylist — always redact",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W)
+        self.deny_txt = tk.Text(
+            frm,
+            height=8,
+            width=52,
+            font=_FONT_SMALL,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+            bd=0,
+            padx=8,
+            pady=8,
         )
-        self.deny_txt = tk.Text(frm, height=8, width=52, font=("Segoe UI", 10))
         self.deny_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
         self.deny_txt.insert("1.0", deny)
 
-        btns = ttk.Frame(frm)
+        btns = tk.Frame(frm, bg=_BG_APP)
         btns.pack(fill=tk.X)
-        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side=tk.LEFT)
-        ttk.Button(btns, text="Done", command=self._done).pack(side=tk.RIGHT)
+        _chip_button(btns, "Cancel", self._cancel).pack(side=tk.LEFT)
+        _chip_button(btns, "Done", self._done, primary=True).pack(side=tk.RIGHT)
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.wait_window(self)
@@ -278,6 +575,9 @@ class OptionsApp(tk.Tk):
         self.files = [p.resolve() for p in files]
         self.title(f"Anonymizer {__version__}")
         self.resizable(False, False)
+        self.configure(bg=_BG_APP)
+        self._icon_refs: list[tk.PhotoImage] = []
+        self._icon_refs.extend(_apply_window_icons(self))
         try:
             self.tk.call("tk", "scaling", 1.25)
         except tk.TclError:
@@ -293,91 +593,171 @@ class OptionsApp(tk.Tk):
         self.open_var = tk.BooleanVar(value=True)
         self.native_var = tk.BooleanVar(value=False)
 
-        pad = 20
-        root = ttk.Frame(self, padding=pad)
+        pad = 24
+        root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
         root.pack(fill=tk.BOTH, expand=True)
 
-        title_row = ttk.Frame(root)
-        title_row.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(
-            title_row,
-            text=f"Anonymizer (version {__version__})",
-            font=("Segoe UI", 16, "bold"),
-        ).pack(side=tk.LEFT)
+        _pack_title_row(
+            root,
+            f"Anonymizer (version {__version__})",
+            self._icon_refs,
+        )
 
         n = len(self.files)
         sub = (
             f"{n} document{'s' if n != 1 else ''} ready  ·  "
-            "Saves next to original  ·  Private on this PC"
+            f"Saves next to original  ·  {_privacy_caption()}"
         )
-        ttk.Label(root, text=sub, foreground="#555").pack(anchor=tk.W, pady=(0, 14))
+        tk.Label(
+            root,
+            text=sub,
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(0, 16))
 
-        ttk.Label(root, text="Files", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
+        tk.Label(
+            root, text="Files", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
+        ).pack(anchor=tk.W)
         files_box = tk.Text(
-            root, height=5, width=56, font=("Segoe UI", 10), wrap=tk.WORD
+            root,
+            height=5,
+            width=56,
+            font=_FONT_SMALL,
+            wrap=tk.WORD,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_BORDER,
+            bd=0,
+            padx=10,
+            pady=8,
         )
-        files_box.pack(fill=tk.X, pady=(4, 14))
+        files_box.pack(fill=tk.X, pady=(4, 4))
         files_box.insert("1.0", "\n".join(f"• {p.name}" for p in self.files))
+        # Text keeps bg/fg when disabled (no disabledbackground option)
         files_box.configure(state=tk.DISABLED)
 
-        ttk.Label(root, text="Mode", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
+        tk.Label(
+            root, text="Mode", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
+        ).pack(anchor=tk.W, pady=(16, 4))
         for val, label in MODE_LABELS:
-            ttk.Radiobutton(
-                root, text=label, value=val, variable=self.mode_var
-            ).pack(anchor=tk.W, pady=2)
+            _dark_radio(root, label, variable=self.mode_var, value=val)
 
-        ttk.Label(root, text="Output style", font=("Segoe UI", 11, "bold")).pack(
-            anchor=tk.W, pady=(14, 0)
-        )
+        tk.Label(
+            root,
+            text="Output style",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(16, 4))
         for val, label in STYLE_LABELS:
-            ttk.Radiobutton(
-                root, text=label, value=val, variable=self.style_var
-            ).pack(anchor=tk.W, pady=2)
+            _dark_radio(root, label, variable=self.style_var, value=val)
 
-        ttk.Label(root, text="Custom lists", font=("Segoe UI", 11, "bold")).pack(
-            anchor=tk.W, pady=(14, 0)
-        )
-        self.lists_lbl = ttk.Label(
+        tk.Label(
+            root,
+            text="Custom lists",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(16, 4))
+        self.lists_lbl = tk.Label(
             root,
             text=_lists_status(self.allow_text, self.deny_text),
-            foreground="#666",
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
         )
-        self.lists_lbl.pack(anchor=tk.W, pady=(4, 10))
+        self.lists_lbl.pack(anchor=tk.W, pady=(0, 10))
 
-        ttk.Checkbutton(
+        _dark_check(
             root,
-            text="Review findings before saving (opens Terminal)",
+            "Review findings before saving (document window)",
             variable=self.review_var,
-        ).pack(anchor=tk.W, pady=2)
-        ttk.Checkbutton(
-            root, text="Open result when finished", variable=self.open_var
-        ).pack(anchor=tk.W, pady=2)
-        ttk.Checkbutton(
-            root,
-            text="Also save redacted original (PDF/DOCX)",
-            variable=self.native_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        bar = ttk.Frame(root)
-        bar.pack(fill=tk.X, pady=(22, 0))
-        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
-        right = ttk.Frame(bar)
-        right.pack(side=tk.RIGHT)
-        ttk.Button(right, text="Lists…", command=self._lists).pack(
-            side=tk.LEFT, padx=(0, 8)
         )
-        ttk.Button(right, text="Start", command=self._start).pack(side=tk.LEFT)
+        _dark_check(root, "Open result when finished", variable=self.open_var)
+        _dark_check(
+            root,
+            "Also save redacted original (PDF/DOCX)",
+            variable=self.native_var,
+        )
 
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.bind("<Return>", lambda _e: self._start())
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        # Action bar (Mac HIG): Cancel left · Lists… + Start right, compact chips
+        bar = tk.Frame(root, bg=_BG_APP)
+        bar.pack(fill=tk.X, pady=(28, 0))
+        _chip_button(bar, "Cancel", self._on_cancel).pack(side=tk.LEFT)
+        right = tk.Frame(bar, bg=_BG_APP)
+        right.pack(side=tk.RIGHT)
+        _chip_button(right, "Lists…", self._lists).pack(side=tk.LEFT, padx=(0, 10))
+        _chip_button(right, "Start", self._start, primary=True).pack(side=tk.LEFT)
 
-        # Ensure window is on screen and focused (Windows often starts behind)
+        self._busy = False
+        # Accept Return only after a short grace period. focus_force + topmost can
+        # steal a keypress (e.g. Enter from another app) and looked like the window
+        # "closed by itself" because _start() withdraws immediately.
+        self._accept_return = False
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Return>", self._on_return)
+        self.bind("<KP_Enter>", self._on_return)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Ensure window is on screen (Windows often starts behind). Soft focus:
+        # lift/topmost without focus_force so we do not yank keystrokes mid-type.
         self.update_idletasks()
+        try:
+            w = max(self.winfo_reqwidth(), 480)
+            h = max(self.winfo_reqheight(), 400)
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            x = max(40, (sw - w) // 2)
+            y = max(40, (sh - h) // 2)
+            self.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
         self.lift()
-        self.attributes("-topmost", True)
-        self.after(200, lambda: self.attributes("-topmost", False))
-        self.focus_force()
+        try:
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self._safe_topmost(False))
+        except tk.TclError:
+            pass
+        # Enable Return → Start only after focus has settled
+        self.after(500, self._enable_return_shortcut)
+        _log(f"OptionsApp ready files={len(self.files)}")
+
+    def _safe_topmost(self, value: bool) -> None:
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", value)
+        except tk.TclError:
+            pass
+
+    def _enable_return_shortcut(self) -> None:
+        self._accept_return = True
+
+    def _on_escape(self, _event=None) -> str:
+        _log("OptionsApp Escape → cancel")
+        self._on_cancel()
+        return "break"
+
+    def _on_return(self, _event=None) -> str | None:
+        if not self._accept_return or self._busy:
+            _log("OptionsApp Return ignored (grace/busy)")
+            return "break"
+        _log("OptionsApp Return → start")
+        self._start()
+        return "break"
+
+    def _on_cancel(self) -> None:
+        _log("OptionsApp cancel/close")
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def _lists(self) -> None:
         dlg = ListsDialog(self, self.allow_text, self.deny_text)
@@ -388,6 +768,22 @@ class OptionsApp(tk.Tk):
             )
 
     def _start(self) -> None:
+        if self._busy:
+            _log("OptionsApp _start ignored (already busy)")
+            return
+        self._busy = True
+        _log("OptionsApp _start begin")
+        try:
+            self._run_start()
+        finally:
+            # If window still alive (error paths), allow another try
+            try:
+                if self.winfo_exists():
+                    self._busy = False
+            except tk.TclError:
+                pass
+
+    def _run_start(self) -> None:
         cli = _find_anonymize()
         if not cli:
             messagebox.showerror(
@@ -426,13 +822,18 @@ class OptionsApp(tk.Tk):
 
         if want_review:
             cmds = [
-                [*cli, mode, str(p), *common_flags, "--review"] for p in self.files
+                [*cli, mode, str(p), *common_flags, "--review-window"]
+                for p in self.files
             ]
             self._run_review_batch(cmds, want_open)
+            _log("OptionsApp review batch spawned → destroy")
             self.destroy()
             return
 
-        self.withdraw()
+        # Keep the window visible with a working status instead of vanishing
+        # (withdraw looked like a crash / auto-close).
+        self._set_working(True)
+        self.update_idletasks()
         outputs: list[str] = []
         errors: list[str] = []
         try:
@@ -455,13 +856,14 @@ class OptionsApp(tk.Tk):
                     Path(p).unlink(missing_ok=True)
                 except OSError:
                     pass
+            self._set_working(False)
 
         if errors and not outputs:
             messagebox.showerror(
                 "Anonymizer",
                 "Something went wrong:\n\n" + "\n\n".join(errors[:3]),
+                parent=self,
             )
-            self.deiconify()
             return
 
         if want_open and outputs:
@@ -475,6 +877,7 @@ class OptionsApp(tk.Tk):
                         subprocess.run(["xdg-open", out], check=False)
                 except OSError:
                     pass
+            _log("OptionsApp done (open results) → destroy")
             self.destroy()
             return
 
@@ -499,7 +902,22 @@ class OptionsApp(tk.Tk):
                 subprocess.run(["xdg-open", folder], check=False)
         else:
             messagebox.showinfo("Anonymizer", msg, parent=self)
+        _log("OptionsApp done → destroy")
         self.destroy()
+
+    def _set_working(self, working: bool) -> None:
+        """Show a simple busy state without hiding the whole window."""
+        try:
+            if not self.winfo_exists():
+                return
+            if working:
+                self.title(f"Anonymizer {__version__} — working…")
+                self.configure(cursor="watch")
+            else:
+                self.title(f"Anonymizer {__version__}")
+                self.configure(cursor="")
+        except tk.TclError:
+            pass
 
     def _write_temp_config(self, style: str, allow_path: str, deny_path: str) -> Path:
         import yaml
@@ -531,11 +949,7 @@ class OptionsApp(tk.Tk):
         return cfg_path
 
     def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
-        messagebox.showinfo(
-            "Anonymizer",
-            "Complete the checklist in the terminal (space / enter).",
-            parent=self,
-        )
+        # No pre-flight dialog (Mac opens review/Terminal directly after Start).
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
@@ -568,36 +982,46 @@ class LauncherApp(tk.Tk):
         super().__init__()
         self.title(f"Anonymizer {__version__}")
         self.resizable(False, False)
+        self.configure(bg=_BG_APP)
         self.chosen: list[Path] = []
+        self._icon_refs: list[tk.PhotoImage] = []
+        self._icon_refs.extend(_apply_window_icons(self))
 
-        frm = ttk.Frame(self, padding=28)
+        frm = tk.Frame(self, bg=_BG_APP, padx=28, pady=28)
         frm.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(
+        _pack_title_row(
             frm,
-            text=f"Anonymizer (version {__version__})",
-            font=("Segoe UI", 16, "bold"),
-        ).pack(anchor=tk.W)
-        ttk.Label(
+            f"Anonymizer (version {__version__})",
+            self._icon_refs,
+        )
+        tk.Label(
             frm,
-            text="Choose PDF, DOCX, or text documents to anonymize.\n"
-            "Saves next to the original · Private on this PC",
-            foreground="#555",
+            text=(
+                "Choose PDF, DOCX, or text documents to anonymize.\n"
+                f"Saves next to the original · {_privacy_caption()}"
+            ),
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT,
             justify=tk.LEFT,
+            anchor=tk.W,
         ).pack(anchor=tk.W, pady=(8, 20))
 
-        ttk.Button(
-            frm, text="Choose documents…", command=self._pick
-        ).pack(fill=tk.X, pady=4)
-        ttk.Button(frm, text="Quit", command=self.destroy).pack(fill=tk.X, pady=4)
+        _chip_button(frm, "Choose documents…", self._pick, primary=True, width=22).pack(
+            fill=tk.X, pady=4
+        )
+        _chip_button(frm, "Quit", self.destroy, width=22).pack(fill=tk.X, pady=4)
 
         self.bind("<Escape>", lambda _e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.update_idletasks()
         self.lift()
-        self.attributes("-topmost", True)
-        self.after(200, lambda: self.attributes("-topmost", False))
-        self.focus_force()
+        try:
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
 
     def _pick(self) -> None:
         paths = filedialog.askopenfilenames(

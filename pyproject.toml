@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anonymizer"
-version = "1.2.0"
+version = "1.3.0"
 description = "Local CLI to anonymize PDF/DOCX/text documents to Markdown (EN + FI)"
 readme = "README.md"
 license = "MIT"
@@ -52,8 +52,18 @@ packages = ["src/anonymizer"]
 [tool.hatch.build.targets.wheel.sources]
 "src/anonymizer" = "anonymizer"
 
+# Non-.py package data (dialog icon). Do not also force-include the same
+# path under packages/ or hatchling errors on duplicate wheel entries.
+[tool.hatch.build.targets.wheel.force-include]
+"src/anonymizer/gui/assets/Anonymizer-dialog.png" = "anonymizer/gui/assets/Anonymizer-dialog.png"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/anonymizer", "README.md", "LICENSE", "config.example.yaml"]
+include = [
+  "src/anonymizer",
+  "README.md",
+  "LICENSE",
+  "config.example.yaml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

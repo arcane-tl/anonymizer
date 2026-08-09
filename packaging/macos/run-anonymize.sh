@@ -6,7 +6,7 @@
 #   mode: strict | standard | extract   (default: strict)
 #
 # Options:
-#   --review              Interactive redaction review (requires a real terminal)
+#   --review              Document review window (via --review-window on the CLI)
 #   --redact-style STYLE  placeholder (default) | remove
 #   --format FMT          md (default) | source | both (native PDF/DOCX)
 #   --config PATH         YAML config (allowlist, denylist, …)
@@ -17,8 +17,8 @@
 #   OUTPUT:/absolute/path/to/file.md
 #   OUTPUT:/absolute/path/to/file.anonymized.pdf   (when --format both|source)
 #
-# --review needs an interactive terminal (checkbox UI). Use Terminal.app
-# for that path; plain do shell script has no TTY.
+# --review opens the document review window (--review-window). Prefer
+# Terminal.app / a desktop session so the GUI can display.
 #
 # PATH resolution (first hit wins):
 #   1. $ANONYMIZER_BIN
@@ -31,7 +31,7 @@ usage() {
   cat <<'EOF'
 Usage: run-anonymize.sh [options] [mode] file [file ...]
 
-  --review              Interactive redaction review (requires a real terminal)
+  --review              Document review window before saving
   --redact-style STYLE  placeholder | remove (default: placeholder)
   --format FMT          md | source | both (default: md)
   --config PATH         YAML config file
@@ -271,10 +271,7 @@ if [[ "$REVIEW" -eq 1 && "$MODE" == "extract" ]]; then
   exit 2
 fi
 
-if [[ "$REVIEW" -eq 1 && ! -t 0 ]]; then
-  echo "error: --review needs an interactive terminal (open via Terminal.app)." >&2
-  exit 2
-fi
+# Document window needs a display, not a TTY; Terminal is still the usual host.
 
 BIN="$(find_anonymize)" || exit 2
 
@@ -348,7 +345,7 @@ for f in "$@"; do
 
   FMT="${OUTPUT_FORMAT:-md}"
   if [[ "$REVIEW" -eq 1 ]]; then
-    if "$BIN" "$MODE" "$f_abs" --review "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
+    if "$BIN" "$MODE" "$f_abs" --review-window "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; then
       emit_outputs "$f_abs" "$MODE" "$FMT"
       ok=$((ok + 1))
     else
