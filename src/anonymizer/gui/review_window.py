@@ -273,7 +273,9 @@ def run_review_window(
             listbox.itemconfig(index, foreground=_LIST_CLEAR_FG)
         # User-added is marked with “+” in the label, not a special ink colour.
 
-    def _refresh_list(select_ph: str | None = None) -> None:
+    def _refresh_list(
+        select_ph: str | None = None, *, refresh_doc: bool = True
+    ) -> None:
         listbox.delete(0, tk.END)
         visible_ph.clear()
         for f in _filtered_findings():
@@ -289,6 +291,19 @@ def run_review_window(
             listbox.activate(idx)
             listbox.see(idx)
             selected_ph[0] = target
+        elif visible_ph:
+            # Filter hid the previous selection — focus first visible row
+            selected_ph[0] = visible_ph[0]
+            listbox.selection_clear(0, tk.END)
+            listbox.selection_set(0)
+            listbox.activate(0)
+            listbox.see(0)
+        else:
+            selected_ph[0] = None
+            listbox.selection_clear(0, tk.END)
+        if refresh_doc:
+            # Document highlights follow the same filter as the list
+            _refresh_doc(scroll_to_selected=False)
 
     def _paint_finding(f: ReviewFinding, tag: str) -> None:
         if not f.original:
@@ -312,6 +327,7 @@ def run_review_window(
         doc.configure(state=tk.NORMAL)
         doc.delete("1.0", tk.END)
         if preview_redacted.get():
+            # Preview always shows full apply (filter is review-UI only)
             blocks, _ = session.apply(style="placeholder")
             doc.insert("1.0", "\n\n".join(blocks))
             doc.configure(state=tk.DISABLED)
@@ -320,9 +336,14 @@ def run_review_window(
 
         doc.insert("1.0", "\n\n".join(session.original_blocks))
 
-        # Enabled only — keep clear has no mark (plain text)
+        # Only highlight findings visible under current filter/search
+        visible_set = set(visible_ph)
         ordered = sorted(
-            (f for f in session.findings if f.enabled),
+            (
+                f
+                for f in session.findings
+                if f.enabled and f.placeholder in visible_set
+            ),
             key=lambda f: len(f.original),
             reverse=True,
         )
@@ -330,7 +351,7 @@ def run_review_window(
             _paint_finding(f, "hl_REDACT")
 
         sel = selected_ph[0]
-        if sel:
+        if sel and sel in visible_set:
             f_sel = session.get(sel)
             if f_sel and f_sel.enabled:
                 _paint_finding(f_sel, "hl_SELECTED")
@@ -341,7 +362,7 @@ def run_review_window(
         except tk.TclError:
             pass
 
-        if scroll_to_selected and sel:
+        if scroll_to_selected and sel and sel in visible_set:
             f_sel = session.get(sel)
             if f_sel and f_sel.original:
                 idx = doc.search(f_sel.original, "1.0", stopindex=tk.END)
@@ -393,10 +414,42 @@ def run_review_window(
         if not ph:
             return
         session.set_enabled(ph, enabled)
-        _refresh_list(select_ph=ph)
+        _refresh_list(select_ph=ph, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
 
-    def _toggle_selected(_evt=None) -> str:
+    def _is_text_input_focused() -> bool:
+        """True when keystrokes should go to search / combobox, not shortcuts."""
+        w = root.focus_get()
+        if w is None:
+            return False
+        if w is search_entry or w is type_menu or w is type_combo:
+            return True
+        # ttk.Entry / Combobox internal children (macOS)
+        try:
+            if w == search_entry or str(w).startswith(str(search_entry)):
+                return True
+        except tk.TclError:
+            pass
+        cls = w.winfo_class()
+        if cls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
+            return True
+        # Walk parents — focus is often an inner entry of Combobox
+        try:
+            parent = w.master
+            while parent is not None:
+                if parent in (search_entry, type_menu, type_combo):
+                    return True
+                pcls = parent.winfo_class()
+                if pcls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
+                    return True
+                parent = getattr(parent, "master", None)
+        except tk.TclError:
+            pass
+        return False
+
+    def _toggle_selected(_evt=None) -> str | None:
+        if _is_text_input_focused():
+            return None  # allow space in search box
         ph = selected_ph[0]
         if not ph:
             sel = listbox.curselection()
@@ -404,11 +457,13 @@ def run_review_window(
                 ph = visible_ph[int(sel[0])]
         if ph:
             session.toggle(ph)
-            _refresh_list(select_ph=ph)
+            _refresh_list(select_ph=ph, refresh_doc=False)
             _refresh_doc(scroll_to_selected=True)
         return "break"
 
-    def _add_selection(_evt=None) -> str:
+    def _add_selection(_evt=None) -> str | None:
+        if _is_text_input_focused():
+            return None  # type “a” into search normally
         try:
             sel_text = doc.get(tk.SEL_FIRST, tk.SEL_LAST)
         except tk.TclError:
@@ -442,7 +497,7 @@ def run_review_window(
         if filter_type.get() not in {"All", finding.type_label}:
             filter_type.set("All")
         selected_ph[0] = finding.placeholder
-        _refresh_list(select_ph=finding.placeholder)
+        _refresh_list(select_ph=finding.placeholder, refresh_doc=False)
         _refresh_doc(scroll_to_selected=True)
         listbox.focus_set()
         return "break"
@@ -483,14 +538,15 @@ def run_review_window(
 
     def _nav_if_not_typing(delta: int, event=None) -> str | None:
         """j/k from root: ignore when typing in search or combobox."""
-        w = root.focus_get()
-        if w is search_entry or w is type_menu or w is type_combo:
-            return None
-        # Entry/Combobox class name checks (platform widgets)
-        cls = w.winfo_class() if w is not None else ""
-        if cls in {"TEntry", "Entry", "TCombobox", "Combobox"}:
+        if _is_text_input_focused():
             return None
         return _nav(delta)
+
+    def _shortcut_space(_evt=None) -> str | None:
+        return _toggle_selected(_evt)
+
+    def _shortcut_add(_evt=None) -> str | None:
+        return _add_selection(_evt)
 
     listbox.bind("<<ListboxSelect>>", _on_list_select)
     # Listbox owns arrow keys (break default so we don't double-step with root)
@@ -502,25 +558,25 @@ def run_review_window(
     listbox.bind("a", _add_selection)
     listbox.bind("A", _add_selection)
 
-    root.bind("<space>", _toggle_selected)
+    # Root shortcuts only when not typing in search / filter combobox
+    root.bind("<space>", _shortcut_space)
     root.bind("<Escape>", lambda _e: _cancel())
     root.bind(
         "<Command-Return>" if sys.platform == "darwin" else "<Control-Return>",
         lambda _e: _save(),
     )
-    # j/k from document focus etc.; never bind root Up/Down (fights Listbox)
+    # j/k / a from document focus etc.; never bind root Up/Down (fights Listbox)
     root.bind("j", lambda e: _nav_if_not_typing(1, e))
     root.bind("k", lambda e: _nav_if_not_typing(-1, e))
-    root.bind("a", _add_selection)
-    root.bind("A", _add_selection)
+    root.bind("a", _shortcut_add)
+    root.bind("A", _shortcut_add)
 
     root.protocol("WM_DELETE_WINDOW", _cancel)
 
-    _refresh_list()
+    # Initial list build also paints doc for visible findings only
+    _refresh_list(refresh_doc=True)
     if visible_ph:
         _focus_index(0, scroll_doc=True)
-    else:
-        _refresh_doc()
 
     listbox.focus_set()
     root.lift()
