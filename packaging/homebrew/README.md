@@ -46,6 +46,9 @@ brew install anonymizer
 anonymize --version
 ```
 
+Default spaCy models: **en_core_web_lg** + **fi_core_news_lg** (best NER quality; larger first install).  
+Optional Swedish and smaller models: see [docs/models.md](../../docs/models.md).
+
 ## Upgrade / reinstall / uninstall
 
 ```bash

@@ -147,9 +147,10 @@ Select-String -Path pyproject.toml -Pattern '^version\s*='
 #    Network required once: embeddable CPython 3.12 + spaCy models + pip packages.
 
 # 2) Build stage + portable zip + Setup.exe
+#    Default: EN+FI large spaCy models (best PERSON/ORG quality; larger download)
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
-# Optional larger NER models (bigger installer):
-#   ... build-release.ps1 -Models lg
+# Smaller installer (faster, less NER quality):
+#   ... build-release.ps1 -Models sm
 
 # 3) Confirm outputs
 Get-ChildItem dist\Anonymizer-*-windows.zip, dist\Anonymizer-Setup-*.exe
@@ -170,9 +171,11 @@ What the build puts under `dist\windows-stage\`:
 | Piece | Role |
 |-------|------|
 | `Anonymizer.exe` | Frozen GUI only (PyInstaller; no spaCy) |
-| `runtime\` | **Embeddable CPython 3.12** + package + spaCy `sm` models (relocatable; end users need **no** system Python) |
+| `runtime\` | **Embeddable CPython 3.12** + package + spaCy **lg** EN+FI models by default (relocatable; end users need **no** system Python) |
 | `bin\anonymize.cmd` | CLI: `runtime\python.exe -m anonymizer.cli` |
 | `bin\Anonymizer.cmd` | Launches GUI |
+
+Post-install: switch model size or add Swedish — see `docs/models.md`.
 
 Install target (Setup): `%LOCALAPPDATA%\Anonymizer` (per-user, no admin). Optional task adds `bin\` to the user PATH.
 

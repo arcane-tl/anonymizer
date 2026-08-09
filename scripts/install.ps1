@@ -24,7 +24,7 @@
   Git branch to clone (default: main)
 
 .PARAMETER Models
-  spaCy model size: sm (default, faster) or lg (higher accuracy)
+  spaCy model size: sm | md | lg (default: lg — best PERSON/ORG quality; sm is smaller/faster)
 
 .PARAMETER WithDev
   Also install pytest (dev extra)
@@ -51,8 +51,8 @@ param(
     [switch] $FromSource,
     [string] $Repo = $(if ($env:ANONYMIZER_REPO) { $env:ANONYMIZER_REPO } else { "https://github.com/arcane-tl/anonymizer.git" }),
     [string] $Branch = $(if ($env:ANONYMIZER_BRANCH) { $env:ANONYMIZER_BRANCH } else { "main" }),
-    [ValidateSet("sm", "lg")]
-    [string] $Models = "sm",
+    [ValidateSet("sm", "md", "lg")]
+    [string] $Models = "lg",
     [switch] $WithDev,
     [string] $Python = "",
     [switch] $Yes
@@ -194,28 +194,39 @@ function Setup-PythonEnv {
         Pop-Location
     }
 
-    if ($Models -eq "lg") {
-        $enModel = "en_core_web_lg"
-        $fiModel = "fi_core_news_lg"
-    } else {
-        $enModel = "en_core_web_sm"
-        $fiModel = "fi_core_news_sm"
+    # Prefer requested size; fall back lg→md→sm
+    $enCandidates = switch ($Models) {
+        "lg" { @("en_core_web_lg", "en_core_web_md", "en_core_web_sm") }
+        "md" { @("en_core_web_md", "en_core_web_sm") }
+        default { @("en_core_web_sm") }
+    }
+    $fiCandidates = switch ($Models) {
+        "lg" { @("fi_core_news_lg", "fi_core_news_md", "fi_core_news_sm") }
+        "md" { @("fi_core_news_md", "fi_core_news_sm") }
+        default { @("fi_core_news_sm") }
     }
 
-    Write-Info "Downloading spaCy models ($Models)..."
-    & $pyVenv -m spacy download $enModel
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Failed $enModel — trying en_core_web_sm"
-        & $pyVenv -m spacy download en_core_web_sm
-        if ($LASTEXITCODE -ne 0) { Die "Could not install English spaCy model" }
+    function Install-SpacyChain([string[]] $Candidates, [string] $Label) {
+        foreach ($m in $Candidates) {
+            Write-Info "Downloading spaCy model $m ($Label)..."
+            & $pyVenv -m spacy download $m
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok "Installed $m"
+                return $true
+            }
+            Write-Warn "Failed $m — trying next fallback if any"
+        }
+        return $false
     }
-    & $pyVenv -m spacy download $fiModel
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Failed $fiModel — trying fi_core_news_sm"
-        & $pyVenv -m spacy download fi_core_news_sm
-        if ($LASTEXITCODE -ne 0) { Die "Could not install Finnish spaCy model" }
+
+    Write-Info "Downloading spaCy models (size=$Models; default quality path uses lg)..."
+    if (-not (Install-SpacyChain $enCandidates "English")) {
+        Die "Could not install any English spaCy model"
     }
-    Write-Ok "Python package and models installed"
+    if (-not (Install-SpacyChain $fiCandidates "Finnish")) {
+        Die "Could not install any Finnish spaCy model"
+    }
+    Write-Ok "Python package and EN+FI models installed"
 }
 
 function Install-Launcher {
@@ -296,6 +307,14 @@ function Write-Summary {
     Write-Host ""
     Write-Host "OCR (optional, scanned PDFs): install Tesseract for Windows and ensure it is on PATH."
     Write-Host "  https://github.com/UB-Mannheim/tesseract/wiki"
+    Write-Host ""
+    $pyV = Join-Path $script:InstallRoot ".venv\Scripts\python.exe"
+    Write-Host "spaCy models (default: EN+FI large for best NER quality):" -ForegroundColor Cyan
+    Write-Host "  Smaller/faster:  & `"$pyV`" -m spacy download en_core_web_sm"
+    Write-Host "                   & `"$pyV`" -m spacy download fi_core_news_sm"
+    Write-Host "  Optional Swedish:& `"$pyV`" -m spacy download sv_core_news_lg"
+    Write-Host "                   anonymize doc.pdf --lang sv"
+    Write-Host "  Guide: docs/models.md"
     Write-Host ""
 }
 

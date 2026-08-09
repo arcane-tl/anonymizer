@@ -773,7 +773,11 @@ def cmd_doctor() -> None:
                 except OSError:
                     continue
             if loaded:
-                rows.append((f"spaCy ({lang})", loaded, True))
+                note = loaded
+                # Nudge toward large models when only sm is present (EN/FI)
+                if lang in {"en", "fi"} and loaded.endswith("_sm"):
+                    note = f"{loaded}  (tip: larger models improve PERSON/ORG — see docs/models.md)"
+                rows.append((f"spaCy ({lang})", note, True))
             else:
                 # EN+FI required for default install; extra langs (sv, …) optional
                 required = lang in {"en", "fi"}

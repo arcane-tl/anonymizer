@@ -45,11 +45,23 @@ class Anonymizer < Formula
   end
 
   def post_install
-    # Smaller models by default for a faster first brew install.
+    # Quality-first: large EN+FI models (best PERSON/ORG NER). Fall back to md/sm
+    # if a download fails so `brew install` still succeeds on flaky networks.
     python = libexec/"bin/python"
-    %w[en_core_web_sm fi_core_news_sm].each do |model|
-      ohai "Downloading spaCy model #{model}"
-      system python, "-m", "spacy", "download", model
+    {
+      "English" => %w[en_core_web_lg en_core_web_md en_core_web_sm],
+      "Finnish" => %w[fi_core_news_lg fi_core_news_md fi_core_news_sm],
+    }.each do |label, chain|
+      ok = false
+      chain.each do |model|
+        ohai "Downloading spaCy model #{model} (#{label})"
+        if system python, "-m", "spacy", "download", model
+          ok = true
+          break
+        end
+        opoo "Failed #{model} — trying next fallback if any"
+      end
+      odie "Could not install any #{label} spaCy model" unless ok
     end
   end
 
@@ -86,10 +98,18 @@ class Anonymizer < Formula
 
       Document review window needs tkinter (via python-tk@3.12, a formula dependency).
 
-      spaCy models (default): en_core_web_sm, fi_core_news_sm
-      Larger models:
-        #{libexec}/bin/python -m spacy download en_core_web_lg
-        #{libexec}/bin/python -m spacy download fi_core_news_lg
+      spaCy models (default install): en_core_web_lg, fi_core_news_lg
+        (best NER quality; download is larger — first install may take several minutes)
+
+      Smaller / faster models (optional):
+        #{libexec}/bin/python -m spacy download en_core_web_sm
+        #{libexec}/bin/python -m spacy download fi_core_news_sm
+
+      Optional Swedish (not installed by default):
+        #{libexec}/bin/python -m spacy download sv_core_news_lg
+        anonymize doc.pdf --lang sv
+
+      Model guide: https://github.com/arcane-tl/anonymizer/blob/main/docs/models.md
 
       Optional OCR: brew install tesseract tesseract-lang ocrmypdf
     EOS

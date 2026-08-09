@@ -55,34 +55,29 @@ recognizers:
 
 The class must subclass `presidio_analyzer.EntityRecognizer` and set `supported_entities`.
 
-## Extra languages (Swedish)
+## Extra languages and model sizes
 
-spaCy model map:
+Installers default to **EN + FI large** models. Swedish and other sizes are opt-in.
 
-| Code | Primary model | Fallbacks |
-|------|---------------|-----------|
-| `en` | `en_core_web_lg` | md, sm |
-| `fi` | `fi_core_news_lg` | md, sm |
-| `sv` | `sv_core_news_lg` | md, sm |
+**Full guide:** [models.md](models.md) (switch sm/md/lg, add Swedish, Homebrew/Windows paths).
 
 ```bash
+# Optional Swedish
 python -m spacy download sv_core_news_lg
 anonymize doc.pdf --lang sv
 anonymize doc.pdf --lang en,sv
 ```
 
-`anonymize doctor` treats **en** and **fi** models as required; **sv** is optional.
-
-Override models in config:
+`anonymize doctor` treats **en** and **fi** as required; **sv** as optional.
 
 ```yaml
+# config.yaml — force a package if several sizes are installed
 spacy_models:
-  sv: sv_core_news_md
+  en: en_core_web_md
+  sv: sv_core_news_lg
 ```
 
 Auto-detect (`--lang auto`) uses Lingua over EN/FI/SV and may run multi-pass NER when mixed.
-
-Norwegian/Danish can follow the same pattern later (spaCy code + Lingua language + optional YAML IDs).
 
 ## Entity types and modes
 

@@ -6,7 +6,7 @@
 .DESCRIPTION
   Creates dist/windows-stage/ with:
     Anonymizer.exe   (frozen GUI via PyInstaller)
-    runtime/         (embeddable CPython + anonymizer + spaCy sm models)
+    runtime/         (embeddable CPython + anonymizer + spaCy models; default lg)
     bin/anonymize.cmd
     bin/Anonymizer.cmd
 
@@ -25,8 +25,8 @@
 [CmdletBinding()]
 param(
     [string] $Python = "",
-    [ValidateSet("sm", "lg")]
-    [string] $Models = "sm",
+    [ValidateSet("sm", "md", "lg")]
+    [string] $Models = "lg",
     [string] $EmbedPythonVersion = "3.12.10",
     # Optional SHA256 of python-*-embed-amd64.zip (verify at https://www.python.org/downloads/)
     [string] $EmbedPythonSha256 = "",
@@ -197,16 +197,31 @@ Write-Info "Installing anonymizer wheel into runtime..."
 & $PyEmbed -m pip install --no-warn-script-location $wheel.FullName
 if ($LASTEXITCODE -ne 0) { Die "pip install anonymizer wheel failed" }
 
-if ($Models -eq "lg") {
-    $en = "en_core_web_lg"; $fi = "fi_core_news_lg"
-} else {
-    $en = "en_core_web_sm"; $fi = "fi_core_news_sm"
+$enCandidates = switch ($Models) {
+    "lg" { @("en_core_web_lg", "en_core_web_md", "en_core_web_sm") }
+    "md" { @("en_core_web_md", "en_core_web_sm") }
+    default { @("en_core_web_sm") }
 }
-Write-Info "Downloading spaCy models ($Models)..."
-& $PyEmbed -m spacy download $en
-if ($LASTEXITCODE -ne 0) { Die "spacy download $en failed" }
-& $PyEmbed -m spacy download $fi
-if ($LASTEXITCODE -ne 0) { Die "spacy download $fi failed" }
+$fiCandidates = switch ($Models) {
+    "lg" { @("fi_core_news_lg", "fi_core_news_md", "fi_core_news_sm") }
+    "md" { @("fi_core_news_md", "fi_core_news_sm") }
+    default { @("fi_core_news_sm") }
+}
+function Install-SpacyChain([string[]] $Candidates, [string] $Label) {
+    foreach ($m in $Candidates) {
+        Write-Info "Downloading spaCy model $m ($Label)..."
+        & $PyEmbed -m spacy download $m
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Installed $m"
+            return $true
+        }
+        Write-Warn "Failed $m — trying next fallback if any"
+    }
+    return $false
+}
+Write-Info "Downloading spaCy models (size=$Models; default lg for best NER quality)..."
+if (-not (Install-SpacyChain $enCandidates "English")) { Die "Could not install English spaCy model" }
+if (-not (Install-SpacyChain $fiCandidates "Finnish")) { Die "Could not install Finnish spaCy model" }
 
 # Sanity: package imports without host Python
 & $PyEmbed -c "import anonymizer, spacy; print('runtime ok', anonymizer.__version__)"

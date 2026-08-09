@@ -14,10 +14,10 @@
 #   --branch NAME    Git branch (default: main)
 #   --no-ocr         Skip Homebrew OCR packages (tesseract/ocrmypdf)
 #   --with-dev       Also install pytest etc.
-#   --models sm|lg   spaCy model size (default: lg)
-#   --python PATH    Python 3.11+ interpreter
-#   -y, --yes        Assume yes / non-interactive
-#   -h, --help       Show help
+#   --models sm|md|lg  spaCy model size (default: lg — best PERSON/ORG quality)
+#   --python PATH      Python 3.11+ interpreter
+#   -y, --yes          Assume yes / non-interactive
+#   -h, --help         Show help
 
 set -euo pipefail
 
@@ -61,11 +61,14 @@ Options:
   --repo URL       Git clone URL (default: GitHub arcane-tl/anonymizer)
   --branch NAME    Git branch (default: main)
   --no-ocr         Skip Homebrew OCR packages (tesseract/ocrmypdf)
-  --with-dev       Also install pytest etc.
-  --models sm|lg   spaCy model size (default: lg)
-  --python PATH    Python 3.11+ interpreter
-  -y, --yes        Assume yes / non-interactive
-  -h, --help       Show help
+  --with-dev         Also install pytest etc.
+  --models sm|md|lg  spaCy size (default: lg — best NER quality; sm = smaller/faster)
+  --python PATH      Python 3.11+ interpreter
+  -y, --yes          Assume yes / non-interactive
+  -h, --help         Show help
+
+Default models: English + Finnish large (en_core_web_lg, fi_core_news_lg).
+Swedish and other languages are optional after install — see docs/models.md.
 EOF
 }
 
@@ -99,8 +102,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$MODELS" != "sm" && "$MODELS" != "lg" ]]; then
-  die "--models must be sm or lg"
+if [[ "$MODELS" != "sm" && "$MODELS" != "md" && "$MODELS" != "lg" ]]; then
+  die "--models must be sm, md, or lg (default: lg)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -281,25 +284,44 @@ setup_python_env() {
     pip install -e "${INSTALL_ROOT}"
   fi
 
-  local en_model fi_model
-  if [[ "$MODELS" == "lg" ]]; then
-    en_model="en_core_web_lg"
-    fi_model="fi_core_news_lg"
-  else
-    en_model="en_core_web_sm"
-    fi_model="fi_core_news_sm"
-  fi
+  # Prefer requested size; fall back lg→md→sm so install still succeeds offline-ish failures
+  local -a en_candidates fi_candidates
+  case "$MODELS" in
+    lg)
+      en_candidates=(en_core_web_lg en_core_web_md en_core_web_sm)
+      fi_candidates=(fi_core_news_lg fi_core_news_md fi_core_news_sm)
+      ;;
+    md)
+      en_candidates=(en_core_web_md en_core_web_sm)
+      fi_candidates=(fi_core_news_md fi_core_news_sm)
+      ;;
+    *)
+      en_candidates=(en_core_web_sm)
+      fi_candidates=(fi_core_news_sm)
+      ;;
+  esac
 
-  info "Downloading spaCy models ($MODELS)…"
-  if ! python -m spacy download "$en_model"; then
-    warn "Failed to download $en_model — trying en_core_web_sm"
-    python -m spacy download en_core_web_sm || die "Could not install English spaCy model"
-  fi
-  if ! python -m spacy download "$fi_model"; then
-    warn "Failed to download $fi_model — trying fi_core_news_sm"
-    python -m spacy download fi_core_news_sm || die "Could not install Finnish spaCy model"
-  fi
-  ok "Python package and models installed"
+  download_model_chain() {
+    local lang_label=$1
+    shift
+    local m
+    for m in "$@"; do
+      info "Downloading spaCy model $m ($lang_label)…"
+      if python -m spacy download "$m"; then
+        ok "Installed $m"
+        return 0
+      fi
+      warn "Failed $m — trying next fallback if any"
+    done
+    return 1
+  }
+
+  info "Downloading spaCy models (size=$MODELS; default quality path uses lg)…"
+  download_model_chain "English" "${en_candidates[@]}" \
+    || die "Could not install any English spaCy model"
+  download_model_chain "Finnish" "${fi_candidates[@]}" \
+    || die "Could not install any Finnish spaCy model"
+  ok "Python package and EN+FI models installed"
 }
 
 install_launcher() {
@@ -428,6 +450,13 @@ ${BOLD}Try it:${RESET}
 
   anonymize examples          # more copy-paste commands
   anonymize --help
+
+${BOLD}spaCy models (default: EN+FI large):${RESET}
+  Smaller / faster:   $INSTALL_ROOT/.venv/bin/python -m spacy download en_core_web_sm
+                      $INSTALL_ROOT/.venv/bin/python -m spacy download fi_core_news_sm
+  Optional Swedish:   $INSTALL_ROOT/.venv/bin/python -m spacy download sv_core_news_lg
+                      anonymize doc.pdf --lang sv
+  Full guide:         docs/models.md (in the install tree or on GitHub)
 
 ${BOLD}Upgrade later:${RESET}
   $INSTALL_ROOT/scripts/install.sh --yes --from-source

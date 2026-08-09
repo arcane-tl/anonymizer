@@ -149,7 +149,7 @@ Full packaging notes: [packaging/windows/README.md](packaging/windows/README.md)
 |----------|-----|
 | **macOS** (no Homebrew) | `curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh \| bash -s -- --yes` then optional `./packaging/macos/install-app.sh` |
 | **Windows portable** | `Anonymizer-*-windows.zip` from Releases — keep `runtime\` next to `Anonymizer.exe` |
-| **From source** | Python 3.11+, `pip install -e ".[dev]"`, then spaCy models (`en_core_web_lg` / `fi_core_news_lg` or `sm`) |
+| **From source** | Python 3.11+, `pip install -e ".[dev]"`, then spaCy **lg** EN+FI models (default; see [docs/models.md](docs/models.md) for sm/md/sv) |
 
 ---
 
@@ -294,10 +294,12 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m spacy download en_core_web_lg
+python -m spacy download en_core_web_lg   # default quality (also fi_core_news_lg)
 python -m spacy download fi_core_news_lg
 pytest -q
 ```
+
+spaCy models (switch size, add Swedish): **[docs/models.md](docs/models.md)**.
 
 Regression: `tests/test_contract_templates.py`, `tests/test_realworld_precision.py`, `tests/test_offline_security.py`.  
 See [tests/fixtures/README.md](tests/fixtures/README.md).
