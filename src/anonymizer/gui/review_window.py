@@ -615,15 +615,67 @@ def run_review_window(
         selectbackground=_HL_SELECTED_BG,
         selectforeground=_TEXT_ON_BLUE,
         borderwidth=0,
+        cursor="xterm",  # select to redact, not free typing
     )
     doc_scroll = ttk.Scrollbar(text_wrap, orient=tk.VERTICAL, command=doc.yview)
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    # Review canvas only: allow select/navigate/copy; block typing & paste/cut
+    _NAV_KEYS = {
+        "Left",
+        "Right",
+        "Up",
+        "Down",
+        "Home",
+        "End",
+        "Prior",
+        "Next",
+        "Tab",
+        "ISO_Left_Tab",
+        "Shift_L",
+        "Shift_R",
+        "Control_L",
+        "Control_R",
+        "Alt_L",
+        "Alt_R",
+        "Meta_L",
+        "Meta_R",
+        "Caps_Lock",
+        "Escape",
+        "Return",
+        "KP_Enter",
+    }
+
+    def _doc_block_edit(event: tk.Event) -> str | None:
+        """Prevent free editing; selection + shortcuts still work."""
+        # Our add-redaction shortcut (handled by specific binds; belt-and-suspenders)
+        if event.keysym in {"a", "A"}:
+            return _open_add_type_menu(event)
+        # Allow pure navigation / modifiers
+        if event.keysym in _NAV_KEYS:
+            return None
+        # Allow copy (Ctrl/Cmd+C); block cut/paste
+        state = int(getattr(event, "state", 0) or 0)
+        cmd = bool(state & 0x8) or bool(state & 0x4)  # Mod1/Control-ish (platform varies)
+        # On macOS Command is often 0x8 (Mod1); Control 0x4
+        if event.keysym.lower() == "c" and (
+            state & 0x4 or state & 0x8 or state & 0x10
+        ):
+            return None  # copy
+        # Block everything else that would change text (letters, BackSpace, Delete, …)
+        return "break"
+
+    doc.bind("<Key>", _doc_block_edit)
+    doc.bind("<<Paste>>", lambda _e: "break")
+    doc.bind("<<Cut>>", lambda _e: "break")
     doc.bind("<Button-1>", lambda _e: doc.focus_set())
-    # Right-click selection → type menu (add redaction)
+    # Right-click / a → type menu (must return break so Text never inserts)
     doc.bind("<Button-3>", lambda e: _open_add_type_menu(e))
-    doc.bind("<Control-Button-1>", lambda e: _open_add_type_menu(e))  # mac trackpad alt
+    doc.bind("<Control-Button-1>", lambda e: _open_add_type_menu(e))
+    doc.bind("a", lambda e: _open_add_type_menu(e))
+    doc.bind("A", lambda e: _open_add_type_menu(e))
 
     doc.tag_configure(
         "hl_REDACT", background=_HL_REDACT_BG, foreground=_TEXT_ON_AMBER
@@ -636,7 +688,7 @@ def run_review_window(
     # One-line hint (no combobox bar)
     tk.Label(
         doc_pad,
-        text="Select text → press a or right-click → choose type to redact",
+        text="Select text → a or right-click → choose type  ·  document is not editable",
         bg=_BG_PANEL,
         fg=_TEXT_MUTED,
         font=_FONT_SMALL,
