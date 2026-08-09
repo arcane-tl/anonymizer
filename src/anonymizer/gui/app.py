@@ -408,14 +408,14 @@ def _chip_button(
     command,
     *,
     primary: bool = False,
-    width: int = 10,
+    width: int | None = 11,
 ) -> "tk.Button":
+    """Compact action chip (~Mac 96×32 dialog buttons when width=11)."""
     if primary:
         bg, fg, active = _ACCENT, _TEXT_ON_ACCENT, _ACCENT_HOVER
     else:
         bg, fg, active = _BG_BTN, _TEXT, _BG_BTN_HOVER
-    btn = tk.Button(
-        parent,
+    kw: dict = dict(
         text=text,
         command=command,
         bg=bg,
@@ -423,16 +423,17 @@ def _chip_button(
         activebackground=active,
         activeforeground=fg,
         disabledforeground=_TEXT_MUTED,
-        font=_FONT_BOLD if primary else _FONT,
+        font=_FONT,  # same size for Cancel / Lists… / Start (Mac HIG-ish)
         relief=tk.FLAT,
         bd=0,
-        padx=16,
-        pady=8,
+        padx=10,
+        pady=4,
         cursor="hand2",
-        width=width,
         highlightthickness=0,
     )
-    return btn
+    if width is not None:
+        kw["width"] = width
+    return tk.Button(parent, **kw)
 
 
 def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Frame":
@@ -687,6 +688,7 @@ class OptionsApp(tk.Tk):
             variable=self.native_var,
         )
 
+        # Action bar (Mac HIG): Cancel left · Lists… + Start right, compact chips
         bar = tk.Frame(root, bg=_BG_APP)
         bar.pack(fill=tk.X, pady=(28, 0))
         _chip_button(bar, "Cancel", self._on_cancel).pack(side=tk.LEFT)
@@ -947,12 +949,7 @@ class OptionsApp(tk.Tk):
         return cfg_path
 
     def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
-        messagebox.showinfo(
-            "Anonymizer",
-            "A review window will open for each file.\n"
-            "Toggle false positives, select text to add redactions, then Save.",
-            parent=self,
-        )
+        # No pre-flight dialog (Mac opens review/Terminal directly after Start).
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
