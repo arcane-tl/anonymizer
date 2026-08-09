@@ -6,7 +6,9 @@ Explicit tk colours (no global ttk style hacks). Offline; no network.
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import time
 from typing import Callable
 
@@ -25,6 +27,74 @@ try:
 except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
     tkfont = None  # type: ignore[assignment]
+
+
+# ── Overlay scrollbar debug log (opt-in) ──────────────────────────
+# Set ANONYMIZER_SB_DEBUG=1 for file log + hot-pink pills while diagnosing.
+def _sb_debug_enabled() -> bool:
+    v = os.environ.get("ANONYMIZER_SB_DEBUG", "0").strip().lower()
+    return v in {"1", "true", "yes", "on"}
+
+
+def _sb_log_path() -> str:
+    override = os.environ.get("ANONYMIZER_SB_LOG", "").strip()
+    if override:
+        return override
+    # Prefer /tmp on Unix for a stable path users can `tail -f`
+    if sys.platform != "win32":
+        return "/tmp/anonymizer-sb.log"
+    return os.path.join(tempfile.gettempdir(), "anonymizer-sb.log")
+
+
+_SB_LOG_T0 = time.monotonic()
+_SB_LOG_LAST: dict[str, float] = {}  # rate-limit key → monotonic
+
+
+def _sb_log_reset() -> None:
+    """Truncate log for a fresh review session."""
+    global _SB_LOG_T0
+    _SB_LOG_T0 = time.monotonic()
+    _SB_LOG_LAST.clear()
+    if not _sb_debug_enabled():
+        return
+    path = _sb_log_path()
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(f"# anonymizer scrollbar debug  t0={time.time():.3f}\n")
+            fh.flush()
+    except OSError:
+        return
+    try:
+        print(f"scrollbar debug log: {path}", file=sys.stderr)
+    except OSError:
+        pass
+
+
+def _sb_log(action: str, *, pane: str = "?", rate_hz: float = 0.0, **fields: object) -> None:
+    if not _sb_debug_enabled():
+        return
+    if rate_hz > 0:
+        key = f"{pane}:{action}"
+        now = time.monotonic()
+        min_gap = 1.0 / rate_hz
+        prev = _SB_LOG_LAST.get(key, 0.0)
+        if now - prev < min_gap:
+            return
+        _SB_LOG_LAST[key] = now
+    t = time.monotonic() - _SB_LOG_T0
+    parts = [f"t={t:.3f}", f"pane={pane}", f"action={action}"]
+    for k, v in fields.items():
+        if isinstance(v, float):
+            parts.append(f"{k}={v:.3f}")
+        else:
+            parts.append(f"{k}={v}")
+    line = " ".join(parts) + "\n"
+    try:
+        with open(_sb_log_path(), "a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+    except OSError:
+        pass
 
 
 # ── Dark theme tokens (plain names in comments) ───────────────────
@@ -192,18 +262,35 @@ def _wheel_steps(event: object) -> int:
 class OverlayScrollbar:
     """Modern overlay scrollbar: thin rounded pill, wide hit area, auto-hide.
 
-    Drawn on a Canvas (not ttk) so we control look: no gutter slab, no arrows.
-    API: ``set(first, last)`` for yscrollcommand; ``pulse()`` after wheel scroll.
+    Two draw modes:
+
+    * **surface** (preferred for ``tk.Canvas`` hosts): pill items are drawn
+      *on the host canvas* with a private tag. Hide = ``delete(tag)`` — no
+      separate mapped window, so Aqua cannot leave a compositor ghost.
+    * **owned** (for ``tk.Text`` etc.): a child Canvas overlay. Hide
+      **destroys** the widget (not just ``place_forget``) so nothing remains.
+
+    Hide is also multi-path (deadline poller + generation timer + stuck-drag).
     """
 
     HIDE_S = 2.0  # seconds after last scroll/drag before force-hide
-    TICK_MS = 100  # deadline poll interval
+    POLL_MS = 200  # global poller interval
     HIT_W = 16  # full hit strip width
     PILL_W = 7  # visual thumb width (idle)
     PILL_W_ACTIVE = 9  # hover / drag
     EDGE_PX = 28
     PAD_Y = 10
     MIN_THUMB = 36
+    STUCK_DRAG_S = 0.5  # force-clear drag this long past deadline
+    # When debug logging is on, use an unmistakable colour so a leftover grey
+    # system indicator can be distinguished from *our* pill.
+    _DEBUG_THUMB = "#FF2D55"
+
+    # All live bars — one poller on the review root hides expired ones
+    _instances: list[OverlayScrollbar] = []
+    _poll_root: tk.Misc | None = None
+    _poll_job: str | None = None
+    _poll_last_tick: float = 0.0  # monotonic; zombie detection
 
     def __init__(
         self,
@@ -212,60 +299,380 @@ class OverlayScrollbar:
         command,
         root: tk.Misc,
         chrome: str = _BG_PANEL,
+        name: str = "?",
+        surface: tk.Canvas | None = None,
+        on_event: Callable[[str], None] | None = None,
     ) -> None:
         self._root = root
         self._parent = parent
         self._command = command
         self._chrome = chrome
-        # Match parent so the strip itself is invisible; only the pill shows
-        self._cv = tk.Canvas(
-            parent,
-            width=self.HIT_W,
-            highlightthickness=0,
-            bd=0,
-            bg=chrome,
-            cursor="arrow",
-        )
-        self._tick_job: str | None = None
-        self._redraw_job: str | None = None
-        self._hide_deadline = 0.0  # monotonic time; hide when now >= deadline
+        self._name = name
+        self._on_event = on_event
+        self._tag = f"osb_{name}_{id(self)}"
+        # surface mode: draw on host Canvas; owned mode: separate overlay widget
+        self._surface: tk.Canvas | None = surface
+        self._owns_cv = surface is None
+        self._cv: tk.Canvas | None = None
+        self._geo_retry_job: str | None = None
+        self._hide_deadline = 0.0  # monotonic; hide when now >= deadline
+        self._hide_gen = 0  # generation token for per-instance after()
+        self._hide_after_job: str | None = None
         self._hovered = False
         self._edge_hover = False
         self._dragging = False
         self._first = 0.0
         self._last = 1.0
         self._placed = False
+        # Gates all drawing. Cleared before any unmap/destroy.
+        self._visible = False
         self._thumb_y0 = 0.0
         self._thumb_y1 = 0.0
         self._drag_offset = 0.0  # pointer y within thumb at press
+        self._hide_verify_job: str | None = None
 
-        self._cv.bind("<Configure>", lambda _e: self._redraw())
-        self._cv.bind("<Enter>", self._on_enter)
-        self._cv.bind("<Leave>", self._on_leave)
-        self._cv.bind("<ButtonPress-1>", self._on_press)
-        self._cv.bind("<B1-Motion>", self._on_drag)
-        self._cv.bind("<ButtonRelease-1>", self._on_release)
+        if self._owns_cv:
+            self._ensure_owned_cv()
+        else:
+            assert surface is not None
+            self._cv = surface
+            # Drag interactions on the right edge of the host canvas
+            surface.bind("<ButtonPress-1>", self._on_surface_press, add="+")
+            surface.bind("<B1-Motion>", self._on_drag, add="+")
+            surface.bind("<ButtonRelease-1>", self._on_release, add="+")
+            surface.bind("<Motion>", self._on_surface_motion, add="+")
+            surface.bind("<Leave>", self._on_surface_leave, add="+")
+
         parent.bind("<Motion>", self._on_parent_motion, add="+")
         parent.bind("<Leave>", self._on_parent_leave, add="+")
+
+        OverlayScrollbar._instances.append(self)
+        OverlayScrollbar._ensure_poller(root)
+        self._log(
+            "INIT",
+            n_inst=len(OverlayScrollbar._instances),
+            mode="owned" if self._owns_cv else "surface",
+        )
+
+    def _make_owned_cv(self) -> tk.Canvas:
+        cv = tk.Canvas(
+            self._parent,
+            width=self.HIT_W,
+            highlightthickness=0,
+            bd=0,
+            bg=self._chrome,
+            cursor="arrow",
+        )
+        cv.bind("<Configure>", self._on_configure)
+        cv.bind("<Enter>", self._on_enter)
+        cv.bind("<Leave>", self._on_leave)
+        cv.bind("<ButtonPress-1>", self._on_press)
+        cv.bind("<B1-Motion>", self._on_drag)
+        cv.bind("<ButtonRelease-1>", self._on_release)
+        return cv
+
+    def _ensure_owned_cv(self) -> tk.Canvas:
+        if not self._owns_cv:
+            assert self._cv is not None
+            return self._cv
+        if self._cv is not None:
+            try:
+                if self._cv.winfo_exists():
+                    return self._cv
+            except tk.TclError:
+                pass
+        self._cv = self._make_owned_cv()
+        self._placed = False
+        self._log("CREATE_CV")
+        return self._cv
+
+    def _emit(self, event: str) -> None:
+        if self._on_event is not None:
+            try:
+                self._on_event(event)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── logging helpers ───────────────────────────────────────────
+
+    def _log(self, action: str, *, rate_hz: float = 0.0, **fields: object) -> None:
+        fields.setdefault("placed", int(self._placed))
+        fields.setdefault("visible", int(self._visible))
+        fields.setdefault("drag", int(self._dragging))
+        fields.setdefault("hover", int(self._hovered or self._edge_hover))
+        if self._hide_deadline > 0:
+            fields.setdefault(
+                "deadline_in", max(0.0, self._hide_deadline - time.monotonic())
+            )
+        else:
+            fields.setdefault("deadline_in", -1.0)
+        fields.setdefault("poll_job", int(OverlayScrollbar._poll_job is not None))
+        fields.setdefault("n_inst", len(OverlayScrollbar._instances))
+        fields.setdefault("first", self._first)
+        fields.setdefault("last", self._last)
+        fields.setdefault("gen", self._hide_gen)
+        fields.setdefault("mode", "owned" if self._owns_cv else "surface")
+        try:
+            if self._cv is not None and self._cv.winfo_exists():
+                if self._owns_cv:
+                    fields.setdefault("mapped", int(bool(self._cv.winfo_ismapped())))
+                else:
+                    # surface mode: count our tag items as "mapped" proxy
+                    fields.setdefault(
+                        "mapped", int(bool(self._cv.find_withtag(self._tag)))
+                    )
+            else:
+                fields.setdefault("mapped", 0)
+        except tk.TclError:
+            fields.setdefault("mapped", -1)
+        _sb_log(action, pane=self._name, rate_hz=rate_hz, **fields)
+
+    def _on_configure(self, _event=None) -> None:
+        """Geometry change on the overlay canvas — never paint when hidden."""
+        if not self._visible:
+            self._scrub_drawings()
+            return
+        self._redraw()
+
+    def _arm_hide_timer(self) -> None:
+        """Schedule a generation-token hide independent of the global poller."""
+        self._hide_gen += 1
+        gen = self._hide_gen
+        self._cancel_hide_after()
+        delay_ms = max(int(self.HIDE_S * 1000), 50)
+        try:
+            self._hide_after_job = self._root.after(
+                delay_ms, lambda g=gen: self._hide_if_gen(g)
+            )
+            self._log("ARM_TIMER", rate_hz=10.0, delay_ms=delay_ms, gen=gen)
+        except tk.TclError:
+            self._hide_after_job = None
+            self._log("ARM_TIMER_FAIL")
+
+    def _cancel_hide_after(self) -> None:
+        if self._hide_after_job is not None:
+            try:
+                self._root.after_cancel(self._hide_after_job)
+            except tk.TclError:
+                pass
+            self._hide_after_job = None
+
+    def _hide_if_gen(self, gen: int) -> None:
+        self._hide_after_job = None
+        if gen != self._hide_gen:
+            self._log("GEN_STALE", gen=gen, cur=self._hide_gen)
+            return
+        now = time.monotonic()
+        if self._dragging:
+            # Re-arm shortly; stuck-drag path will force if needed
+            self._log("GEN_SKIP", reason="drag")
+            if now >= self._hide_deadline + self.STUCK_DRAG_S:
+                self._dragging = False
+                self._log("STUCK_DRAG_CLEAR", via="gen")
+                self.hide(force=True)
+            else:
+                try:
+                    self._hide_after_job = self._root.after(
+                        200, lambda g=gen: self._hide_if_gen(g)
+                    )
+                except tk.TclError:
+                    pass
+            return
+        if not self._visible and not self._placed:
+            self._log("GEN_SKIP", reason="not_visible")
+            return
+        if self._hide_deadline > 0 and now < self._hide_deadline:
+            # Extended by another pulse path without gen bump (shouldn't happen)
+            remain_ms = max(int((self._hide_deadline - now) * 1000), 50)
+            try:
+                self._hide_after_job = self._root.after(
+                    remain_ms, lambda g=gen: self._hide_if_gen(g)
+                )
+            except tk.TclError:
+                pass
+            return
+        self._log("EXPIRE", via="gen_timer")
+        self.hide(force=True)
+
+    @classmethod
+    def _ensure_poller(cls, root: tk.Misc) -> None:
+        """Start or revive the global hide poller for this review window root."""
+        now = time.monotonic()
+        # Zombie: job id set but no tick for too long → force restart
+        if (
+            cls._poll_job is not None
+            and cls._poll_root is root
+            and cls._poll_last_tick > 0
+            and (now - cls._poll_last_tick) > (cls.POLL_MS / 1000.0) * 4
+        ):
+            _sb_log(
+                "ENSURE",
+                pane="poller",
+                reason="zombie_revive",
+                age=now - cls._poll_last_tick,
+            )
+            if cls._poll_root is not None:
+                try:
+                    cls._poll_root.after_cancel(cls._poll_job)
+                except tk.TclError:
+                    pass
+            cls._poll_job = None
+
+        # New Tk root (re-opened review) → drop stale job/instances from prior window
+        if cls._poll_root is not root:
+            if cls._poll_job is not None and cls._poll_root is not None:
+                try:
+                    cls._poll_root.after_cancel(cls._poll_job)
+                except tk.TclError:
+                    pass
+            cls._poll_job = None
+            cls._instances = [s for s in cls._instances if s._root is root]
+            cls._poll_root = root
+            _sb_log("ENSURE", pane="poller", reason="new_root", n_inst=len(cls._instances))
+
+        if cls._poll_job is None:
+            _sb_log("ENSURE", pane="poller", reason="start", n_inst=len(cls._instances))
+            cls._poll_tick()
+        else:
+            _sb_log(
+                "ENSURE",
+                pane="poller",
+                reason="already_running",
+                rate_hz=5.0,
+                n_inst=len(cls._instances),
+            )
+
+    @classmethod
+    def _poll_tick(cls) -> None:
+        cls._poll_job = None
+        cls._poll_last_tick = time.monotonic()
+        now = cls._poll_last_tick
+        reschedule = False
+        try:
+            alive: list[OverlayScrollbar] = []
+            for sb in list(cls._instances):
+                try:
+                    if not sb._root.winfo_exists():
+                        _sb_log("POLL_DROP", pane=sb._name, reason="root_gone")
+                        continue
+                    sb._expire_if_due(now)
+                    alive.append(sb)
+                except tk.TclError as exc:
+                    _sb_log("POLL_DROP", pane=getattr(sb, "_name", "?"), reason=f"tcl:{exc}")
+                    continue
+                except Exception as exc:  # noqa: BLE001 — never kill poller
+                    _sb_log(
+                        "POLL_ERR",
+                        pane=getattr(sb, "_name", "?"),
+                        reason=type(exc).__name__,
+                    )
+                    alive.append(sb)
+            cls._instances = alive
+            root = cls._poll_root
+            if root is None:
+                _sb_log("POLL_STOP", pane="poller", reason="no_root")
+                return
+            if not alive:
+                _sb_log("POLL_STOP", pane="poller", reason="no_instances")
+                return
+            try:
+                if not root.winfo_exists():
+                    cls._poll_root = None
+                    _sb_log("POLL_STOP", pane="poller", reason="root_dead")
+                    return
+            except tk.TclError:
+                cls._poll_root = None
+                _sb_log("POLL_STOP", pane="poller", reason="root_tcl")
+                return
+            reschedule = True
+            _sb_log(
+                "POLL",
+                pane="poller",
+                rate_hz=5.0,
+                n_inst=len(alive),
+                placed=sum(1 for s in alive if s._is_showing()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _sb_log("POLL_CRASH", pane="poller", reason=type(exc).__name__)
+            reschedule = bool(cls._instances) and cls._poll_root is not None
+        finally:
+            if reschedule and cls._poll_root is not None:
+                try:
+                    cls._poll_job = cls._poll_root.after(cls.POLL_MS, cls._poll_tick)
+                except tk.TclError:
+                    cls._poll_job = None
+                    cls._poll_root = None
+                    _sb_log("POLL_STOP", pane="poller", reason="after_fail")
+
+    @classmethod
+    def shutdown_all(cls) -> None:
+        """Cancel poller and clear registry (call when review window closes)."""
+        _sb_log("SHUTDOWN", pane="poller", n_inst=len(cls._instances))
+        if cls._poll_job is not None and cls._poll_root is not None:
+            try:
+                cls._poll_root.after_cancel(cls._poll_job)
+            except tk.TclError:
+                pass
+        cls._poll_job = None
+        cls._poll_root = None
+        cls._poll_last_tick = 0.0
+        for sb in list(cls._instances):
+            try:
+                sb._cancel_hide_after()
+                sb._cancel_hide_verify()
+                sb.hide(force=True)
+            except tk.TclError:
+                pass
+        cls._instances.clear()
+
+    def _is_showing(self) -> bool:
+        return self._visible and (self._placed or not self._owns_cv)
+
+    def _expire_if_due(self, now: float | None = None) -> None:
+        """Hide if past deadline (and not mid-drag). Safe to call often."""
+        if now is None:
+            now = time.monotonic()
+        if not self._is_showing() and not self._visible:
+            return
+        if self._hide_deadline <= 0:
+            return
+        if self._dragging:
+            if now >= self._hide_deadline + self.STUCK_DRAG_S:
+                self._log("STUCK_DRAG_CLEAR", via="expire")
+                self._dragging = False
+                self.hide(force=True)
+            else:
+                self._log("EXPIRE_SKIP", reason="drag", rate_hz=2.0)
+            return
+        if now >= self._hide_deadline:
+            self._log("EXPIRE", via="deadline")
+            self.hide(force=True)
+
+    def destroy(self) -> None:
+        try:
+            OverlayScrollbar._instances.remove(self)
+        except ValueError:
+            pass
+        self._cancel_hide_after()
+        self.hide(force=True)
 
     # ── yscrollcommand API ────────────────────────────────────────
 
     def set(self, first: str | float, last: str | float) -> None:
-        """Update thumb geometry only — never show or extend the hide deadline.
-
-        Layout/yscroll callbacks call ``set`` often; they must not keep the pill
-        alive. Show/hide is driven only by :meth:`pulse` (wheel) and drag end.
-        """
+        """Update thumb geometry only — never show or extend the hide deadline."""
         try:
             f, l = float(first), float(last)
         except (TypeError, ValueError):
             return
         self._first, self._last = max(0.0, f), min(1.0, l)
+        self._log("SET", rate_hz=5.0)
         if not self._overflows():
             self.hide(force=True)
             return
-        if self._placed:
-            self._schedule_redraw()
+        # Layout traffic also expires overdue pills (backup if poller lags)
+        self._expire_if_due()
+        if self._visible and (self._placed or not self._owns_cv):
+            self._redraw()
 
     def _overflows(self) -> bool:
         # Content taller than viewport (standard Tk yscroll fractions)
@@ -277,112 +684,172 @@ class OverlayScrollbar:
             self.hide(force=True)
             return
         self._hide_deadline = time.monotonic() + self.HIDE_S
+        OverlayScrollbar._ensure_poller(self._root)
+        self._arm_hide_timer()
+        self._log("PULSE")
         self.show()
-        self._schedule_redraw()
-        self._ensure_ticker()
 
     def show(self) -> None:
-        if not self._placed:
+        was = self._visible and (self._placed or not self._owns_cv)
+        self._visible = True
+        if self._owns_cv:
+            cv = self._ensure_owned_cv()
             try:
-                self._cv.place(
+                # Always re-place so the strip sits on the parent’s right edge
+                cv.place(
                     relx=1.0,
                     rely=0.0,
                     relheight=1.0,
                     anchor="ne",
                     width=self.HIT_W,
                 )
-                # Mark placed even if lift fails (some Tk builds raise on lift)
                 self._placed = True
             except tk.TclError:
+                self._visible = False
+                self._placed = False
                 return
-        try:
-            self._cv.lift()
-        except tk.TclError:
-            pass
-        # Height is often 1 until layout finishes — redraw next idle tick
-        self._schedule_redraw()
+            # Canvas.lift() is tag_raise (items), NOT widget stacking — that
+            # TclError used to abort show() and made the pill never appear.
+            try:
+                tk.Misc.lift(cv)
+            except tk.TclError:
+                try:
+                    cv.tk.call("raise", cv._w)
+                except tk.TclError:
+                    pass
+            # One geometry pass so the first DRAW has a real height
+            try:
+                cv.update_idletasks()
+            except tk.TclError:
+                pass
+        # Draw immediately (surface) or on owned canvas
+        self._redraw()
+        if not was:
+            self._log("SHOW")
 
     def hide(self, force: bool = False) -> None:
-        """Remove the pill completely."""
+        """Remove the pill completely.
+
+        * surface mode: delete tagged items on the host canvas
+        * owned mode: **destroy** the overlay Canvas (place_forget left Aqua ghosts)
+        """
         if self._dragging and not force:
+            self._log("HIDE_SKIP", reason="drag")
             return
-        self._stop_ticker()
-        self._cancel_redraw()
-        if self._placed:
-            try:
-                self._cv.delete("all")
-            except tk.TclError:
-                pass
-            try:
-                self._cv.place_forget()
-            except tk.TclError:
-                pass
-            self._placed = False
+        was = self._visible or self._placed
+        # Gate all drawing first
+        self._visible = False
+        self._placed = False
         self._hovered = False
         self._edge_hover = False
         self._hide_deadline = 0.0
         if force:
             self._dragging = False
+        self._cancel_geo_retry()
+        self._cancel_hide_after()
+        self._cancel_hide_verify()
 
-    def _ensure_ticker(self) -> None:
-        """Poll hide deadline every TICK_MS until pill is removed."""
-        if self._tick_job is not None:
-            return
-        self._tick()
-
-    def _stop_ticker(self) -> None:
-        if self._tick_job is not None:
+        residual = 0
+        if not self._owns_cv and self._cv is not None:
             try:
-                self._root.after_cancel(self._tick_job)
+                self._cv.delete(self._tag)
+                residual = int(bool(self._cv.find_withtag(self._tag)))
             except tk.TclError:
-                pass
-            self._tick_job = None
+                residual = -1
+            self._log("HIDE", force=int(force), mapped=residual, via="tag_delete")
+        else:
+            # Owned overlay: destroy the widget entirely (no ghost window)
+            cv = self._cv
+            self._cv = None
+            if cv is not None:
+                try:
+                    cv.delete("all")
+                except tk.TclError:
+                    pass
+                try:
+                    cv.place_forget()
+                except tk.TclError:
+                    pass
+                try:
+                    cv.destroy()
+                    residual = 0
+                    self._log("DESTROY")
+                except tk.TclError:
+                    residual = -1
+            if was:
+                self._log("HIDE", force=int(force), mapped=residual, via="destroy")
 
-    def _tick(self) -> None:
-        self._tick_job = None
-        if not self._placed:
-            return
-        if self._dragging:
-            # Keep polling until drag ends (release extends deadline)
+        if was:
+            if _sb_debug_enabled():
+                self._emit(f"{self._name} pill hidden")
             try:
-                self._tick_job = self._root.after(self.TICK_MS, self._tick)
+                self._hide_verify_job = self._root.after(50, self._verify_hidden)
             except tk.TclError:
-                pass
-            return
-        now = time.monotonic()
-        if self._hide_deadline <= 0.0 or now >= self._hide_deadline:
-            self.hide(force=True)
-            return
+                self._hide_verify_job = None
+
+    def _force_unmap(self) -> int:
+        """Best-effort scrub; return residual item/map count (0 = clean)."""
+        if not self._owns_cv:
+            if self._cv is None:
+                return 0
+            try:
+                self._cv.delete(self._tag)
+                return int(bool(self._cv.find_withtag(self._tag)))
+            except tk.TclError:
+                return -1
+        if self._cv is None:
+            return 0
         try:
-            self._tick_job = self._root.after(self.TICK_MS, self._tick)
+            exists = bool(self._cv.winfo_exists())
+        except tk.TclError:
+            self._cv = None
+            return 0
+        if not exists:
+            self._cv = None
+            return 0
+        try:
+            self._cv.destroy()
         except tk.TclError:
             pass
+        self._cv = None
+        return 0
 
-    def _cancel_redraw(self) -> None:
-        if self._redraw_job is not None:
+    def _cancel_hide_verify(self) -> None:
+        if self._hide_verify_job is not None:
             try:
-                self._root.after_cancel(self._redraw_job)
+                self._root.after_cancel(self._hide_verify_job)
             except tk.TclError:
                 pass
-            self._redraw_job = None
+            self._hide_verify_job = None
 
-    def _schedule_redraw(self) -> None:
-        self._cancel_redraw()
-        try:
-            self._redraw_job = self._root.after_idle(self._redraw_now)
-        except tk.TclError:
-            self._redraw_job = None
-            self._redraw()
-
-    def _redraw_now(self) -> None:
-        self._redraw_job = None
-        if not self._placed:
+    def _verify_hidden(self) -> None:
+        """Idle pass: if we intended to hide, ensure nothing is painted/mapped."""
+        self._hide_verify_job = None
+        if self._visible:
             return
-        self._redraw()
+        residual = self._force_unmap()
+        self._placed = False
+        if residual:
+            self._log("HIDE_RETRY", mapped=residual)
+
+    def _cancel_geo_retry(self) -> None:
+        if self._geo_retry_job is not None:
+            try:
+                self._root.after_cancel(self._geo_retry_job)
+            except tk.TclError:
+                pass
+            self._geo_retry_job = None
 
     # ── drawing ───────────────────────────────────────────────────
 
     def _thumb_color(self) -> str:
+        # Debug: hot pink so "our" pill is unmistakable vs system grey indicators
+        if _sb_debug_enabled():
+            if self._dragging:
+                return "#FF6B8A"
+            if self._hovered or self._edge_hover:
+                return "#FF4D6D"
+            return self._DEBUG_THUMB
         if self._dragging:
             return _SB_THUMB_ACTIVE
         if self._hovered or self._edge_hover:
@@ -392,14 +859,26 @@ class OverlayScrollbar:
     def _pill_width(self) -> int:
         return self.PILL_W_ACTIVE if (self._hovered or self._dragging) else self.PILL_W
 
-    def _geometry(self) -> tuple[float, float, float] | None:
-        """Return (thumb_y0, thumb_y1, track_h) in canvas coords, or None."""
+    def _viewport_size(self) -> tuple[int, int] | None:
+        """Return (width, height) of the drawing surface viewport, or None."""
+        cv = self._cv
+        if cv is None:
+            return None
         try:
-            h = int(self._cv.winfo_height())
+            w = int(cv.winfo_width())
+            h = int(cv.winfo_height())
         except tk.TclError:
             return None
-        if h < 8:
+        if h < 8 or w < 4:
             return None
+        return w, h
+
+    def _geometry(self) -> tuple[float, float, float] | None:
+        """Return (thumb_y0, thumb_y1, track_h) in *viewport* coords, or None."""
+        size = self._viewport_size()
+        if size is None:
+            return None
+        _w, h = size
         track_h = max(h - 2 * self.PAD_Y, 1)
         span = max(min(self._last - self._first, 1.0), 0.02)
         thumb_h = max(float(self.MIN_THUMB), track_h * span)
@@ -411,41 +890,109 @@ class OverlayScrollbar:
         y1 = y0 + thumb_h
         return y0, y1, float(track_h)
 
-    def _draw_pill(self, x0: int, y0: int, x1: int, y1: int, fill: str) -> None:
+    def _draw_pill(
+        self,
+        cv: tk.Canvas,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+        fill: str,
+        *,
+        tags: str | tuple[str, ...] = (),
+    ) -> None:
         """Capsule: two ovals + center rect (reliable; no smooth-polygon glitches)."""
-        w = max(x1 - x0, 2)
-        h = max(y1 - y0, 2)
+        w = max(int(x1 - x0), 2)
+        h = max(int(y1 - y0), 2)
         r = w // 2
+        kw: dict = {"fill": fill, "outline": fill, "width": 0}
+        if tags:
+            kw["tags"] = tags
         # Too short for full capsule — simple rounded oval
         if h <= w:
-            self._cv.create_oval(x0, y0, x1, y1, fill=fill, outline=fill, width=0)
+            cv.create_oval(x0, y0, x1, y1, **kw)
             return
-        self._cv.create_oval(x0, y0, x1, y0 + w, fill=fill, outline=fill, width=0)
-        self._cv.create_oval(x0, y1 - w, x1, y1, fill=fill, outline=fill, width=0)
-        self._cv.create_rectangle(
-            x0, y0 + r, x1, y1 - r, fill=fill, outline=fill, width=0
-        )
+        cv.create_oval(x0, y0, x1, y0 + w, **kw)
+        cv.create_oval(x0, y1 - w, x1, y1, **kw)
+        cv.create_rectangle(x0, y0 + r, x1, y1 - r, **kw)
 
     def _redraw(self) -> None:
-        if not self._placed:
+        # Never paint when hidden
+        if not self._visible:
+            self._scrub_drawings()
+            return
+        if self._owns_cv and not self._placed:
+            return
+        if self._cv is None:
+            return
+        # Expire on any redraw path (does not rely solely on poller timing)
+        self._expire_if_due()
+        if not self._visible:
+            return
+        if self._owns_cv and not self._placed:
             return
         try:
-            self._cv.delete("all")
+            self._scrub_drawings()
             if not self._overflows():
                 return
             geo = self._geometry()
             if geo is None:
-                # Not laid out yet — try again shortly
-                self._schedule_redraw()
+                if self._geo_retry_job is None:
+                    try:
+                        self._geo_retry_job = self._root.after(50, self._geo_retry)
+                    except tk.TclError:
+                        self._geo_retry_job = None
                 return
+            self._cancel_geo_retry()
             y0, y1, _ = geo
             self._thumb_y0, self._thumb_y1 = y0, y1
             pw = self._pill_width()
-            x0 = (self.HIT_W - pw) // 2
-            x1 = x0 + pw
-            self._draw_pill(x0, int(y0), x1, int(y1), self._thumb_color())
+            cv = self._cv
+            if not self._owns_cv:
+                # Host canvas: pin pill to the *viewport* right edge (canvas coords)
+                try:
+                    top = float(cv.canvasy(0))
+                    left = float(cv.canvasx(0))
+                    vw = int(cv.winfo_width())
+                except tk.TclError:
+                    return
+                x0 = left + vw - self.HIT_W + (self.HIT_W - pw) // 2
+                x1 = x0 + pw
+                self._draw_pill(
+                    cv, x0, top + y0, x1, top + y1, self._thumb_color(), tags=self._tag
+                )
+                try:
+                    cv.tag_raise(self._tag)
+                except tk.TclError:
+                    pass
+            else:
+                x0 = (self.HIT_W - pw) // 2
+                x1 = x0 + pw
+                self._draw_pill(cv, x0, int(y0), x1, int(y1), self._thumb_color())
+            self._log("DRAW", rate_hz=8.0)
         except tk.TclError:
             pass
+
+    def _scrub_drawings(self) -> None:
+        if self._cv is None:
+            return
+        try:
+            if self._owns_cv:
+                self._cv.delete("all")
+            else:
+                self._cv.delete(self._tag)
+        except tk.TclError:
+            pass
+
+    def _geo_retry(self) -> None:
+        self._geo_retry_job = None
+        try:
+            if not self._root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if self._visible and (self._placed or not self._owns_cv):
+            self._redraw()
 
     # ── interaction ───────────────────────────────────────────────
 
@@ -461,6 +1008,7 @@ class OverlayScrollbar:
                 pass
 
     def _y_to_first(self, y: float) -> float:
+        """Map pointer y (viewport coords) to scroll first-fraction."""
         geo = self._geometry()
         if geo is None:
             return self._first
@@ -473,22 +1021,21 @@ class OverlayScrollbar:
         return t * max(1.0 - span, 0.0)
 
     def _on_enter(self, _event=None) -> None:
-        # Visual hover only — never cancel the 2s force-hide timer
         self._hovered = True
-        if self._placed:
+        self._expire_if_due()
+        if self._is_showing():
             self._redraw()
 
     def _on_leave(self, _event=None) -> None:
         self._hovered = False
-        if self._placed:
+        self._expire_if_due()
+        if self._is_showing():
             self._redraw()
 
     def _on_press(self, event) -> None:
-        if not self._overflows():
+        """Owned-canvas press (event.y already in overlay coords)."""
+        if not self._overflows() or not self._is_showing():
             return
-        if not self._placed:
-            return
-        # Drag pauses the deadline clock (ticker keeps running but won't hide)
         y = float(event.y)
         geo = self._geometry()
         if geo is None:
@@ -498,29 +1045,78 @@ class OverlayScrollbar:
             self._dragging = True
             self._drag_offset = y - y0
         else:
-            # Jump: centre thumb on click
             self._dragging = True
             self._drag_offset = (y1 - y0) / 2
             self._moveto(self._y_to_first(y))
+        self._log("PRESS")
         self._redraw()
+
+    def _on_surface_press(self, event) -> None:
+        """Host-canvas press: only claim events on the right hit strip while visible."""
+        if not self._overflows() or not self._is_showing():
+            return
+        try:
+            w = int(self._cv.winfo_width()) if self._cv is not None else 0
+        except tk.TclError:
+            return
+        if int(getattr(event, "x", 0) or 0) < w - self.HIT_W:
+            return  # let list rows handle the click
+        # event.y is viewport-relative for canvas
+        y = float(event.y)
+        geo = self._geometry()
+        if geo is None:
+            return
+        y0, y1, _ = geo
+        if y0 <= y <= y1:
+            self._dragging = True
+            self._drag_offset = y - y0
+        else:
+            self._dragging = True
+            self._drag_offset = (y1 - y0) / 2
+            self._moveto(self._y_to_first(y))
+        self._log("PRESS")
+        self._redraw()
+        return "break"
+
+    def _on_surface_motion(self, event) -> None:
+        if not self._is_showing() or not self._overflows():
+            return
+        try:
+            w = int(self._cv.winfo_width()) if self._cv is not None else 0
+        except tk.TclError:
+            return
+        near = int(getattr(event, "x", 0) or 0) >= w - self.EDGE_PX
+        if near != self._edge_hover:
+            self._edge_hover = near
+            self._redraw()
+
+    def _on_surface_leave(self, _event=None) -> None:
+        self._edge_hover = False
+        self._hovered = False
+        if self._is_showing():
+            self._redraw()
 
     def _on_drag(self, event) -> None:
         if not self._dragging:
             return
+        # Owned overlay: event.y is strip-local. Surface: viewport-local. Same numbers.
         self._moveto(self._y_to_first(float(event.y)))
         self._redraw()
 
     def _on_release(self, _event=None) -> None:
+        if not self._dragging:
+            return
         self._dragging = False
-        self._redraw()
-        # Fresh 2s window after drag ends
         self._hide_deadline = time.monotonic() + self.HIDE_S
-        self._ensure_ticker()
+        self._arm_hide_timer()
+        self._log("RELEASE")
+        self._redraw()
+        OverlayScrollbar._ensure_poller(self._root)
 
     def _on_parent_motion(self, event) -> None:
-        # Edge proximity only affects hover styling if already visible.
-        # Never re-show or cancel hide just because the pointer is in the pane.
-        if not self._placed or not self._overflows():
+        # Expire on motion so a still cursor isn't required for hide to "wake up"
+        self._expire_if_due()
+        if not self._is_showing() or not self._overflows():
             return
         try:
             w = int(self._parent.winfo_width())
@@ -535,7 +1131,8 @@ class OverlayScrollbar:
 
     def _on_parent_leave(self, _event=None) -> None:
         self._edge_hover = False
-        if self._placed:
+        self._expire_if_due()
+        if self._is_showing():
             self._redraw()
 
 
@@ -634,6 +1231,7 @@ def run_review_window(
     if tk is None:
         raise RuntimeError("tkinter is not available")
 
+    _sb_log_reset()
     result: dict[str, ReviewSession | None] = {"session": None}
 
     root = tk.Tk()
@@ -660,6 +1258,8 @@ def run_review_window(
     status_var = tk.StringVar(value="")
     search_is_placeholder = [True]
     last_add_type: list[str] = ["PERSON"]  # sticky last-used entity type
+    # Filled when _status_flash is defined (scrollbars are built earlier)
+    _sb_flash: list[Callable[[str, int], None]] = [lambda _m, _ms=1200: None]
 
     outer = tk.Frame(root, bg=_BG_APP, padx=_PAD, pady=_PAD)
     outer.pack(fill=tk.BOTH, expand=True)
@@ -1028,11 +1628,16 @@ def run_review_window(
         # Pixel step for yview_scroll units (default 0 ≈ 10% of window — too coarse)
         yscrollincrement=28,
     )
+    # Owned overlay (place + lift): must be a sibling canvas above the list
+    # window item. Drawing *on* list_canvas is invisible (embedded windows
+    # always stack above canvas graphics on Tk).
     list_scroll = OverlayScrollbar(
         list_frame,
         command=list_canvas.yview,
         root=root,
         chrome=_BG_PANEL,
+        name="list",
+        on_event=lambda msg: _sb_flash[0](msg, 1200),
     )
     list_inner = tk.Frame(list_canvas, bg=_BG_PANEL)
     list_window = list_canvas.create_window((0, 0), window=list_inner, anchor=tk.NW)
@@ -1100,15 +1705,28 @@ def run_review_window(
     list_canvas.configure(yscrollcommand=list_scroll.set)
     list_canvas.grid(row=0, column=0, sticky="nsew")
 
-    def _on_list_mousewheel(event) -> str:
-        steps = _wheel_steps(event)
-        if steps:
-            list_canvas.yview_scroll(steps, "units")
-            try:
-                list_scroll.set(*list_canvas.yview())
-            except tk.TclError:
-                pass
+    def _list_scroll_units(steps: int) -> bool:
+        """Scroll findings list; return True if the viewport actually moved."""
+        if not steps:
+            return False
+        try:
+            before = list_canvas.yview()
+        except tk.TclError:
+            before = None
+        list_canvas.yview_scroll(steps, "units")
+        try:
+            after = list_canvas.yview()
+            list_scroll.set(*after)
+        except tk.TclError:
+            return False
+        # Ignore trackpad inertia at bounds (no movement → do not re-arm hide)
+        moved = before is None or after != before
+        if moved:
             list_scroll.pulse()
+        return moved
+
+    def _on_list_mousewheel(event) -> str:
+        _list_scroll_units(_wheel_steps(event))
         return "break"
 
     def _bind_list_wheel(widget: tk.Misc) -> None:
@@ -1116,21 +1734,11 @@ def run_review_window(
         if sys.platform != "darwin":
 
             def _up(_e=None) -> str:
-                list_canvas.yview_scroll(-1, "units")
-                try:
-                    list_scroll.set(*list_canvas.yview())
-                except tk.TclError:
-                    pass
-                list_scroll.pulse()
+                _list_scroll_units(-1)
                 return "break"
 
             def _down(_e=None) -> str:
-                list_canvas.yview_scroll(1, "units")
-                try:
-                    list_scroll.set(*list_canvas.yview())
-                except tk.TclError:
-                    pass
-                list_scroll.pulse()
+                _list_scroll_units(1)
                 return "break"
 
             widget.bind("<Button-4>", _up)
@@ -1187,46 +1795,51 @@ def run_review_window(
         selectforeground=_TEXT_ON_BLUE,
         cursor="xterm",  # select to redact, not free typing
     )
+    # owned overlay: destroy-on-hide (Text cannot host canvas items)
     doc_scroll = OverlayScrollbar(
         text_wrap,
         command=doc.yview,
         root=root,
         chrome=_BG_ELEVATED,
+        name="doc",
+        on_event=lambda msg: _sb_flash[0](msg, 1200),
     )
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.grid(row=0, column=0, sticky="nsew")
 
-    def _on_doc_mousewheel(event) -> str:
-        steps = _wheel_steps(event)
-        if steps:
-            # Text units = lines; clamped steps avoid multi-page jumps
-            doc.yview_scroll(steps, "units")
-            try:
-                doc_scroll.set(*doc.yview())
-            except tk.TclError:
-                pass
+    def _doc_scroll_units(steps: int) -> bool:
+        """Scroll document; return True if the viewport actually moved."""
+        if not steps:
+            return False
+        try:
+            before = doc.yview()
+        except tk.TclError:
+            before = None
+        # Text units = lines; clamped steps avoid multi-page jumps
+        doc.yview_scroll(steps, "units")
+        try:
+            after = doc.yview()
+            doc_scroll.set(*after)
+        except tk.TclError:
+            return False
+        moved = before is None or after != before
+        if moved:
             doc_scroll.pulse()
+        return moved
+
+    def _on_doc_mousewheel(event) -> str:
+        _doc_scroll_units(_wheel_steps(event))
         return "break"
 
     doc.bind("<MouseWheel>", _on_doc_mousewheel)
     if sys.platform != "darwin":
 
         def _doc_up(_e=None) -> str:
-            doc.yview_scroll(-1, "units")
-            try:
-                doc_scroll.set(*doc.yview())
-            except tk.TclError:
-                pass
-            doc_scroll.pulse()
+            _doc_scroll_units(-1)
             return "break"
 
         def _doc_down(_e=None) -> str:
-            doc.yview_scroll(1, "units")
-            try:
-                doc_scroll.set(*doc.yview())
-            except tk.TclError:
-                pass
-            doc_scroll.pulse()
+            _doc_scroll_units(1)
             return "break"
 
         doc.bind("<Button-4>", _doc_up)
@@ -1323,6 +1936,8 @@ def run_review_window(
     def _status_flash(msg: str, ms: int = 4000) -> None:
         _status(msg)
         root.after(ms, lambda: _status())
+
+    _sb_flash[0] = _status_flash
 
     def _filtered_findings() -> list[ReviewFinding]:
         q = _search_query().casefold()
@@ -1800,9 +2415,11 @@ def run_review_window(
         root.destroy()
 
     def _on_close() -> None:
+        OverlayScrollbar.shutdown_all()
         _cancel()
 
     def _on_save() -> None:
+        OverlayScrollbar.shutdown_all()
         _save()
 
     def _nav(delta: int) -> str:
@@ -1866,5 +2483,8 @@ def run_review_window(
     except tk.TclError:
         pass
 
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        OverlayScrollbar.shutdown_all()
     return result["session"]
