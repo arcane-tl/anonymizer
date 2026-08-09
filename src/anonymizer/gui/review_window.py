@@ -7,6 +7,7 @@ Explicit tk colours (no global ttk style hacks). Offline; no network.
 from __future__ import annotations
 
 import sys
+import time
 from typing import Callable
 
 from anonymizer.anonymize.review import (
@@ -20,7 +21,7 @@ from anonymizer.anonymize.review import (
 try:
     import tkinter as tk
     from tkinter import font as tkfont
-    from tkinter import messagebox, ttk
+    from tkinter import messagebox
 except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
     tkfont = None  # type: ignore[assignment]
@@ -41,6 +42,11 @@ _TEXT_ON_BLUE = "#EFF6FF"  # ice white on strong blue
 _ACCENT = "#60A5FA"  # sky blue accent
 _HL_REDACT_BG = "#CA8A04"  # warm amber
 _HL_SELECTED_BG = "#1D4ED8"  # strong blue
+
+# Overlay scrollbar pills (macOS-like; no gutter slab)
+_SB_THUMB = "#8B93A7"  # idle — visible on dark panel
+_SB_THUMB_HOVER = "#C4CBD8"  # hover
+_SB_THUMB_ACTIVE = "#93C5FD"  # drag (soft sky)
 
 _PAD = 16
 _GAP = 12
@@ -162,162 +168,375 @@ def _save_key_sequences() -> tuple[str, ...]:
         "<Meta-S>",
     )
 
-def _setup_review_scrollbar_styles(root: tk.Misc) -> None:
-    """Make scrollbar troughs match the pane (no darker gutter strip).
+def _wheel_steps(event: object) -> int:
+    """Signed step count for one wheel/trackpad event (clamped; never page-scale).
 
-    Aqua ttk ignores trough colors; clam is themeable. Review UI only uses
-    ttk for these two scrollbars, so switching the theme is safe here.
+    macOS Aqua often reports ±1 per event (many events per gesture). Canvas
+    without yscrollincrement scrolls ~10% of the window per unit — that feels
+    like skipping pages. We always return a small step and rely on a pixel
+    yscrollincrement for the findings canvas.
     """
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except tk.TclError:
-        pass
-    for name, trough in (
-        ("ReviewList.Vertical.TScrollbar", _BG_PANEL),
-        ("ReviewDoc.Vertical.TScrollbar", _BG_ELEVATED),
-    ):
-        style.configure(
-            name,
-            gripcount=0,
-            background=_BORDER,  # thumb
-            darkcolor=trough,
-            lightcolor=trough,
-            troughcolor=trough,
-            bordercolor=trough,
-            arrowcolor=trough,  # arrows blend into trough
-            relief="flat",
-            borderwidth=0,
-        )
-        style.map(
-            name,
-            background=[
-                ("pressed", _ACCENT),
-                ("active", _TEXT_MUTED),
-                ("!disabled", _BORDER),
-            ],
-            arrowcolor=[("!disabled", trough)],
-        )
+    d = int(getattr(event, "delta", 0) or 0)
+    if d == 0:
+        return 0
+    if sys.platform == "darwin":
+        # Direction: positive delta → scroll up content (negative yview steps)
+        return -1 if d > 0 else 1
+    # Windows / X11: multiples of 120
+    steps = int(-d / 120)
+    if steps == 0:
+        steps = -1 if d > 0 else 1
+    return max(-3, min(3, steps))
 
 
-class AutoHideScrollbar:
-    """Overlay vertical scrollbar: shows while scrolling/hovered, then hides.
+class OverlayScrollbar:
+    """Modern overlay scrollbar: thin rounded pill, wide hit area, auto-hide.
 
-    Placed over the content (not a grid column) so show/hide does not reflow.
+    Drawn on a Canvas (not ttk) so we control look: no gutter slab, no arrows.
+    API: ``set(first, last)`` for yscrollcommand; ``pulse()`` after wheel scroll.
     """
 
-    HIDE_MS = 1100
-    WIDTH = 10
+    HIDE_S = 2.0  # seconds after last scroll/drag before force-hide
+    TICK_MS = 100  # deadline poll interval
+    HIT_W = 16  # full hit strip width
+    PILL_W = 7  # visual thumb width (idle)
+    PILL_W_ACTIVE = 9  # hover / drag
+    EDGE_PX = 28
+    PAD_Y = 10
+    MIN_THUMB = 36
 
     def __init__(
         self,
         parent: tk.Misc,
         *,
         command,
-        style: str,
         root: tk.Misc,
+        chrome: str = _BG_PANEL,
     ) -> None:
         self._root = root
         self._parent = parent
-        self._sb = ttk.Scrollbar(
-            parent, orient=tk.VERTICAL, command=command, style=style
+        self._command = command
+        self._chrome = chrome
+        # Match parent so the strip itself is invisible; only the pill shows
+        self._cv = tk.Canvas(
+            parent,
+            width=self.HIT_W,
+            highlightthickness=0,
+            bd=0,
+            bg=chrome,
+            cursor="arrow",
         )
-        self._hide_job: str | None = None
+        self._tick_job: str | None = None
+        self._redraw_job: str | None = None
+        self._hide_deadline = 0.0  # monotonic time; hide when now >= deadline
         self._hovered = False
+        self._edge_hover = False
+        self._dragging = False
         self._first = 0.0
         self._last = 1.0
         self._placed = False
-        self._sb.bind("<Enter>", self._on_enter)
-        self._sb.bind("<Leave>", self._on_leave)
-        self._sb.bind("<ButtonPress-1>", lambda _e: self.pulse())
-        self._sb.bind("<B1-Motion>", lambda _e: self.pulse())
+        self._thumb_y0 = 0.0
+        self._thumb_y1 = 0.0
+        self._drag_offset = 0.0  # pointer y within thumb at press
+
+        self._cv.bind("<Configure>", lambda _e: self._redraw())
+        self._cv.bind("<Enter>", self._on_enter)
+        self._cv.bind("<Leave>", self._on_leave)
+        self._cv.bind("<ButtonPress-1>", self._on_press)
+        self._cv.bind("<B1-Motion>", self._on_drag)
+        self._cv.bind("<ButtonRelease-1>", self._on_release)
+        parent.bind("<Motion>", self._on_parent_motion, add="+")
+        parent.bind("<Leave>", self._on_parent_leave, add="+")
+
+    # ── yscrollcommand API ────────────────────────────────────────
 
     def set(self, first: str | float, last: str | float) -> None:
-        """yscrollcommand target — update thumb and flash when needed."""
+        """Update thumb geometry only — never show or extend the hide deadline.
+
+        Layout/yscroll callbacks call ``set`` often; they must not keep the pill
+        alive. Show/hide is driven only by :meth:`pulse` (wheel) and drag end.
+        """
         try:
             f, l = float(first), float(last)
         except (TypeError, ValueError):
             return
-        moved = abs(f - self._first) > 1e-6 or abs(l - self._last) > 1e-6
-        self._first, self._last = f, l
-        try:
-            self._sb.set(first, last)
-        except tk.TclError:
-            return
+        self._first, self._last = max(0.0, f), min(1.0, l)
         if not self._overflows():
             self.hide(force=True)
             return
-        if moved or self._placed:
-            self.pulse()
+        if self._placed:
+            self._schedule_redraw()
 
     def _overflows(self) -> bool:
-        return self._first > 0.002 or self._last < 0.998
+        # Content taller than viewport (standard Tk yscroll fractions)
+        return (self._last - self._first) < 0.995
 
     def pulse(self) -> None:
-        """Show (if content overflows) and restart the hide timer."""
+        """User scrolled this pane: show pill and start/extend 2s hide deadline."""
         if not self._overflows():
             self.hide(force=True)
             return
+        self._hide_deadline = time.monotonic() + self.HIDE_S
         self.show()
-        self.schedule_hide()
+        self._schedule_redraw()
+        self._ensure_ticker()
 
     def show(self) -> None:
         if not self._placed:
             try:
-                self._sb.place(
+                self._cv.place(
                     relx=1.0,
                     rely=0.0,
                     relheight=1.0,
                     anchor="ne",
-                    width=self.WIDTH,
+                    width=self.HIT_W,
                 )
-                self._sb.lift()
+                # Mark placed even if lift fails (some Tk builds raise on lift)
                 self._placed = True
             except tk.TclError:
                 return
-        else:
-            try:
-                self._sb.lift()
-            except tk.TclError:
-                pass
+        try:
+            self._cv.lift()
+        except tk.TclError:
+            pass
+        # Height is often 1 until layout finishes — redraw next idle tick
+        self._schedule_redraw()
 
     def hide(self, force: bool = False) -> None:
-        if self._hovered and not force:
+        """Remove the pill completely."""
+        if self._dragging and not force:
             return
-        self._cancel_hide()
+        self._stop_ticker()
+        self._cancel_redraw()
         if self._placed:
             try:
-                self._sb.place_forget()
+                self._cv.delete("all")
+            except tk.TclError:
+                pass
+            try:
+                self._cv.place_forget()
             except tk.TclError:
                 pass
             self._placed = False
+        self._hovered = False
+        self._edge_hover = False
+        self._hide_deadline = 0.0
+        if force:
+            self._dragging = False
 
-    def schedule_hide(self) -> None:
-        self._cancel_hide()
-        if self._hovered:
+    def _ensure_ticker(self) -> None:
+        """Poll hide deadline every TICK_MS until pill is removed."""
+        if self._tick_job is not None:
             return
-        try:
-            self._hide_job = self._root.after(self.HIDE_MS, self.hide)
-        except tk.TclError:
-            self._hide_job = None
+        self._tick()
 
-    def _cancel_hide(self) -> None:
-        if self._hide_job is not None:
+    def _stop_ticker(self) -> None:
+        if self._tick_job is not None:
             try:
-                self._root.after_cancel(self._hide_job)
+                self._root.after_cancel(self._tick_job)
             except tk.TclError:
                 pass
-            self._hide_job = None
+            self._tick_job = None
+
+    def _tick(self) -> None:
+        self._tick_job = None
+        if not self._placed:
+            return
+        if self._dragging:
+            # Keep polling until drag ends (release extends deadline)
+            try:
+                self._tick_job = self._root.after(self.TICK_MS, self._tick)
+            except tk.TclError:
+                pass
+            return
+        now = time.monotonic()
+        if self._hide_deadline <= 0.0 or now >= self._hide_deadline:
+            self.hide(force=True)
+            return
+        try:
+            self._tick_job = self._root.after(self.TICK_MS, self._tick)
+        except tk.TclError:
+            pass
+
+    def _cancel_redraw(self) -> None:
+        if self._redraw_job is not None:
+            try:
+                self._root.after_cancel(self._redraw_job)
+            except tk.TclError:
+                pass
+            self._redraw_job = None
+
+    def _schedule_redraw(self) -> None:
+        self._cancel_redraw()
+        try:
+            self._redraw_job = self._root.after_idle(self._redraw_now)
+        except tk.TclError:
+            self._redraw_job = None
+            self._redraw()
+
+    def _redraw_now(self) -> None:
+        self._redraw_job = None
+        if not self._placed:
+            return
+        self._redraw()
+
+    # ── drawing ───────────────────────────────────────────────────
+
+    def _thumb_color(self) -> str:
+        if self._dragging:
+            return _SB_THUMB_ACTIVE
+        if self._hovered or self._edge_hover:
+            return _SB_THUMB_HOVER
+        return _SB_THUMB
+
+    def _pill_width(self) -> int:
+        return self.PILL_W_ACTIVE if (self._hovered or self._dragging) else self.PILL_W
+
+    def _geometry(self) -> tuple[float, float, float] | None:
+        """Return (thumb_y0, thumb_y1, track_h) in canvas coords, or None."""
+        try:
+            h = int(self._cv.winfo_height())
+        except tk.TclError:
+            return None
+        if h < 8:
+            return None
+        track_h = max(h - 2 * self.PAD_Y, 1)
+        span = max(min(self._last - self._first, 1.0), 0.02)
+        thumb_h = max(float(self.MIN_THUMB), track_h * span)
+        thumb_h = min(thumb_h, float(track_h))
+        travel = max(track_h - thumb_h, 0.0)
+        denom = max(1.0 - span, 1e-6)
+        t = min(max(self._first / denom, 0.0), 1.0)
+        y0 = self.PAD_Y + t * travel
+        y1 = y0 + thumb_h
+        return y0, y1, float(track_h)
+
+    def _draw_pill(self, x0: int, y0: int, x1: int, y1: int, fill: str) -> None:
+        """Capsule: two ovals + center rect (reliable; no smooth-polygon glitches)."""
+        w = max(x1 - x0, 2)
+        h = max(y1 - y0, 2)
+        r = w // 2
+        # Too short for full capsule — simple rounded oval
+        if h <= w:
+            self._cv.create_oval(x0, y0, x1, y1, fill=fill, outline=fill, width=0)
+            return
+        self._cv.create_oval(x0, y0, x1, y0 + w, fill=fill, outline=fill, width=0)
+        self._cv.create_oval(x0, y1 - w, x1, y1, fill=fill, outline=fill, width=0)
+        self._cv.create_rectangle(
+            x0, y0 + r, x1, y1 - r, fill=fill, outline=fill, width=0
+        )
+
+    def _redraw(self) -> None:
+        if not self._placed:
+            return
+        try:
+            self._cv.delete("all")
+            if not self._overflows():
+                return
+            geo = self._geometry()
+            if geo is None:
+                # Not laid out yet — try again shortly
+                self._schedule_redraw()
+                return
+            y0, y1, _ = geo
+            self._thumb_y0, self._thumb_y1 = y0, y1
+            pw = self._pill_width()
+            x0 = (self.HIT_W - pw) // 2
+            x1 = x0 + pw
+            self._draw_pill(x0, int(y0), x1, int(y1), self._thumb_color())
+        except tk.TclError:
+            pass
+
+    # ── interaction ───────────────────────────────────────────────
+
+    def _moveto(self, first: float) -> None:
+        span = max(self._last - self._first, 0.02)
+        first = max(0.0, min(first, max(0.0, 1.0 - span)))
+        try:
+            self._command("moveto", first)
+        except tk.TclError:
+            try:
+                self._command("moveto", str(first))
+            except tk.TclError:
+                pass
+
+    def _y_to_first(self, y: float) -> float:
+        geo = self._geometry()
+        if geo is None:
+            return self._first
+        y0, y1, track_h = geo
+        thumb_h = y1 - y0
+        travel = max(track_h - thumb_h, 1e-6)
+        span = max(self._last - self._first, 0.02)
+        top = y - self._drag_offset - self.PAD_Y
+        t = min(max(top / travel, 0.0), 1.0)
+        return t * max(1.0 - span, 0.0)
 
     def _on_enter(self, _event=None) -> None:
+        # Visual hover only — never cancel the 2s force-hide timer
         self._hovered = True
-        self._cancel_hide()
-        if self._overflows():
-            self.show()
+        if self._placed:
+            self._redraw()
 
     def _on_leave(self, _event=None) -> None:
         self._hovered = False
-        self.schedule_hide()
+        if self._placed:
+            self._redraw()
+
+    def _on_press(self, event) -> None:
+        if not self._overflows():
+            return
+        if not self._placed:
+            return
+        # Drag pauses the deadline clock (ticker keeps running but won't hide)
+        y = float(event.y)
+        geo = self._geometry()
+        if geo is None:
+            return
+        y0, y1, _ = geo
+        if y0 <= y <= y1:
+            self._dragging = True
+            self._drag_offset = y - y0
+        else:
+            # Jump: centre thumb on click
+            self._dragging = True
+            self._drag_offset = (y1 - y0) / 2
+            self._moveto(self._y_to_first(y))
+        self._redraw()
+
+    def _on_drag(self, event) -> None:
+        if not self._dragging:
+            return
+        self._moveto(self._y_to_first(float(event.y)))
+        self._redraw()
+
+    def _on_release(self, _event=None) -> None:
+        self._dragging = False
+        self._redraw()
+        # Fresh 2s window after drag ends
+        self._hide_deadline = time.monotonic() + self.HIDE_S
+        self._ensure_ticker()
+
+    def _on_parent_motion(self, event) -> None:
+        # Edge proximity only affects hover styling if already visible.
+        # Never re-show or cancel hide just because the pointer is in the pane.
+        if not self._placed or not self._overflows():
+            return
+        try:
+            w = int(self._parent.winfo_width())
+        except tk.TclError:
+            return
+        if w <= 0:
+            return
+        near = int(getattr(event, "x", 0) or 0) >= w - self.EDGE_PX
+        if near != self._edge_hover:
+            self._edge_hover = near
+            self._redraw()
+
+    def _on_parent_leave(self, _event=None) -> None:
+        self._edge_hover = False
+        if self._placed:
+            self._redraw()
 
 
 def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
@@ -423,7 +642,6 @@ def run_review_window(
         title = f"Anonymizer review — {file_label}"
     root.title(title)
     root.configure(bg=_BG_APP)
-    _setup_review_scrollbar_styles(root)
 
     # Fit on screen with room for Dock / menu bar
     root.update_idletasks()
@@ -807,12 +1025,14 @@ def run_review_window(
         borderwidth=0,
         bg=_BG_PANEL,
         takefocus=True,
+        # Pixel step for yview_scroll units (default 0 ≈ 10% of window — too coarse)
+        yscrollincrement=28,
     )
-    list_scroll = AutoHideScrollbar(
+    list_scroll = OverlayScrollbar(
         list_frame,
         command=list_canvas.yview,
-        style="ReviewList.Vertical.TScrollbar",
         root=root,
+        chrome=_BG_PANEL,
     )
     list_inner = tk.Frame(list_canvas, bg=_BG_PANEL)
     list_window = list_canvas.create_window((0, 0), window=list_inner, anchor=tk.NW)
@@ -863,6 +1083,12 @@ def run_review_window(
             list_inner.update_idletasks()
             h = max(int(list_inner.winfo_reqheight()), 1)
             list_canvas.configure(scrollregion=(0, 0, w, h))
+            # Push fractions into overlay scrollbar (scrollregion alone may not)
+            try:
+                a, b = list_canvas.yview()
+                list_scroll.set(a, b)
+            except tk.TclError:
+                pass
             if w != _last_list_w[0]:
                 _last_list_w[0] = w
                 _schedule_ellipsize()
@@ -875,11 +1101,14 @@ def run_review_window(
     list_canvas.grid(row=0, column=0, sticky="nsew")
 
     def _on_list_mousewheel(event) -> str:
-        if sys.platform == "darwin":
-            list_canvas.yview_scroll(int(-1 * event.delta), "units")
-        else:
-            list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        list_scroll.pulse()
+        steps = _wheel_steps(event)
+        if steps:
+            list_canvas.yview_scroll(steps, "units")
+            try:
+                list_scroll.set(*list_canvas.yview())
+            except tk.TclError:
+                pass
+            list_scroll.pulse()
         return "break"
 
     def _bind_list_wheel(widget: tk.Misc) -> None:
@@ -888,17 +1117,26 @@ def run_review_window(
 
             def _up(_e=None) -> str:
                 list_canvas.yview_scroll(-1, "units")
+                try:
+                    list_scroll.set(*list_canvas.yview())
+                except tk.TclError:
+                    pass
                 list_scroll.pulse()
                 return "break"
 
             def _down(_e=None) -> str:
                 list_canvas.yview_scroll(1, "units")
+                try:
+                    list_scroll.set(*list_canvas.yview())
+                except tk.TclError:
+                    pass
                 list_scroll.pulse()
                 return "break"
 
             widget.bind("<Button-4>", _up)
             widget.bind("<Button-5>", _down)
 
+    # Container-level wheel (rows also bind so wheel works over labels)
     _bind_list_wheel(list_canvas)
     _bind_list_wheel(list_inner)
     _bind_list_wheel(list_frame)
@@ -949,21 +1187,25 @@ def run_review_window(
         selectforeground=_TEXT_ON_BLUE,
         cursor="xterm",  # select to redact, not free typing
     )
-    doc_scroll = AutoHideScrollbar(
+    doc_scroll = OverlayScrollbar(
         text_wrap,
         command=doc.yview,
-        style="ReviewDoc.Vertical.TScrollbar",
         root=root,
+        chrome=_BG_ELEVATED,
     )
     doc.configure(yscrollcommand=doc_scroll.set)
     doc.grid(row=0, column=0, sticky="nsew")
 
     def _on_doc_mousewheel(event) -> str:
-        if sys.platform == "darwin":
-            doc.yview_scroll(int(-1 * event.delta), "units")
-        else:
-            doc.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        doc_scroll.pulse()
+        steps = _wheel_steps(event)
+        if steps:
+            # Text units = lines; clamped steps avoid multi-page jumps
+            doc.yview_scroll(steps, "units")
+            try:
+                doc_scroll.set(*doc.yview())
+            except tk.TclError:
+                pass
+            doc_scroll.pulse()
         return "break"
 
     doc.bind("<MouseWheel>", _on_doc_mousewheel)
@@ -971,11 +1213,19 @@ def run_review_window(
 
         def _doc_up(_e=None) -> str:
             doc.yview_scroll(-1, "units")
+            try:
+                doc_scroll.set(*doc.yview())
+            except tk.TclError:
+                pass
             doc_scroll.pulse()
             return "break"
 
         def _doc_down(_e=None) -> str:
             doc.yview_scroll(1, "units")
+            try:
+                doc_scroll.set(*doc.yview())
+            except tk.TclError:
+                pass
             doc_scroll.pulse()
             return "break"
 
@@ -1336,6 +1586,11 @@ def run_review_window(
             doc.yview_moveto(yview[0])
         except tk.TclError:
             pass
+        try:
+            a, b = doc.yview()
+            doc_scroll.set(a, b)
+        except tk.TclError:
+            pass
 
         if scroll_to_selected and sel and sel in visible_set:
             f_sel = session.get(sel)
@@ -1344,6 +1599,11 @@ def run_review_window(
                 if idx:
                     doc.see(idx)
                     doc.mark_set(tk.INSERT, idx)
+                    try:
+                        a, b = doc.yview()
+                        doc_scroll.set(a, b)
+                    except tk.TclError:
+                        pass
         _status()
 
     def _current_list_index() -> int:
