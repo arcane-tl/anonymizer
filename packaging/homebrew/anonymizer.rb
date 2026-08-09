@@ -20,6 +20,8 @@ class Anonymizer < Formula
   url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.3.2.tar.gz"
   sha256 "d66ab95d7fd83940604ab56b505f067a7b355ac24031bbfed602ccbf1cbfbb80"
   version "1.3.2"
+  # post_install: install spaCy models via host pip into formula venv
+  revision 1
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 
@@ -32,37 +34,82 @@ class Anonymizer < Formula
   depends_on "python-tk@3.12"
   depends_on "tesseract" => :recommended
 
+  def venv_python
+    libexec/"bin/python"
+  end
+
+  def host_python
+    # Homebrew formula python (has pip). The formula venv is often created
+    # --without-pip, so model installs must use: python -m pip --python=venv …
+    Formula["python@3.12"].opt_libexec/"bin/python"
+  end
+
   def install
     # Create a venv under libexec. Homebrew's Virtualenv#pip_install passes
     # --no-deps (for resource-based installs); we need full PyPI resolution.
     venv = virtualenv_create(libexec, "python3.12")
-    python = Formula["python@3.12"].opt_libexec/"bin/python"
     # Drive pip against the venv interpreter so dependencies are installed.
-    system python, "-m", "pip", "--python=#{libexec}/bin/python",
+    system host_python, "-m", "pip", "--python=#{venv_python}",
            "install", "--verbose", "--upgrade", buildpath.to_s
     # Entry point from pyproject [project.scripts]
     bin.install_symlink libexec/"bin/anonymize"
   end
 
+  def model_loadable?(model)
+    quiet_system venv_python, "-c",
+                 "import spacy; spacy.load(#{model.inspect}); print('ok')"
+  end
+
+  def install_spacy_model(model)
+    return true if model_loadable?(model)
+
+    # 1) pip install into formula venv (reliable under Homebrew --without-pip)
+    ohai "Installing spaCy model #{model} (pip → formula venv)"
+    if system host_python, "-m", "pip", "--python=#{venv_python}",
+             "install", "--upgrade", model
+      return true if model_loadable?(model)
+    end
+
+    # 2) spaCy CLI (may fail if venv has no pip module)
+    ohai "Retry: python -m spacy download #{model}"
+    if system venv_python, "-m", "spacy", "download", model
+      return true if model_loadable?(model)
+    end
+
+    false
+  end
+
   def post_install
-    # Quality-first: large EN+FI models (best PERSON/ORG NER). Fall back to md/sm
-    # if a download fails so `brew install` still succeeds on flaky networks.
-    python = libexec/"bin/python"
-    {
+    # Quality-first: large EN+FI models. Fall back md→sm. Always try *both*
+    # languages (do not abort after English fails — that left FI missing).
+    chains = {
       "English" => %w[en_core_web_lg en_core_web_md en_core_web_sm],
-      "Finnish" => %w[fi_core_news_lg fi_core_news_md fi_core_news_sm],
-    }.each do |label, chain|
+      "Finnish"  => %w[fi_core_news_lg fi_core_news_md fi_core_news_sm],
+    }
+    failures = []
+    chains.each do |label, chain|
       ok = false
       chain.each do |model|
-        ohai "Downloading spaCy model #{model} (#{label})"
-        if system python, "-m", "spacy", "download", model
+        if install_spacy_model(model)
+          ohai "Using spaCy model #{model} (#{label})"
           ok = true
           break
         end
-        opoo "Failed #{model} — trying next fallback if any"
+        opoo "Failed #{model} (#{label}) — trying next fallback if any"
       end
-      odie "Could not install any #{label} spaCy model" unless ok
+      failures << label unless ok
     end
+
+    return if failures.empty?
+
+    odie <<~EOS
+      Could not install spaCy models for: #{failures.join(", ")}.
+      Retry:
+        brew postinstall anonymizer
+      Or install into the formula venv manually:
+        #{host_python} -m pip --python=#{venv_python} install en_core_web_lg fi_core_news_lg
+      Then: anonymize doctor
+    EOS
   end
 
   def caveats
@@ -98,15 +145,19 @@ class Anonymizer < Formula
 
       Document review window needs tkinter (via python-tk@3.12, a formula dependency).
 
-      spaCy models (default install): en_core_web_lg, fi_core_news_lg
-        (best NER quality; download is larger — first install may take several minutes)
+      spaCy models (default): en_core_web_lg, fi_core_news_lg
+        (best NER quality; first install may take several minutes)
+
+      If doctor reports missing models after install:
+        brew postinstall anonymizer
+      Manual install into this formula's Python:
+        #{host_python} -m pip --python=#{venv_python} install en_core_web_lg fi_core_news_lg
 
       Smaller / faster models (optional):
-        #{libexec}/bin/python -m spacy download en_core_web_sm
-        #{libexec}/bin/python -m spacy download fi_core_news_sm
+        #{host_python} -m pip --python=#{venv_python} install en_core_web_sm fi_core_news_sm
 
       Optional Swedish (not installed by default):
-        #{libexec}/bin/python -m spacy download sv_core_news_lg
+        #{host_python} -m pip --python=#{venv_python} install sv_core_news_lg
         anonymize doc.pdf --lang sv
 
       Model guide: https://github.com/arcane-tl/anonymizer/blob/main/docs/models.md

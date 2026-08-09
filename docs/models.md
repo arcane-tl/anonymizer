@@ -48,10 +48,20 @@ python -m spacy download en_core_web_lg
 python -m spacy download fi_core_news_lg
 ```
 
-**Homebrew** example:
+**Homebrew** (formula venv is often created *without* pip — use host pip targeting the venv):
 
 ```bash
-"$(brew --prefix anonymizer)/libexec/bin/python" -m spacy download en_core_web_sm
+# Preferred (same as brew post_install)
+HOST_PY="$(brew --prefix python@3.12)/libexec/bin/python"
+VENV_PY="$(brew --prefix anonymizer)/libexec/bin/python"
+"$HOST_PY" -m pip --python="$VENV_PY" install --upgrade en_core_web_lg fi_core_news_lg
+
+# Optional smaller models or Swedish
+"$HOST_PY" -m pip --python="$VENV_PY" install en_core_web_sm fi_core_news_sm
+"$HOST_PY" -m pip --python="$VENV_PY" install sv_core_news_lg
+
+# If models failed during install:
+brew postinstall anonymizer
 ```
 
 **Windows** (user install from `install.ps1`):
