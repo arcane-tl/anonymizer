@@ -764,17 +764,41 @@ def require_review_capable(surface: str) -> None:
     """Exit if the chosen review surface cannot run in this environment."""
     surface = (surface or "cli").strip().lower()
     if surface == "window":
+        tk_err: str | None = None
         try:
-            from anonymizer.gui.review_window import display_available
+            from anonymizer.gui.review_window import display_available, tk as _tk
 
-            if display_available():
+            if _tk is not None and display_available():
                 return
-        except Exception:
-            pass
+            if _tk is None:
+                tk_err = "tkinter is not importable in this Python"
+        except Exception as exc:
+            tk_err = str(exc)
+
+        if sys.platform == "darwin":
+            hint = (
+                "On macOS Homebrew installs, tkinter is a separate package:\n"
+                "  brew install python-tk@3.12\n"
+                "  brew reinstall anonymizer   # if the CLI was installed via brew\n"
+                "Then retry from the Anonymizer app (Review) or:\n"
+                "  anonymize FILE --review-window"
+            )
+        elif sys.platform == "win32":
+            hint = (
+                "On Windows, use a full Python install with tkinter "
+                "(python.org installer), then reinstall anonymizer."
+            )
+        else:
+            hint = (
+                "Install tkinter for your Python (e.g. python3-tk) "
+                "and ensure a display is available."
+            )
+        detail = f"\nDetails: {tk_err}" if tk_err else ""
         raise SystemExit(
-            "Error: --review-window requires a desktop display and tkinter.\n"
-            "Use plain --review for the terminal checklist, "
-            "or run the Anonymizer GUI app."
+            "Error: --review-window requires a working tkinter (desktop GUI).\n"
+            f"{hint}\n"
+            "Or use plain --review for the terminal checklist."
+            f"{detail}"
         )
     # cli surface
     if not sys.stdin.isatty():

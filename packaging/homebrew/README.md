@@ -36,6 +36,7 @@ Tap: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/homebrew-anony
 | `command not found: anonymize` after cask install | Old cask token conflict: see migration below |
 | `anonymizer cask is installed, skipping link` | `brew uninstall --cask anonymizer` then `brew link --overwrite anonymizer` |
 | App “damaged” | `brew reinstall --cask anonymizer-app` or `xattr -cr /Applications/Anonymizer.app` |
+| `--review-window` / app Review: needs tkinter | `brew install python-tk@3.12` then retry (formula depends on it from 1.3.1+) |
 | lingua dylib ID warning | Harmless; ignore if CLI works |
 
 ## CLI only

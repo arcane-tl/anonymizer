@@ -819,6 +819,23 @@ def cmd_doctor() -> None:
         rows.append(("Temp write", str(exc), False))
         ok_all = False
 
+    # Document review window (optional for CLI checklist, required for --review-window / app)
+    try:
+        from anonymizer.gui.review_window import display_available
+
+        if display_available():
+            rows.append(("Review window (tk)", "available", True))
+        else:
+            tip = (
+                "missing _tkinter — brew install python-tk@3.12"
+                if sys.platform == "darwin"
+                else "tkinter unavailable"
+            )
+            rows.append(("Review window (tk)", tip, False))
+            # Not fatal for CLI-only use; still surface the gap clearly
+    except Exception as exc:
+        rows.append(("Review window (tk)", f"unavailable ({exc})", False))
+
     table = Table(show_header=True, header_style="bold")
     table.add_column("Check")
     table.add_column("Status")

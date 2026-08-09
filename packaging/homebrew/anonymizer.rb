@@ -23,6 +23,8 @@ class Anonymizer < Formula
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 
   depends_on "python@3.12"
+  # Required for --review-window / desktop app review (Homebrew python has no _tkinter alone)
+  depends_on "python-tk@3.12"
   depends_on "tesseract" => :recommended
 
   def install
@@ -76,6 +78,11 @@ class Anonymizer < Formula
       Verify:
         anonymize doctor
         anonymize --version
+
+      Document review window needs tkinter (pulled in via python-tk@3.12).
+      If you see "requires a desktop display and tkinter":
+        brew install python-tk@3.12
+        brew reinstall anonymizer
 
       spaCy models (default): en_core_web_sm, fi_core_news_sm
       Larger models:
