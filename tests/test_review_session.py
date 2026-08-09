@@ -13,7 +13,7 @@ from anonymizer.anonymize.review import (
     placeholder_type_label,
     resolve_surface_in_blocks,
 )
-from anonymizer.gui.review_window import format_finding_row
+from anonymizer.gui.review_window import ellipsize_text, format_finding_row
 
 
 def test_placeholder_type_helpers():
@@ -133,6 +133,18 @@ def test_format_finding_row():
         occurrence_count=3,
     )
     assert format_finding_row(f2) == "[ ] Acme Ltd ×3  (Organization · [ORG_1] · added)"
+
+
+def test_ellipsize_text():
+    class _FakeFont:
+        def measure(self, s: str) -> int:
+            return len(s) * 10  # 10px per char
+
+    font = _FakeFont()
+    assert ellipsize_text("hello", font, 1000) == "hello"
+    out = ellipsize_text("hello world", font, 50)  # 5*10 budget for ellipsis 1 char
+    assert out.endswith("…")
+    assert font.measure(out) <= 50
 
 
 def test_resolve_surface_in_blocks():

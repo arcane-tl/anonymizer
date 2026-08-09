@@ -19,9 +19,11 @@ from anonymizer.anonymize.review import (
 
 try:
     import tkinter as tk
+    from tkinter import font as tkfont
     from tkinter import messagebox, ttk
 except ImportError:  # pragma: no cover
     tk = None  # type: ignore[assignment]
+    tkfont = None  # type: ignore[assignment]
 
 
 # ── Dark theme tokens (plain names in comments) ───────────────────
@@ -49,6 +51,7 @@ _SEARCH_PLACEHOLDER = "Search findings…"
 _FONT = ("Helvetica", 13) if sys.platform == "darwin" else ("Segoe UI", 11)
 _FONT_BOLD = ("Helvetica", 14, "bold") if sys.platform == "darwin" else ("Segoe UI", 12, "bold")
 _FONT_SMALL = ("Helvetica", 12) if sys.platform == "darwin" else ("Segoe UI", 10)
+_FONT_TINY = ("Helvetica", 10) if sys.platform == "darwin" else ("Segoe UI", 9)
 _FONT_MONO = ("Menlo", 12) if sys.platform == "darwin" else ("Consolas", 11)
 _FONT_DOC = ("Menlo", 13) if sys.platform == "darwin" else ("Consolas", 12)
 
@@ -76,12 +79,34 @@ def _human_type_label(f: ReviewFinding) -> str:
     return f.type_label.replace("_", " ").title()
 
 
-def format_finding_primary(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    """Line 1: original surface text (main scannable content)."""
-    snippet = f.original.replace("\n", " ").replace("\r", "")
-    if len(snippet) > max_original:
-        snippet = snippet[: max_original - 1] + "…"
-    return snippet
+def format_finding_primary(f: ReviewFinding, *, max_original: int = 500) -> str:
+    """Line 1: full original surface (UI applies pixel ellipsis)."""
+    return f.original.replace("\n", " ").replace("\r", "")[:max_original]
+
+
+def ellipsize_text(text: str, font: object, max_px: int) -> str:
+    """Longest prefix of ``text`` that fits in ``max_px``, with … if truncated."""
+    if max_px <= 0 or not text:
+        return ""
+    try:
+        measure = font.measure  # tkFont.Font
+    except AttributeError:
+        return text
+    if measure(text) <= max_px:
+        return text
+    ell = "…"
+    ell_w = measure(ell)
+    if ell_w >= max_px:
+        return ell
+    budget = max_px - ell_w
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if measure(text[:mid]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (text[:lo] + ell) if lo < len(text) else text
 
 
 def format_finding_secondary(f: ReviewFinding) -> str:
@@ -368,6 +393,11 @@ def run_review_window(
     paned.add(findings_card, width=_findings_w, minsize=240, stretch="always")
     side = findings_card.inner
 
+    def _on_sash_release(_event=None) -> None:
+        root.after_idle(_ellipsize_rows)
+
+    paned.bind("<ButtonRelease-1>", _on_sash_release)
+
     tk.Label(
         side, text="Findings", bg=_BG_PANEL, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
     ).pack(fill=tk.X, pady=(0, 10))
@@ -613,6 +643,28 @@ def run_review_window(
 
     visible_ph: list[str] = []
     row_widgets: dict[str, dict] = {}
+    _line1_font = tkfont.Font(font=_FONT) if tkfont is not None else None
+
+    def _ellipsize_rows(_event=None) -> None:
+        """Apply … truncation to line-1 surfaces from available pixel width."""
+        if _line1_font is None:
+            return
+        for rw in row_widgets.values():
+            full = rw.get("full_text") or ""
+            try:
+                rw["body"].update_idletasks()
+                count_w = (
+                    rw["count"].winfo_reqwidth() if rw["count"].cget("text") else 0
+                )
+                # body width minus count chip and small gap
+                avail = int(rw["body"].winfo_width()) - int(count_w) - 10
+                if avail < 24:
+                    continue
+                rw["line1"].configure(
+                    text=ellipsize_text(full, _line1_font, avail)
+                )
+            except tk.TclError:
+                pass
 
     # ── Document card ─────────────────────────────────────────────
     doc_card = RoundedCard(paned, bg=_BG_PANEL, radius=_RADIUS, pad=14)
@@ -837,7 +889,7 @@ def run_review_window(
             top,
             text=count_txt,
             anchor=tk.E,
-            font=_FONT_SMALL,
+            font=_FONT_TINY,
             bg=_BG_PANEL,
             fg=_TEXT_MUTED,
             cursor="hand2",
@@ -850,12 +902,15 @@ def run_review_window(
             text=format_finding_secondary(f),
             anchor=tk.W,
             justify=tk.LEFT,
-            font=_FONT_SMALL,
+            font=_FONT_TINY,
             bg=_BG_PANEL,
             fg=_TEXT_MUTED,
             cursor="hand2",
         )
         line2.pack(fill=tk.X, pady=(1, 0))
+
+        full_primary = format_finding_primary(f)
+        line1._full_text = full_primary  # type: ignore[attr-defined]
 
         def select_me(_e=None) -> None:
             _focus_ph(f.placeholder, scroll_doc=True)
@@ -868,6 +923,8 @@ def run_review_window(
             w.bind("<Button-1>", select_me)
             w.bind("<Double-Button-1>", toggle_me)
 
+        body.bind("<Configure>", lambda _e: _ellipsize_rows())
+
         return {
             "frame": fr,
             "body": body,
@@ -875,6 +932,7 @@ def run_review_window(
             "line2": line2,
             "count": count,
             "accent": accent,
+            "full_text": full_primary,
         }
 
     def _refresh_list(
@@ -912,6 +970,8 @@ def run_review_window(
         else:
             selected_ph[0] = None
         _style_row_selected(selected_ph[0])
+        # Defer ellipsis until widths are real (incl. after sash drag)
+        root.after_idle(_ellipsize_rows)
         if refresh_doc:
             _refresh_doc(scroll_to_selected=False)
 
