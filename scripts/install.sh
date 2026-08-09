@@ -284,44 +284,15 @@ setup_python_env() {
     pip install -e "${INSTALL_ROOT}"
   fi
 
-  # Prefer requested size; fall back lg→md→sm so install still succeeds offline-ish failures
-  local -a en_candidates fi_candidates
-  case "$MODELS" in
-    lg)
-      en_candidates=(en_core_web_lg en_core_web_md en_core_web_sm)
-      fi_candidates=(fi_core_news_lg fi_core_news_md fi_core_news_sm)
-      ;;
-    md)
-      en_candidates=(en_core_web_md en_core_web_sm)
-      fi_candidates=(fi_core_news_md fi_core_news_sm)
-      ;;
-    *)
-      en_candidates=(en_core_web_sm)
-      fi_candidates=(fi_core_news_sm)
-      ;;
-  esac
-
-  download_model_chain() {
-    local lang_label=$1
-    shift
-    local m
-    for m in "$@"; do
-      info "Downloading spaCy model $m ($lang_label)…"
-      if python -m spacy download "$m"; then
-        ok "Installed $m"
-        return 0
-      fi
-      warn "Failed $m — trying next fallback if any"
-    done
-    return 1
-  }
-
-  info "Downloading spaCy models (size=$MODELS; default quality path uses lg)…"
-  download_model_chain "English" "${en_candidates[@]}" \
-    || die "Could not install any English spaCy model"
-  download_model_chain "Finnish" "${fi_candidates[@]}" \
-    || die "Could not install any Finnish spaCy model"
-  ok "Python package and EN+FI models installed"
+  info "Installing spaCy models (en+fi, size=$MODELS; may take several minutes)…"
+  if python -m anonymizer.install_models --langs en,fi --size "$MODELS" --fallback; then
+    ok "spaCy EN+FI models ready"
+  else
+    warn "spaCy model install incomplete — CLI is installed; retry:"
+    warn "  $venv/bin/python -m anonymizer.install_models --langs en,fi --size $MODELS --fallback"
+    warn "  See docs/models.md"
+  fi
+  ok "Python package installed"
 }
 
 install_launcher() {
@@ -452,11 +423,11 @@ ${BOLD}Try it:${RESET}
   anonymize --help
 
 ${BOLD}spaCy models (default: EN+FI large):${RESET}
-  Smaller / faster:   $INSTALL_ROOT/.venv/bin/python -m spacy download en_core_web_sm
-                      $INSTALL_ROOT/.venv/bin/python -m spacy download fi_core_news_sm
-  Optional Swedish:   $INSTALL_ROOT/.venv/bin/python -m spacy download sv_core_news_lg
+  Retry / resize:     $INSTALL_ROOT/.venv/bin/python -m anonymizer.install_models --langs en,fi --size lg
+  Smaller:            … --size sm
+  Optional Swedish:   $INSTALL_ROOT/.venv/bin/python -m anonymizer.install_models --langs sv --size lg
                       anonymize doc.pdf --lang sv
-  Full guide:         docs/models.md (in the install tree or on GitHub)
+  Full guide:         docs/models.md
 
 ${BOLD}Upgrade later:${RESET}
   $INSTALL_ROOT/scripts/install.sh --yes --from-source

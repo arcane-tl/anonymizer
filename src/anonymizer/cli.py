@@ -868,8 +868,8 @@ def cmd_doctor() -> None:
         '  2. PATH:  [bold]export PATH="$HOME/.local/bin:$PATH"[/bold]'
     )
     console.print(
-        "  3. Models:  [bold]python -m spacy download en_core_web_lg[/bold] "
-        "(and fi_core_news_lg)"
+        "  3. Models:  [bold]python -m anonymizer.install_models "
+        "--langs en,fi --size lg --fallback[/bold]"
     )
     raise SystemExit(1)
 

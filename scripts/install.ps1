@@ -194,39 +194,16 @@ function Setup-PythonEnv {
         Pop-Location
     }
 
-    # Prefer requested size; fall back lg→md→sm
-    $enCandidates = switch ($Models) {
-        "lg" { @("en_core_web_lg", "en_core_web_md", "en_core_web_sm") }
-        "md" { @("en_core_web_md", "en_core_web_sm") }
-        default { @("en_core_web_sm") }
+    Write-Info "Installing spaCy models (en+fi, size=$Models; may take several minutes)..."
+    & $pyVenv -m anonymizer.install_models --langs en,fi --size $Models --fallback
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "spaCy EN+FI models ready"
+    } else {
+        Write-Warn "spaCy model install incomplete — CLI is installed; retry:"
+        Write-Warn "  & `"$pyVenv`" -m anonymizer.install_models --langs en,fi --size $Models --fallback"
+        Write-Warn "  See docs/models.md"
     }
-    $fiCandidates = switch ($Models) {
-        "lg" { @("fi_core_news_lg", "fi_core_news_md", "fi_core_news_sm") }
-        "md" { @("fi_core_news_md", "fi_core_news_sm") }
-        default { @("fi_core_news_sm") }
-    }
-
-    function Install-SpacyChain([string[]] $Candidates, [string] $Label) {
-        foreach ($m in $Candidates) {
-            Write-Info "Downloading spaCy model $m ($Label)..."
-            & $pyVenv -m spacy download $m
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok "Installed $m"
-                return $true
-            }
-            Write-Warn "Failed $m — trying next fallback if any"
-        }
-        return $false
-    }
-
-    Write-Info "Downloading spaCy models (size=$Models; default quality path uses lg)..."
-    if (-not (Install-SpacyChain $enCandidates "English")) {
-        Die "Could not install any English spaCy model"
-    }
-    if (-not (Install-SpacyChain $fiCandidates "Finnish")) {
-        Die "Could not install any Finnish spaCy model"
-    }
-    Write-Ok "Python package and EN+FI models installed"
+    Write-Ok "Python package installed"
 }
 
 function Install-Launcher {
@@ -310,9 +287,9 @@ function Write-Summary {
     Write-Host ""
     $pyV = Join-Path $script:InstallRoot ".venv\Scripts\python.exe"
     Write-Host "spaCy models (default: EN+FI large for best NER quality):" -ForegroundColor Cyan
-    Write-Host "  Smaller/faster:  & `"$pyV`" -m spacy download en_core_web_sm"
-    Write-Host "                   & `"$pyV`" -m spacy download fi_core_news_sm"
-    Write-Host "  Optional Swedish:& `"$pyV`" -m spacy download sv_core_news_lg"
+    Write-Host "  Retry/resize:    & `"$pyV`" -m anonymizer.install_models --langs en,fi --size lg"
+    Write-Host "  Smaller:         & `"$pyV`" -m anonymizer.install_models --langs en,fi --size sm"
+    Write-Host "  Optional Swedish:& `"$pyV`" -m anonymizer.install_models --langs sv --size lg"
     Write-Host "                   anonymize doc.pdf --lang sv"
     Write-Host "  Guide: docs/models.md"
     Write-Host ""
