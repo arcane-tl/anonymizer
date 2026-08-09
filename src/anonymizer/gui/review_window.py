@@ -63,13 +63,39 @@ def display_available() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
-    origin = "+ " if f.source == "user" else ""
+def _human_type_label(f: ReviewFinding) -> str:
+    """Map engine type / placeholder label to short UI name."""
+    from anonymizer.anonymize.mapping import placeholder_label
+
+    for ent, lab in REVIEW_ADD_TYPES:
+        if ent == f.entity_type:
+            return lab
+    for ent, lab in REVIEW_ADD_TYPES:
+        if placeholder_label(ent) == f.type_label:
+            return lab
+    return f.type_label.replace("_", " ").title()
+
+
+def format_finding_primary(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
+    """Line 1: original surface text (main scannable content)."""
     snippet = f.original.replace("\n", " ").replace("\r", "")
     if len(snippet) > max_original:
         snippet = snippet[: max_original - 1] + "…"
-    count = f" (×{f.occurrence_count})" if f.occurrence_count > 1 else ""
-    return f"{origin}{f.placeholder} — {snippet}{count}"
+    return snippet
+
+
+def format_finding_secondary(f: ReviewFinding) -> str:
+    """Line 2: type · tag · user-added marker."""
+    parts = [_human_type_label(f), f.placeholder]
+    if f.source == "user":
+        parts.append("added")
+    return " · ".join(parts)
+
+
+def format_finding_label(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
+    """Single-line summary (tests / legacy)."""
+    n = f" ×{f.occurrence_count}" if f.occurrence_count > 1 else ""
+    return f"{format_finding_primary(f, max_original=max_original)}{n}  ({format_finding_secondary(f)})"
 
 
 def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MAX) -> str:
@@ -323,13 +349,23 @@ def run_review_window(
         highlightthickness=0,
     ).pack(side=tk.RIGHT)
 
-    # Main split: two equal-ish columns (pack is more reliable than PanedWindow+Canvas)
-    main = tk.Frame(outer, bg=_BG_APP)
-    main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    # Main split: drag sash to resize Findings | Document
+    paned = tk.PanedWindow(
+        outer,
+        orient=tk.HORIZONTAL,
+        bg=_BG_APP,
+        sashwidth=8,
+        sashrelief=tk.FLAT,
+        sashpad=2,
+        opaqueresize=True,
+        bd=0,
+    )
+    paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-    # ── Findings card ─────────────────────────────────────────────
-    findings_card = RoundedCard(main, bg=_BG_PANEL, radius=_RADIUS, pad=14)
-    findings_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+    # ── Findings card (narrower default — two-line rows) ───────────
+    findings_card = RoundedCard(paned, bg=_BG_PANEL, radius=_RADIUS, pad=14)
+    _findings_w = max(280, min(360, w // 3))
+    paned.add(findings_card, width=_findings_w, minsize=240, stretch="always")
     side = findings_card.inner
 
     tk.Label(
@@ -579,8 +615,8 @@ def run_review_window(
     row_widgets: dict[str, dict] = {}
 
     # ── Document card ─────────────────────────────────────────────
-    doc_card = RoundedCard(main, bg=_BG_PANEL, radius=_RADIUS, pad=14)
-    doc_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+    doc_card = RoundedCard(paned, bg=_BG_PANEL, radius=_RADIUS, pad=14)
+    paned.add(doc_card, minsize=360, stretch="always")
     doc_pad = doc_card.inner
 
     doc_header = tk.Frame(doc_pad, bg=_BG_PANEL)
@@ -728,10 +764,15 @@ def run_review_window(
             f = session.get(key)
             selected = key == ph
             bg = _BG_SELECTED if selected else _BG_PANEL
-            fg = _TEXT_MUTED if (f and not f.enabled) else _TEXT
+            muted = bool(f and not f.enabled)
+            fg1 = _TEXT_MUTED if muted else _TEXT
+            fg2 = _TEXT_MUTED if muted else _TEXT_MUTED
             try:
                 rw["frame"].configure(bg=bg)
-                rw["label"].configure(bg=bg, fg=fg)
+                rw["body"].configure(bg=bg)
+                rw["line1"].configure(bg=bg, fg=fg1)
+                rw["line2"].configure(bg=bg, fg=fg2)
+                rw["count"].configure(bg=bg, fg=fg2)
                 rw["accent"].configure(bg=_ACCENT if selected else bg)
             except tk.TclError:
                 pass
@@ -767,25 +808,54 @@ def run_review_window(
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
+        """Two-line compact row: surface + count / type · tag · added."""
         fr = tk.Frame(parent, bg=_BG_PANEL)
         fr.pack(fill=tk.X, pady=1)
         accent = tk.Frame(fr, bg=_BG_PANEL, width=4)
         accent.pack(side=tk.LEFT, fill=tk.Y)
         accent.pack_propagate(False)
 
-        label = tk.Label(
-            fr,
-            text=format_finding_label(f),
+        body = tk.Frame(fr, bg=_BG_PANEL)
+        body.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8), pady=5)
+
+        top = tk.Frame(body, bg=_BG_PANEL)
+        top.pack(fill=tk.X)
+        muted = not f.enabled
+        line1 = tk.Label(
+            top,
+            text=format_finding_primary(f),
             anchor=tk.W,
             justify=tk.LEFT,
-            font=_FONT_MONO,
+            font=_FONT,
             bg=_BG_PANEL,
-            fg=_TEXT if f.enabled else _TEXT_MUTED,
+            fg=_TEXT_MUTED if muted else _TEXT,
             cursor="hand2",
-            padx=10,
-            pady=8,
         )
-        label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        line1.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        count_txt = f"×{f.occurrence_count}" if f.occurrence_count > 1 else ""
+        count = tk.Label(
+            top,
+            text=count_txt,
+            anchor=tk.E,
+            font=_FONT_SMALL,
+            bg=_BG_PANEL,
+            fg=_TEXT_MUTED,
+            cursor="hand2",
+            padx=(6, 0),
+        )
+        count.pack(side=tk.RIGHT)
+
+        line2 = tk.Label(
+            body,
+            text=format_finding_secondary(f),
+            anchor=tk.W,
+            justify=tk.LEFT,
+            font=_FONT_SMALL,
+            bg=_BG_PANEL,
+            fg=_TEXT_MUTED,
+            cursor="hand2",
+        )
+        line2.pack(fill=tk.X, pady=(1, 0))
 
         def select_me(_e=None) -> None:
             _focus_ph(f.placeholder, scroll_doc=True)
@@ -794,11 +864,18 @@ def run_review_window(
             _toggle_ph(f.placeholder)
             return "break"
 
-        for w in (label, fr, accent):
+        for w in (line1, line2, count, body, fr, accent):
             w.bind("<Button-1>", select_me)
             w.bind("<Double-Button-1>", toggle_me)
 
-        return {"frame": fr, "label": label, "accent": accent}
+        return {
+            "frame": fr,
+            "body": body,
+            "line1": line1,
+            "line2": line2,
+            "count": count,
+            "accent": accent,
+        }
 
     def _refresh_list(
         select_ph: str | None = None, *, refresh_doc: bool = True
