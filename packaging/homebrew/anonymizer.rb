@@ -16,11 +16,16 @@ class Anonymizer < Formula
   homepage "https://github.com/arcane-tl/anonymizer"
   license "MIT"
 
-  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.3.0.tar.gz"
-  sha256 "c1781b5ed28ed9b6e19cd65d658bf86d1b4269f9117566920bef76d99b1660fa"
-  version "1.3.0"
+  # update-for-release.sh rewrites url / sha256 / version at publish time.
+  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.3.1.tar.gz"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version "1.3.1"
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
+
+  # lingua’s wheel uses @rpath; without this, brew fails to rewrite dylib IDs
+  # (load commands do not fit) and prints "Failed to fix install linkage".
+  preserve_rpath
 
   depends_on "python@3.12"
   # Required for --review-window / desktop app review (Homebrew python has no _tkinter alone)
@@ -79,10 +84,7 @@ class Anonymizer < Formula
         anonymize doctor
         anonymize --version
 
-      Document review window needs tkinter (pulled in via python-tk@3.12).
-      If you see "requires a desktop display and tkinter":
-        brew install python-tk@3.12
-        brew reinstall anonymizer
+      Document review window needs tkinter (via python-tk@3.12, a formula dependency).
 
       spaCy models (default): en_core_web_sm, fi_core_news_sm
       Larger models:
@@ -90,13 +92,13 @@ class Anonymizer < Formula
         #{libexec}/bin/python -m spacy download fi_core_news_lg
 
       Optional OCR: brew install tesseract tesseract-lang ocrmypdf
-
-      A harmless linkage warning for the lingua wheel may appear; the CLI still works.
     EOS
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/anonymize --version")
     assert_match "anonymize", shell_output("#{bin}/anonymize --help")
+    # Language detector extension must import (preserve_rpath keeps @rpath wheels usable)
+    system libexec/"bin/python", "-c", "from lingua import Language; print(Language.ENGLISH)"
   end
 end
