@@ -129,11 +129,182 @@ def format_finding_row(f: ReviewFinding, *, max_original: int = _LIST_SNIPPET_MA
 
 
 def _shortcut_help_text() -> str:
-    save = "⌘↩ save" if sys.platform == "darwin" else "Ctrl+Enter save"
+    if sys.platform == "darwin":
+        save = "⌘S save"
+    elif sys.platform == "win32":
+        save = "Win+S save"
+    else:
+        save = "Super+S save"
     return (
-        "↑/↓ or j/k move  ·  space or double-click toggle  ·  "
-        f"select text then a or right-click to redact  ·  {save}  ·  esc cancel"
+        "↑/↓ move  ·  space or double-click toggle  ·  "
+        f"select text → a or right-click → choose type  ·  {save}  ·  esc cancel"
     )
+
+
+def _save_key_sequences() -> tuple[str, ...]:
+    """Platform save chords: ⌘S (mac) / Win+S (Windows Super) — not Ctrl+S."""
+    if sys.platform == "darwin":
+        return ("<Command-s>", "<Command-S>")
+    # Super = Windows key; Meta fallback for some Tk builds
+    return ("<Super-s>", "<Super-S>", "<Meta-s>", "<Meta-S>")
+
+
+def _setup_review_scrollbar_styles(root: tk.Misc) -> None:
+    """Make scrollbar troughs match the pane (no darker gutter strip).
+
+    Aqua ttk ignores trough colors; clam is themeable. Review UI only uses
+    ttk for these two scrollbars, so switching the theme is safe here.
+    """
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    for name, trough in (
+        ("ReviewList.Vertical.TScrollbar", _BG_PANEL),
+        ("ReviewDoc.Vertical.TScrollbar", _BG_ELEVATED),
+    ):
+        style.configure(
+            name,
+            gripcount=0,
+            background=_BORDER,  # thumb
+            darkcolor=trough,
+            lightcolor=trough,
+            troughcolor=trough,
+            bordercolor=trough,
+            arrowcolor=trough,  # arrows blend into trough
+            relief="flat",
+            borderwidth=0,
+        )
+        style.map(
+            name,
+            background=[
+                ("pressed", _ACCENT),
+                ("active", _TEXT_MUTED),
+                ("!disabled", _BORDER),
+            ],
+            arrowcolor=[("!disabled", trough)],
+        )
+
+
+class AutoHideScrollbar:
+    """Overlay vertical scrollbar: shows while scrolling/hovered, then hides.
+
+    Placed over the content (not a grid column) so show/hide does not reflow.
+    """
+
+    HIDE_MS = 1100
+    WIDTH = 10
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        command,
+        style: str,
+        root: tk.Misc,
+    ) -> None:
+        self._root = root
+        self._parent = parent
+        self._sb = ttk.Scrollbar(
+            parent, orient=tk.VERTICAL, command=command, style=style
+        )
+        self._hide_job: str | None = None
+        self._hovered = False
+        self._first = 0.0
+        self._last = 1.0
+        self._placed = False
+        self._sb.bind("<Enter>", self._on_enter)
+        self._sb.bind("<Leave>", self._on_leave)
+        self._sb.bind("<ButtonPress-1>", lambda _e: self.pulse())
+        self._sb.bind("<B1-Motion>", lambda _e: self.pulse())
+
+    def set(self, first: str | float, last: str | float) -> None:
+        """yscrollcommand target — update thumb and flash when needed."""
+        try:
+            f, l = float(first), float(last)
+        except (TypeError, ValueError):
+            return
+        moved = abs(f - self._first) > 1e-6 or abs(l - self._last) > 1e-6
+        self._first, self._last = f, l
+        try:
+            self._sb.set(first, last)
+        except tk.TclError:
+            return
+        if not self._overflows():
+            self.hide(force=True)
+            return
+        if moved or self._placed:
+            self.pulse()
+
+    def _overflows(self) -> bool:
+        return self._first > 0.002 or self._last < 0.998
+
+    def pulse(self) -> None:
+        """Show (if content overflows) and restart the hide timer."""
+        if not self._overflows():
+            self.hide(force=True)
+            return
+        self.show()
+        self.schedule_hide()
+
+    def show(self) -> None:
+        if not self._placed:
+            try:
+                self._sb.place(
+                    relx=1.0,
+                    rely=0.0,
+                    relheight=1.0,
+                    anchor="ne",
+                    width=self.WIDTH,
+                )
+                self._sb.lift()
+                self._placed = True
+            except tk.TclError:
+                return
+        else:
+            try:
+                self._sb.lift()
+            except tk.TclError:
+                pass
+
+    def hide(self, force: bool = False) -> None:
+        if self._hovered and not force:
+            return
+        self._cancel_hide()
+        if self._placed:
+            try:
+                self._sb.place_forget()
+            except tk.TclError:
+                pass
+            self._placed = False
+
+    def schedule_hide(self) -> None:
+        self._cancel_hide()
+        if self._hovered:
+            return
+        try:
+            self._hide_job = self._root.after(self.HIDE_MS, self.hide)
+        except tk.TclError:
+            self._hide_job = None
+
+    def _cancel_hide(self) -> None:
+        if self._hide_job is not None:
+            try:
+                self._root.after_cancel(self._hide_job)
+            except tk.TclError:
+                pass
+            self._hide_job = None
+
+    def _on_enter(self, _event=None) -> None:
+        self._hovered = True
+        self._cancel_hide()
+        if self._overflows():
+            self.show()
+
+    def _on_leave(self, _event=None) -> None:
+        self._hovered = False
+        self.schedule_hide()
 
 
 def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
@@ -179,9 +350,23 @@ class RoundedCard(tk.Frame):
         self._win = self._canvas.create_window(pad, pad, window=self.inner, anchor=tk.NW)
         self._shape = None
         self._pad = pad
-        self._canvas.bind("<Configure>", self._redraw)
+        self._redraw_job: str | None = None
+        self._canvas.bind("<Configure>", self._schedule_redraw)
+
+    def _schedule_redraw(self, event=None) -> None:
+        """Coalesce configure storms (sash drag) into one idle redraw."""
+        if self._redraw_job is not None:
+            try:
+                self.after_cancel(self._redraw_job)
+            except tk.TclError:
+                pass
+        try:
+            self._redraw_job = self.after_idle(self._redraw)
+        except tk.TclError:
+            self._redraw_job = None
 
     def _redraw(self, event=None) -> None:
+        self._redraw_job = None
         w = self._canvas.winfo_width()
         h = self._canvas.winfo_height()
         if w < 4 or h < 4:
@@ -225,6 +410,7 @@ def run_review_window(
         title = f"Anonymizer review — {file_label}"
     root.title(title)
     root.configure(bg=_BG_APP)
+    _setup_review_scrollbar_styles(root)
 
     # Fit on screen with room for Dock / menu bar
     root.update_idletasks()
@@ -387,14 +573,14 @@ def run_review_window(
     )
     paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-    # ── Findings card (narrower default — two-line rows) ───────────
+    # ── Findings card (slim default — two-line rows; drag sash to widen) ──
     findings_card = RoundedCard(paned, bg=_BG_PANEL, radius=_RADIUS, pad=14)
-    _findings_w = max(280, min(360, w // 3))
-    paned.add(findings_card, width=_findings_w, minsize=240, stretch="always")
+    _findings_w = max(180, min(210, w // 5))
+    paned.add(findings_card, width=_findings_w, minsize=160, stretch="always")
     side = findings_card.inner
 
     def _on_sash_release(_event=None) -> None:
-        root.after_idle(_ellipsize_rows)
+        _schedule_ellipsize()
 
     paned.bind("<ButtonRelease-1>", _on_sash_release)
 
@@ -597,9 +783,11 @@ def run_review_window(
     search_canvas.bind("<Button-1>", lambda _e: search_entry.focus_set())
     _show_search_placeholder()
 
-    # List viewport
+    # List viewport — full-width content; overlay auto-hide scrollbar
     list_frame = tk.Frame(side, bg=_BG_PANEL)
     list_frame.pack(fill=tk.BOTH, expand=True)
+    list_frame.grid_rowconfigure(0, weight=1)
+    list_frame.grid_columnconfigure(0, weight=1)
     list_canvas = tk.Canvas(
         list_frame,
         highlightthickness=0,
@@ -607,43 +795,16 @@ def run_review_window(
         bg=_BG_PANEL,
         takefocus=True,
     )
-    list_scroll = ttk.Scrollbar(
-        list_frame, orient=tk.VERTICAL, command=list_canvas.yview
+    list_scroll = AutoHideScrollbar(
+        list_frame,
+        command=list_canvas.yview,
+        style="ReviewList.Vertical.TScrollbar",
+        root=root,
     )
     list_inner = tk.Frame(list_canvas, bg=_BG_PANEL)
-    list_inner.bind(
-        "<Configure>",
-        lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
-    )
     list_window = list_canvas.create_window((0, 0), window=list_inner, anchor=tk.NW)
-
-    def _on_canvas_configure(event) -> None:
-        list_canvas.itemconfigure(list_window, width=event.width)
-
-    list_canvas.bind("<Configure>", _on_canvas_configure)
-    list_canvas.configure(yscrollcommand=list_scroll.set)
-    list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-    def _on_mousewheel(event) -> None:
-        if sys.platform == "darwin":
-            list_canvas.yview_scroll(int(-1 * event.delta), "units")
-        else:
-            list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    def _bind_wheel(_e=None) -> None:
-        list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-    def _unbind_wheel(_e=None) -> None:
-        list_canvas.unbind_all("<MouseWheel>")
-
-    list_canvas.bind("<Enter>", _bind_wheel)
-    list_canvas.bind("<Leave>", _unbind_wheel)
-    list_canvas.bind("<Button-1>", lambda _e: _focus_list())
-
-    visible_ph: list[str] = []
-    row_widgets: dict[str, dict] = {}
-    _line1_font = tkfont.Font(font=_FONT) if tkfont is not None else None
+    _last_list_w = [0]
+    _ellipsize_job: list[str | None] = [None]
 
     def _ellipsize_rows(_event=None) -> None:
         """Apply … truncation to line-1 surfaces from available pixel width."""
@@ -652,7 +813,6 @@ def run_review_window(
         for rw in row_widgets.values():
             full = rw.get("full_text") or ""
             try:
-                rw["body"].update_idletasks()
                 count_w = (
                     rw["count"].winfo_reqwidth() if rw["count"].cget("text") else 0
                 )
@@ -666,6 +826,75 @@ def run_review_window(
             except tk.TclError:
                 pass
 
+    def _schedule_ellipsize(_event=None) -> None:
+        """Debounce ellipsis during sash drag (avoid O(n) work every pixel)."""
+        if _ellipsize_job[0] is not None:
+            try:
+                root.after_cancel(_ellipsize_job[0])
+            except tk.TclError:
+                pass
+        try:
+            _ellipsize_job[0] = root.after(60, _run_ellipsize)
+        except tk.TclError:
+            _ellipsize_job[0] = None
+
+    def _run_ellipsize() -> None:
+        _ellipsize_job[0] = None
+        _ellipsize_rows()
+
+    def _sync_list_scrollregion(_event=None) -> None:
+        """Vertical-only scrollregion; lock inner width to canvas (no horizontal grow)."""
+        try:
+            w = max(int(list_canvas.winfo_width()), 1)
+            list_canvas.itemconfigure(list_window, width=w)
+            list_inner.update_idletasks()
+            h = max(int(list_inner.winfo_reqheight()), 1)
+            list_canvas.configure(scrollregion=(0, 0, w, h))
+            if w != _last_list_w[0]:
+                _last_list_w[0] = w
+                _schedule_ellipsize()
+        except tk.TclError:
+            pass
+
+    list_inner.bind("<Configure>", _sync_list_scrollregion)
+    list_canvas.bind("<Configure>", _sync_list_scrollregion)
+    list_canvas.configure(yscrollcommand=list_scroll.set)
+    list_canvas.grid(row=0, column=0, sticky="nsew")
+
+    def _on_list_mousewheel(event) -> str:
+        if sys.platform == "darwin":
+            list_canvas.yview_scroll(int(-1 * event.delta), "units")
+        else:
+            list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        list_scroll.pulse()
+        return "break"
+
+    def _bind_list_wheel(widget: tk.Misc) -> None:
+        widget.bind("<MouseWheel>", _on_list_mousewheel)
+        if sys.platform != "darwin":
+
+            def _up(_e=None) -> str:
+                list_canvas.yview_scroll(-1, "units")
+                list_scroll.pulse()
+                return "break"
+
+            def _down(_e=None) -> str:
+                list_canvas.yview_scroll(1, "units")
+                list_scroll.pulse()
+                return "break"
+
+            widget.bind("<Button-4>", _up)
+            widget.bind("<Button-5>", _down)
+
+    _bind_list_wheel(list_canvas)
+    _bind_list_wheel(list_inner)
+    _bind_list_wheel(list_frame)
+    list_canvas.bind("<Button-1>", lambda _e: _focus_list())
+
+    visible_ph: list[str] = []
+    row_widgets: dict[str, dict] = {}
+    _line1_font = tkfont.Font(font=_FONT) if tkfont is not None else None
+
     # ── Document card ─────────────────────────────────────────────
     doc_card = RoundedCard(paned, bg=_BG_PANEL, radius=_RADIUS, pad=14)
     paned.add(doc_card, minsize=360, stretch="always")
@@ -676,16 +905,20 @@ def run_review_window(
     tk.Label(
         doc_header, text="Document", bg=_BG_PANEL, fg=_TEXT, font=_FONT_BOLD
     ).pack(side=tk.LEFT)
-    tk.Label(
-        doc_header,
-        text="Amber = redact  ·  blue = focused  ·  a / right-click adds",
-        bg=_BG_PANEL,
-        fg=_TEXT_MUTED,
-        font=_FONT_SMALL,
-    ).pack(side=tk.RIGHT)
 
-    text_wrap = tk.Frame(doc_pad, bg=_BG_PANEL)
+    # Elevated text well with rounded corners (matches search shells / cards)
+    doc_well = RoundedCard(
+        doc_pad,
+        bg=_BG_ELEVATED,
+        chrome=_BG_PANEL,
+        radius=10,
+        pad=3,
+    )
+    doc_well.pack(fill=tk.BOTH, expand=True)
+    text_wrap = tk.Frame(doc_well.inner, bg=_BG_ELEVATED)
     text_wrap.pack(fill=tk.BOTH, expand=True)
+    text_wrap.grid_rowconfigure(0, weight=1)
+    text_wrap.grid_columnconfigure(0, weight=1)
     doc = tk.Text(
         text_wrap,
         wrap=tk.WORD,
@@ -697,18 +930,44 @@ def run_review_window(
         fg=_TEXT,
         insertbackground=_TEXT,
         relief=tk.FLAT,
-        highlightthickness=1,
-        highlightbackground=_BORDER,
-        highlightcolor=_ACCENT,
+        highlightthickness=0,
+        borderwidth=0,
         selectbackground=_HL_SELECTED_BG,
         selectforeground=_TEXT_ON_BLUE,
-        borderwidth=0,
         cursor="xterm",  # select to redact, not free typing
     )
-    doc_scroll = ttk.Scrollbar(text_wrap, orient=tk.VERTICAL, command=doc.yview)
+    doc_scroll = AutoHideScrollbar(
+        text_wrap,
+        command=doc.yview,
+        style="ReviewDoc.Vertical.TScrollbar",
+        root=root,
+    )
     doc.configure(yscrollcommand=doc_scroll.set)
-    doc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    doc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    doc.grid(row=0, column=0, sticky="nsew")
+
+    def _on_doc_mousewheel(event) -> str:
+        if sys.platform == "darwin":
+            doc.yview_scroll(int(-1 * event.delta), "units")
+        else:
+            doc.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        doc_scroll.pulse()
+        return "break"
+
+    doc.bind("<MouseWheel>", _on_doc_mousewheel)
+    if sys.platform != "darwin":
+
+        def _doc_up(_e=None) -> str:
+            doc.yview_scroll(-1, "units")
+            doc_scroll.pulse()
+            return "break"
+
+        def _doc_down(_e=None) -> str:
+            doc.yview_scroll(1, "units")
+            doc_scroll.pulse()
+            return "break"
+
+        doc.bind("<Button-4>", _doc_up)
+        doc.bind("<Button-5>", _doc_down)
 
     # Review canvas only: allow select/navigate/copy; block typing & paste/cut
     _NAV_KEYS = {
@@ -736,6 +995,14 @@ def run_review_window(
         "KP_Enter",
     }
 
+    def _is_save_modifier(state: int) -> bool:
+        """True if platform save modifier is held (⌘ / Super-Win — not Control alone)."""
+        if sys.platform == "darwin":
+            # Command often Mod1 (0x8); some builds Mod2 (0x10)
+            return bool(state & 0x8) or bool(state & 0x10)
+        # Super/Win ≈ Mod4 (0x40); Meta/Mod1 as fallback on some Tk builds
+        return bool(state & 0x40) or bool(state & 0x80) or bool(state & 0x8)
+
     def _doc_block_edit(event: tk.Event) -> str | None:
         """Prevent free editing; selection + shortcuts still work."""
         # Our add-redaction shortcut (handled by specific binds; belt-and-suspenders)
@@ -744,10 +1011,12 @@ def run_review_window(
         # Allow pure navigation / modifiers
         if event.keysym in _NAV_KEYS:
             return None
-        # Allow copy (Ctrl/Cmd+C); block cut/paste
         state = int(getattr(event, "state", 0) or 0)
-        cmd = bool(state & 0x8) or bool(state & 0x4)  # Mod1/Control-ish (platform varies)
-        # On macOS Command is often 0x8 (Mod1); Control 0x4
+        # Save: ⌘S / Win+S (must run even when Text has focus)
+        if event.keysym.lower() == "s" and _is_save_modifier(state):
+            _on_save()
+            return "break"
+        # Allow copy (Ctrl/Cmd+C); block cut/paste
         if event.keysym.lower() == "c" and (
             state & 0x4 or state & 0x8 or state & 0x10
         ):
@@ -772,16 +1041,6 @@ def run_review_window(
         "hl_SELECTED", background=_HL_SELECTED_BG, foreground=_TEXT_ON_BLUE
     )
     doc.tag_raise("hl_SELECTED")
-
-    # One-line hint (no combobox bar)
-    tk.Label(
-        doc_pad,
-        text="Select text → a or right-click → choose type  ·  document is not editable",
-        bg=_BG_PANEL,
-        fg=_TEXT_MUTED,
-        font=_FONT_SMALL,
-        anchor=tk.W,
-    ).pack(fill=tk.X, pady=(10, 0))
 
     # ── Logic ─────────────────────────────────────────────────────
     def _status(extra: str = "") -> None:
@@ -822,6 +1081,7 @@ def run_review_window(
             try:
                 rw["frame"].configure(bg=bg)
                 rw["body"].configure(bg=bg)
+                rw["top"].configure(bg=bg)
                 rw["line1"].configure(bg=bg, fg=fg1)
                 rw["line2"].configure(bg=bg, fg=fg2)
                 rw["count"].configure(bg=bg, fg=fg2)
@@ -842,6 +1102,28 @@ def run_review_window(
             return
         _set_enabled(ph, not f.enabled)
 
+    def _ensure_row_visible(rw: dict) -> None:
+        """Scroll the findings list only if the row is not fully in the viewport."""
+        try:
+            list_canvas.update_idletasks()
+            fr = rw["frame"]
+            y1 = float(fr.winfo_y())
+            y2 = y1 + float(fr.winfo_height())
+            view_top = float(list_canvas.canvasy(0))
+            view_bot = float(list_canvas.canvasy(list_canvas.winfo_height()))
+            content_h = max(float(list_inner.winfo_height()), 1.0)
+
+            if y1 < view_top:
+                # Row top clipped above → scroll up just enough
+                list_canvas.yview_moveto(max(0.0, y1 / content_h))
+            elif y2 > view_bot:
+                # Row bottom clipped below → scroll down just enough
+                canvas_h = max(float(list_canvas.winfo_height()), 1.0)
+                list_canvas.yview_moveto(max(0.0, (y2 - canvas_h) / content_h))
+            # else fully visible → leave scroll alone
+        except tk.TclError:
+            pass
+
     def _focus_ph(ph: str, *, scroll_doc: bool = True) -> None:
         if ph not in visible_ph:
             return
@@ -850,29 +1132,25 @@ def run_review_window(
         _style_row_selected(ph)
         rw = row_widgets.get(ph)
         if rw:
-            try:
-                list_canvas.update_idletasks()
-                y = rw["frame"].winfo_y()
-                hgt = list_inner.winfo_height() or 1
-                list_canvas.yview_moveto(max(0.0, (y - 20) / max(hgt, 1)))
-            except tk.TclError:
-                pass
+            _ensure_row_visible(rw)
         _refresh_doc(scroll_to_selected=scroll_doc)
 
     def _make_row(parent: tk.Frame, f: ReviewFinding) -> dict:
         """Two-line compact row: surface + count / type · tag · added."""
-        fr = tk.Frame(parent, bg=_BG_PANEL)
+        fr = tk.Frame(parent, bg=_BG_PANEL, highlightthickness=0, bd=0)
         fr.pack(fill=tk.X, pady=1)
-        accent = tk.Frame(fr, bg=_BG_PANEL, width=4)
+        accent = tk.Frame(fr, bg=_BG_PANEL, width=4, highlightthickness=0, bd=0)
         accent.pack(side=tk.LEFT, fill=tk.Y)
         accent.pack_propagate(False)
 
-        body = tk.Frame(fr, bg=_BG_PANEL)
-        body.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8), pady=5)
+        body = tk.Frame(fr, bg=_BG_PANEL, highlightthickness=0, bd=0)
+        body.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8), pady=3)
 
-        top = tk.Frame(body, bg=_BG_PANEL)
+        top = tk.Frame(body, bg=_BG_PANEL, highlightthickness=0, bd=0)
         top.pack(fill=tk.X)
         muted = not f.enabled
+        # width=1 keeps Labels shrinkable so long surfaces don't force the pane wider
+        # (ellipsis fills available pixels in _ellipsize_rows)
         line1 = tk.Label(
             top,
             text=format_finding_primary(f),
@@ -882,6 +1160,10 @@ def run_review_window(
             bg=_BG_PANEL,
             fg=_TEXT_MUTED if muted else _TEXT,
             cursor="hand2",
+            pady=0,
+            highlightthickness=0,
+            bd=0,
+            width=1,
         )
         line1.pack(side=tk.LEFT, fill=tk.X, expand=True)
         count_txt = f"×{f.occurrence_count}" if f.occurrence_count > 1 else ""
@@ -894,6 +1176,9 @@ def run_review_window(
             fg=_TEXT_MUTED,
             cursor="hand2",
             padx=6,
+            pady=0,
+            highlightthickness=0,
+            bd=0,
         )
         count.pack(side=tk.RIGHT)
 
@@ -906,8 +1191,12 @@ def run_review_window(
             bg=_BG_PANEL,
             fg=_TEXT_MUTED,
             cursor="hand2",
+            pady=0,
+            highlightthickness=0,
+            bd=0,
+            width=1,
         )
-        line2.pack(fill=tk.X, pady=(1, 0))
+        line2.pack(fill=tk.X, pady=0)
 
         full_primary = format_finding_primary(f)
         line1._full_text = full_primary  # type: ignore[attr-defined]
@@ -919,15 +1208,15 @@ def run_review_window(
             _toggle_ph(f.placeholder)
             return "break"
 
-        for w in (line1, line2, count, body, fr, accent):
+        for w in (line1, line2, count, body, top, fr, accent):
             w.bind("<Button-1>", select_me)
             w.bind("<Double-Button-1>", toggle_me)
-
-        body.bind("<Configure>", lambda _e: _ellipsize_rows())
+            _bind_list_wheel(w)
 
         return {
             "frame": fr,
             "body": body,
+            "top": top,
             "line1": line1,
             "line2": line2,
             "count": count,
@@ -959,7 +1248,7 @@ def run_review_window(
             visible_ph.append(f.placeholder)
 
         list_inner.update_idletasks()
-        list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+        _sync_list_scrollregion()
 
         _status()
         target = select_ph or selected_ph[0]
@@ -970,8 +1259,8 @@ def run_review_window(
         else:
             selected_ph[0] = None
         _style_row_selected(selected_ph[0])
-        # Defer ellipsis until widths are real (incl. after sash drag)
-        root.after_idle(_ellipsize_rows)
+        # Debounced ellipsis once widths are real
+        _schedule_ellipsize()
         if refresh_doc:
             _refresh_doc(scroll_to_selected=False)
 
@@ -1231,18 +1520,10 @@ def run_review_window(
         result["session"] = None
         root.destroy()
 
-    def _cleanup() -> None:
-        try:
-            list_canvas.unbind_all("<MouseWheel>")
-        except tk.TclError:
-            pass
-
     def _on_close() -> None:
-        _cleanup()
         _cancel()
 
     def _on_save() -> None:
-        _cleanup()
         _save()
 
     def _nav(delta: int) -> str:
@@ -1268,14 +1549,16 @@ def run_review_window(
         _on_close()
         return "break"
 
+    def _on_save_key(_e=None) -> str:
+        _on_save()
+        return "break"
+
     root.bind("<space>", lambda e: _toggle_selected(e))
     root.bind("<Escape>", _on_escape)
-    root.bind(
-        "<Command-Return>" if sys.platform == "darwin" else "<Control-Return>",
-        lambda _e: _on_save(),
-    )
-    root.bind("j", lambda e: _nav_if_not_typing(1, e))
-    root.bind("k", lambda e: _nav_if_not_typing(-1, e))
+    for _seq in _save_key_sequences():
+        root.bind(_seq, _on_save_key)
+        list_canvas.bind(_seq, _on_save_key)
+        doc.bind(_seq, _on_save_key)
     root.bind("<Down>", lambda e: _nav_if_not_typing(1, e))
     root.bind("<Up>", lambda e: _nav_if_not_typing(-1, e))
     root.bind("a", lambda e: _add_selection(e))
@@ -1283,8 +1566,6 @@ def run_review_window(
 
     list_canvas.bind("<Down>", lambda _e: _nav(1))
     list_canvas.bind("<Up>", lambda _e: _nav(-1))
-    list_canvas.bind("j", lambda _e: _nav(1))
-    list_canvas.bind("k", lambda _e: _nav(-1))
     list_canvas.bind("<space>", lambda e: _toggle_selected(e))
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
@@ -1303,5 +1584,4 @@ def run_review_window(
         pass
 
     root.mainloop()
-    _cleanup()
     return result["session"]
