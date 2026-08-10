@@ -54,7 +54,7 @@ def test_wants_flags() -> None:
 
 
 def test_pdf_redact_removes_cleartext(tmp_path: Path) -> None:
-    import fitz
+    import pymupdf as fitz
 
     src = tmp_path / "in.pdf"
     dest = tmp_path / "out.pdf"
@@ -119,7 +119,7 @@ def test_docx_redact_remove(tmp_path: Path) -> None:
 
 
 def test_write_native_dispatch(tmp_path: Path) -> None:
-    import fitz
+    import pymupdf as fitz
 
     src = tmp_path / "x.pdf"
     dest = tmp_path / "x.anonymized.pdf"

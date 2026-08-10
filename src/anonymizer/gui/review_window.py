@@ -2495,12 +2495,19 @@ def run_review_window(
     else:
         _focus_list()
 
-    root.lift()
+    # Make sure the window is visible above consoles (Windows Terminal / cmd).
     try:
+        root.deiconify()
+        root.lift()
+        root.focus_force()
         root.attributes("-topmost", True)
-        root.after(200, lambda: root.attributes("-topmost", False))
+        root.after(600, lambda: root.attributes("-topmost", False))
+        root.update()
     except tk.TclError:
-        pass
+        try:
+            root.lift()
+        except tk.TclError:
+            pass
 
     try:
         root.mainloop()

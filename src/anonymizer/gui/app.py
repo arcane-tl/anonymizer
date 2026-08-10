@@ -973,9 +973,20 @@ class OptionsApp(tk.Tk):
                 [*cli, mode, str(p), *common_flags, "--review-window"]
                 for p in self.files
             ]
-            self._run_review_batch(cmds, want_open)
-            _log("OptionsApp review batch spawned → destroy")
-            self.destroy()
+            try:
+                self._run_review_batch(cmds, want_open)
+            finally:
+                for p in (allow_f.name, deny_f.name, str(cfg_path)):
+                    try:
+                        Path(p).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            _log("OptionsApp review batch finished → destroy")
+            try:
+                if self.winfo_exists():
+                    self.destroy()
+            except tk.TclError:
+                pass
             return
 
         # Keep the window visible with a working status instead of vanishing
@@ -1098,30 +1109,90 @@ class OptionsApp(tk.Tk):
         return cfg_path
 
     def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
-        # No pre-flight dialog (Mac opens review/Terminal directly after Start).
+        """Run CLI with --review-window; wait for each job and surface errors.
+
+        Windows: do **not** fire-and-forget a Terminal ``cmd /k … & echo Finished``
+        chain (that prints Finished even when review never stayed open). Wait on
+        the CLI process so the Tk review window can take focus; optional progress
+        console via CREATE_NEW_CONSOLE.
+        """
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
-        if sys.platform == "win32":
-            parts = [subprocess.list2cmdline(cmd) for cmd in cmds]
-            parts.append("echo.")
-            parts.append("echo --- Finished. You can close this window. ---")
-            script = " & ".join(parts)
-            if shutil.which("wt"):
-                subprocess.Popen(["wt", "cmd", "/k", script], env=env)
-            else:
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "cmd", "/k", script], env=env
-                )
-        elif sys.platform == "darwin":
+
+        if sys.platform == "darwin":
             chain = " ; ".join(" ".join(shlex_quote(c) for c in cmd) for cmd in cmds)
             chain += '; echo; echo "--- Finished. You can close this window. ---"'
             chain_esc = chain.replace("\\", "\\\\").replace('"', '\\"')
             osa = f'tell application "Terminal" to do script "{chain_esc}"'
             subprocess.Popen(["osascript", "-e", osa], env=env)
-        else:
-            for cmd in cmds:
-                subprocess.run(cmd, env=env)
+            return
+
+        # Windows / Linux: wait for CLI (review window is interactive).
+        errors: list[str] = []
+        cancelled = 0
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
+
+        for cmd in cmds:
+            _log(f"REVIEW RUN: {cmd[0] if cmd else '?'} …")
+            try:
+                if sys.platform == "win32":
+                    # New console for progress; process is waited so review can block.
+                    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                    proc = subprocess.run(
+                        cmd,
+                        env=env,
+                        creationflags=creationflags,
+                    )
+                else:
+                    proc = subprocess.run(cmd, env=env)
+            except OSError as exc:
+                errors.append(str(exc))
+                _log(f"REVIEW FAIL spawn: {exc}")
+                continue
+
+            code = int(proc.returncode or 0)
+            if code == 0:
+                _log("REVIEW ok")
+                continue
+            if code == 130:
+                cancelled += 1
+                _log("REVIEW cancelled (130)")
+                continue
+            errors.append(f"exit {code}")
+            _log(f"REVIEW FAIL exit={code}")
+
+        try:
+            if self.winfo_exists():
+                self.deiconify()
+                self.lift()
+        except tk.TclError:
+            pass
+
+        if errors and not cancelled:
+            messagebox.showerror(
+                "Anonymizer",
+                "Review / anonymize failed:\n\n"
+                + "\n".join(errors[:5])
+                + f"\n\nLog: {_log_path()}",
+                parent=self if self.winfo_exists() else None,
+            )
+        elif cancelled and not errors:
+            messagebox.showinfo(
+                "Anonymizer",
+                "Review cancelled — no output written for cancelled file(s).",
+                parent=self if self.winfo_exists() else None,
+            )
+        elif not errors:
+            messagebox.showinfo(
+                "Anonymizer",
+                "Done. Outputs are next to your original files "
+                "(Markdown and/or source, per your format choice).",
+                parent=self if self.winfo_exists() else None,
+            )
 
 
 class LauncherApp(tk.Tk):

@@ -104,7 +104,7 @@ def _join_pdf_lines(lines: list[str]) -> str:
 
 
 def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open(path)
     blocks: list[TextBlock] = []

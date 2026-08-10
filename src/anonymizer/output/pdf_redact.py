@@ -27,7 +27,7 @@ def redact_pdf(
     Does **not** scrub image-only text, all form widgets, or embedded files;
     document metadata is cleared best-effort.
     """
-    import fitz
+    import pymupdf as fitz
 
     source = Path(source)
     dest = Path(dest)

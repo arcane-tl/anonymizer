@@ -83,7 +83,7 @@ def _ocr_with_pymupdf_tesseract(
     out_path: Path,
     tesseract_langs: str,
 ) -> Path:
-    import fitz
+    import pymupdf as fitz
 
     src = fitz.open(source)
     out = fitz.open()
