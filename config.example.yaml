@@ -23,9 +23,21 @@ score_threshold: 0.5
 #   - EMAIL_ADDRESS
 #   - PHONE_NUMBER
 
-# Never redact these exact strings.
-# `allowlist:` replaces built-in defaults when set.
-# Prefer `allowlist_extra:` to append without wiping defaults:
+# Allow/deny packs (templates). Prefer these over a single global list.
+# Builtin packs (field labels, legal boilerplate) are on by default.
+# List packs: anonymize templates
+# templates_enabled:
+#   - fi-field-labels
+#   - en-field-labels
+#   - en-legal-boilerplate
+#   - fi-legal-boilerplate
+#   - my-company-list
+#
+# After review, teach a user pack:
+#   anonymize doc.pdf --review --learn-to my-company-list
+#
+# Legacy: allowlist / denylist still load; on first use with lists and no
+# templates_enabled, they are migrated into templates/migrated-from-config.yaml
 # allowlist_extra:
 #   - My Internal Product Name
 allowlist:

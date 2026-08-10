@@ -1,0 +1,19 @@
+# Builtin — Finnish legal / contract role boilerplate
+id: fi-legal-boilerplate
+title: Finnish legal boilerplate
+description: >
+  Finnish contract roles and short legal surfaces often mis-tagged as ORG/PERSON.
+  Extend with your own user templates for client-specific names.
+builtin: true
+default: true
+languages: [fi]
+allow:
+  - Sopimusosapuoli
+  - Sopijapuoli
+  - Toimeksiantaja
+  - Toimeksisaaja
+  - Vastuunalainen yhtiömies
+  - Äänetön yhtiömies
+  - Hallituksen puheenjohtaja
+  - Toimitusjohtaja
+deny: []

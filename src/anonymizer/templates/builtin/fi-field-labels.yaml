@@ -1,0 +1,40 @@
+# Builtin — Finnish form / field labels (false-positive hygiene, not a company catalog)
+id: fi-field-labels
+title: Finnish field labels
+description: >
+  Common FI form and ID field labels that NER often mis-tags as people or orgs.
+  Safe defaults for Finnish documents.
+builtin: true
+default: true
+languages: [fi]
+allow:
+  - Y-tunnus
+  - Y tunnus
+  - Hetu
+  - Henkilötunnus
+  - ALV-numero
+  - ALV numero
+  - ALV
+  - Sähköposti
+  - Puhelin
+  - Osoite
+  - Postinumero
+  - Toimipaikka
+  - Maa
+  - Nimi
+  - Viite
+  - Lasku
+  - Yhteyshenkilö
+  - Rekisterinumero
+  - Rekisterinumero/tunniste
+  - Asiakas
+  - Myyjä
+  - Ostaja
+  - Toimittaja
+  - Tilaaja
+  - Osapuoli
+  - Vuokralainen
+  - Vuokranantaja
+  - Vakuutuksenottaja
+  - Vakuutuksenantaja
+deny: []

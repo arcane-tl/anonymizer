@@ -186,6 +186,9 @@ class AnonymizerConfig:
     # Extra Presidio recognizers from YAML/Python plugins
     plugin_recognizers: list[Any] = field(default_factory=list)
     denylist: list[DenylistEntry] = field(default_factory=list)
+    # Template packs (None = use builtin defaults; [] = no templates)
+    templates_enabled: list[str] | None = None
+
     lang: str = "auto"
     # Optional spaCy primary model overrides: {lang: model_name}
     spacy_models: dict[str, str] = field(default_factory=dict)
@@ -361,6 +364,21 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             from anonymizer.output.native import normalize_output_format
 
             cfg.output_format = normalize_output_format(str(data["output_format"]))
+        # Template multi-select (ids). Explicit empty list = no packs.
+        if "templates_enabled" in data and data["templates_enabled"] is not None:
+            te = data["templates_enabled"]
+            if not isinstance(te, list):
+                raise ConfigError(
+                    f"templates_enabled in {path} must be a list of template ids"
+                )
+            cfg.templates_enabled = [str(x).strip() for x in te if str(x).strip()]
+        elif "templates" in data and data["templates"] is not None:
+            te = data["templates"]
+            if not isinstance(te, list):
+                raise ConfigError(
+                    f"templates in {path} must be a list of template ids"
+                )
+            cfg.templates_enabled = [str(x).strip() for x in te if str(x).strip()]
     except ConfigError:
         raise
     except (TypeError, ValueError) as exc:

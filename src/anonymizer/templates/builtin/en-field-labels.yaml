@@ -1,0 +1,37 @@
+# Builtin — English form / field labels
+id: en-field-labels
+title: English field labels
+description: >
+  Common EN form and ID field labels that NER often mis-tags as people or orgs.
+builtin: true
+default: true
+languages: [en]
+allow:
+  - VAT
+  - IBAN
+  - BIC
+  - SWIFT
+  - Email
+  - E-mail
+  - Phone
+  - Mobile
+  - Fax
+  - Address
+  - Street
+  - City
+  - Country
+  - Name
+  - Reference
+  - Invoice
+  - Account
+  - Client
+  - Customer
+  - Supplier
+  - Seller
+  - Buyer
+  - Insurer
+  - Insured
+  - Policyholder
+  - Lessor
+  - Lessee
+deny: []

@@ -87,7 +87,7 @@ _VERB_TO_MODE: dict[str, str] = {
     "scrub": "strict",
     "full": "strict",
 }
-_META_COMMANDS = frozenset({"doctor", "examples"})
+_META_COMMANDS = frozenset({"doctor", "examples", "templates"})
 
 # Options that take a following value (for argv rewrite)
 _OPTS_WITH_VALUE = frozenset(
@@ -107,6 +107,9 @@ _OPTS_WITH_VALUE = frozenset(
         "--reject",
         "--redact-style",
         "--format",
+        "--template",
+        "--templates",
+        "--learn-to",
     }
 )
 
@@ -238,8 +241,23 @@ def _build_config(
     llm_model: str | None,
     redact_style: str | None,
     output_format: str | None = None,
+    template: str | None = None,
+    quiet: bool = False,
 ) -> AnonymizerConfig:
+    from anonymizer.anonymize.templates import (
+        apply_templates_to_config,
+        maybe_migrate_config_lists,
+        resolve_enabled_ids,
+    )
+
     cfg = load_config(config)
+    if config is not None:
+        migrated = maybe_migrate_config_lists(config)
+        if migrated is not None and not quiet:
+            console.print(
+                f"[dim]Migrated config lists → template {migrated.name}[/dim]"
+            )
+            cfg = load_config(config)
     cfg.mode = normalize_mode(mode)
     if entities:
         cfg.entities = [e.strip() for e in entities.split(",") if e.strip()]
@@ -272,6 +290,19 @@ def _build_config(
             "[dim]Note:[/dim] --llm is ignored in extract mode (no redaction)."
         )
         cfg.use_llm = False
+
+    enabled = resolve_enabled_ids(
+        cli_templates=template,
+        config_templates=cfg.templates_enabled,
+    )
+    merged = apply_templates_to_config(cfg, enabled_ids=enabled, replace_lists=True)
+    if not quiet and merged.template_ids:
+        console.print(f"[dim]Templates:[/dim] {', '.join(merged.template_ids)}")
+    if not quiet and merged.conflicts:
+        console.print(
+            f"[dim]Note:[/dim] {len(merged.conflicts)} surface(s) in both allow "
+            f"and deny — allow wins."
+        )
     return cfg
 
 
@@ -302,6 +333,8 @@ def _run_pipeline(
     offline: bool,
     quiet: bool,
     verbose: bool,
+    template: str | None = None,
+    learn_to: str | None = None,
 ) -> None:
     _setup_logging(verbose)
 
@@ -345,6 +378,8 @@ def _run_pipeline(
             llm_model=llm_model,
             redact_style=redact_style,
             output_format=output_format,
+            template=template,
+            quiet=quiet,
         )
     except (ConfigError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -552,6 +587,17 @@ def _run_pipeline(
                 if added_n:
                     bits.append(f"{added_n} added")
                 console.print(f"[dim]Review: {', '.join(bits)}.[/dim]")
+            if learn_to and (kept_n or added_n):
+                from anonymizer.anonymize.templates import teach_template
+
+                try:
+                    taught = teach_template(learn_to, session)
+                    if not quiet:
+                        console.print(
+                            f"[dim]Taught template → {taught}[/dim]"
+                        )
+                except (OSError, TypeError, ValueError) as exc:
+                    console.print(f"[yellow]Could not teach template:[/yellow] {exc}")
         elif do_review and not result.mapping:
             console.print("[dim]No redactions to review.[/dim]")
         elif pre_keep and result.mapping:
@@ -905,8 +951,86 @@ Install (once)
   curl -fsSL https://raw.githubusercontent.com/arcane-tl/anonymizer/main/scripts/install.sh | bash -s -- --yes
   # then open a new terminal, or:
   export PATH="$HOME/.local/bin:$PATH"
+
+Templates (allow/deny packs)
+----------------------------
+  anonymize templates
+      List builtin + user packs
+
+  anonymize contract.pdf --template fi-field-labels,my-company
+      Apply selected packs this run
+
+  anonymize contract.pdf --review --learn-to my-company
+      After review, teach keep-clear / adds into user template
 """.strip()
         + "\n"
+    )
+
+
+def cmd_templates(rest: list[str] | None = None) -> None:
+    """List or show allow/deny templates."""
+    from anonymizer.anonymize.templates import (
+        default_enabled_ids,
+        discover_templates,
+        user_templates_dir,
+    )
+
+    rest = rest or []
+    packs = discover_templates()
+    defaults = set(default_enabled_ids(packs))
+    sub = rest[0].casefold() if rest else "list"
+    if sub in {"list", "ls", ""}:
+        console.print("[bold]Templates[/bold]")
+        console.print(f"[dim]User dir:[/dim] {user_templates_dir()}")
+        console.print()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Id")
+        table.add_column("Title")
+        table.add_column("Kind")
+        table.add_column("Default")
+        table.add_column("Allow")
+        table.add_column("Deny")
+        for t in packs:
+            table.add_row(
+                t.id,
+                t.display_title(),
+                "builtin" if t.builtin else "user",
+                "yes" if t.id in defaults else "",
+                str(len(t.allow)),
+                str(len(t.deny)),
+            )
+        console.print(table)
+        console.print()
+        console.print(
+            "[dim]Apply:[/dim] anonymize FILE --template id1,id2\n"
+            "[dim]Teach:[/dim] anonymize FILE --review --learn-to my-pack"
+        )
+        return
+    if sub in {"show", "cat"} and len(rest) >= 2:
+        tid = rest[1]
+        for t in packs:
+            if t.id == tid:
+                console.print(f"[bold]{t.display_title()}[/bold] ({t.id})")
+                if t.description:
+                    console.print(t.description.strip())
+                console.print(f"[dim]path:[/dim] {t.path}")
+                console.print(f"[dim]allow ({len(t.allow)}):[/dim]")
+                for a in t.allow[:40]:
+                    console.print(f"  · {a}")
+                if len(t.allow) > 40:
+                    console.print(f"  … +{len(t.allow) - 40} more")
+                console.print(f"[dim]deny ({len(t.deny)}):[/dim]")
+                for d in t.deny[:40]:
+                    console.print(f"  · {d.text} ({d.entity_type})")
+                if len(t.deny) > 40:
+                    console.print(f"  … +{len(t.deny) - 40} more")
+                return
+        console.print(f"[red]Unknown template:[/red] {tid}")
+        raise SystemExit(2)
+    console.print(
+        "Usage: anonymize templates [list|show ID]\n"
+        "  anonymize FILE --template id1,id2\n"
+        "  anonymize FILE --review --learn-to my-pack"
     )
 
 
@@ -1087,6 +1211,30 @@ def main(
             rich_help_panel="Common",
         ),
     ] = None,
+    template: Annotated[
+        Optional[str],
+        typer.Option(
+            "--template",
+            "--templates",
+            help=(
+                "Comma-separated template ids to apply (allow/deny packs). "
+                "Default: builtin packs marked default. Empty string applies none. "
+                "List packs: anonymize templates"
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = None,
+    learn_to: Annotated[
+        Optional[str],
+        typer.Option(
+            "--learn-to",
+            help=(
+                "After --review, merge keep-clear and user-added surfaces into "
+                "this user template (forks if the id is a builtin)."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = None,
     entities: Annotated[
         Optional[str],
         typer.Option(
@@ -1221,6 +1369,8 @@ def main(
         offline=offline,
         quiet=quiet,
         verbose=verbose,
+        template=template,
+        learn_to=learn_to,
     )
 
 
@@ -1266,6 +1416,8 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
     if low in _META_COMMANDS:
         if low == "doctor":
             cmd_doctor()
+        elif low == "templates":
+            cmd_templates(args[idx + 1 :])
         else:
             cmd_examples()
         return None

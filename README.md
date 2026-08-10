@@ -243,7 +243,7 @@ Dates are off by default (`--include-dates` to enable).
 
 ### How detection works (short)
 
-Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **your** allow/deny lists. The app does **not** ship a list of real-world companies or people. Use `allowlist_extra` / `lexicon_extra` for keep-clear and FP lexicon (see `config.example.yaml`). Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **templates** (named allow/deny packs). The app does **not** ship a list of real-world companies or people — builtin templates are field labels and legal *boilerplate* only. Create user packs for client-specific names; teach them after `--review` with `--learn-to`. See `config.example.yaml` and `anonymize templates`. Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
 
 ---
 
@@ -255,7 +255,10 @@ anonymize ./inbox/ --out-dir ./out/       # batch folder
 anonymize scan.pdf --force-ocr            # scanned PDF
 anonymize doc.pdf --lang fi               # force Finnish NLP
 anonymize doc.pdf --map report.map.json   # sensitive reverse map
-anonymize doc.pdf --config config.yaml    # allowlist / denylist
+anonymize doc.pdf --config config.yaml    # mode, templates, …
+anonymize templates                       # list allow/deny packs
+anonymize doc.pdf --template fi-field-labels,my-company
+anonymize doc.pdf --review --learn-to my-company
 anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 ```
 
@@ -269,7 +272,9 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--llm` | Opt-in LLM layer only (YAML `use_llm` alone is ignored). `--offline` blocks remote xAI and non-local Ollama URLs. |
 | `--keep-headers` | Keep PDF running headers/footers (default: strip) |
 | `-o -` | Markdown on stdout (progress stays on stderr) |
-| `--config` | YAML: mode, allowlist, denylist, `redact_style`, `format`, … |
+| `--config` | YAML: mode, `templates_enabled`, allowlist/denylist (legacy), `redact_style`, `format`, … |
+| `--template` | Comma-separated template ids (allow/deny packs). Default: builtin packs marked default. |
+| `--learn-to` | After `--review`, merge keep-clear / user-added surfaces into a user template. |
 
 **GUIs (Mac + Windows):** mode / style / format as pop-ups, **Review findings before saving** (default on), open when finished. **Lists…** saves allow/deny to `~/.config/anonymizer/config.yaml` (same on both platforms).
 

@@ -56,6 +56,7 @@ packages = ["src/anonymizer"]
 # path under packages/ or hatchling errors on duplicate wheel entries.
 [tool.hatch.build.targets.wheel.force-include]
 "src/anonymizer/gui/assets/Anonymizer-dialog.png" = "anonymizer/gui/assets/Anonymizer-dialog.png"
+"src/anonymizer/templates/builtin" = "anonymizer/templates/builtin"
 
 [tool.hatch.build.targets.sdist]
 include = [

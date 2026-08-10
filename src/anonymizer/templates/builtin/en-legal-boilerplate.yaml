@@ -1,0 +1,16 @@
+# Builtin — English legal boilerplate phrases (FP filter surfaces, not party catalogs)
+id: en-legal-boilerplate
+title: English legal boilerplate
+description: >
+  Short legal collocations that models sometimes treat as organizations.
+  Not a list of real companies or people.
+builtin: true
+default: true
+languages: [en]
+allow:
+  - Force Majeure
+  - Letter of Intent
+  - Green Card
+  - Governing Law
+  - Memorandum of Understanding
+deny: []
