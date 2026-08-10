@@ -66,13 +66,13 @@ sharp custom square and breaks size/shape next to other apps.
    - **Mode** pop-up — Strict / Standard / Extract  
    - **Output style** pop-up — stable placeholders or delete redacted data  
    - **Output format** pop-up — Markdown / Source filetype / Both  
+   - **Templates…** — shared Tk pack editor (same as Windows); enable packs for this run  
+   - **Teach into** — optional user template id after review  
    - ☑ **Review findings before saving** (default on; document review window)  
    - ☑ **Open result when finished**  
-   - **Lists…** — allowlist / denylist editor (not shown on the main panel)  
 
-**Allowlist / denylist** open in a second dialog. **Done** saves them to  
-`~/.config/anonymizer/config.yaml` (merged; other keys kept). Same file works with  
-`anonymize --config ~/.config/anonymizer/config.yaml`.
+**Templates…** runs `anonymize templates-ui` via `run-anonymize.sh` (needs CLI + tkinter).  
+Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
 3. Click **Start** (or Cancel).
 4. When finished (no review path):
    - **Open** checked → file opens; no extra Finder/OK popup (notification only)

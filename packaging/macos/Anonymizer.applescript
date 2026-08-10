@@ -1,7 +1,7 @@
 -- Anonymizer droplet: options window after drop (ASObjC + AppKit).
--- Mode + output style on main panel; allow/deny lists in a separate Lists… dialog.
--- Lists persist to ~/.config/anonymizer/config.yaml via lists-io.sh on Done.
--- Builds with packaging/macos/install-app.sh (embeds run-anonymize.sh + lists-io.sh).
+-- Mode + output style/format on main panel; Templates… opens the shared Tk
+-- Templates dialog (anonymize templates-ui via run-anonymize.sh).
+-- Builds with packaging/macos/install-app.sh (embeds run-anonymize.sh).
 
 use AppleScript version "2.4"
 use framework "Foundation"
@@ -129,7 +129,7 @@ on processFiles(theFiles)
 	set nFiles to count of fileNames
 	if nFiles is 0 then return
 
-	-- One window: mode, output style, allow/deny lists, review/open
+	-- One window: mode, style, format, templates, review/open
 	set choices to showOptionsPanel(fileNames)
 	if choices is missing value then return
 
@@ -138,8 +138,8 @@ on processFiles(theFiles)
 	set wantOpen to wantOpen of choices
 	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
-	set allowText to allowText of choices
-	set denyText to denyText of choices
+	set templateCSV to templateCSV of choices
+	set learnTo to learnTo of choices
 	if modeArg is "extract" then
 		set wantReview to false
 		-- Extract has no native redaction
@@ -151,17 +151,13 @@ on processFiles(theFiles)
 	set openEnv to "0"
 	if wantOpen then set openEnv to "1"
 
-	-- Temp list files for helper (--allow-from / --deny-from)
-	set allowFile to do shell script "mktemp ${TMPDIR:-/tmp}/anonymizer-allow.XXXXXX"
-	set denyFile to do shell script "mktemp ${TMPDIR:-/tmp}/anonymizer-deny.XXXXXX"
-	writeTextToFile(allowText, allowFile)
-	writeTextToFile(denyText, denyFile)
-
-	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat & " --allow-from " & quoted form of allowFile & " --deny-from " & quoted form of denyFile
+	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
+	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
+	if learnTo is not "" then set extraOpts to extraOpts & " --learn-to " & quoted form of learnTo
 
 	if wantReview then
-		display notification "Complete the checklist in Terminal (space / enter)." with title "Anonymizer" subtitle "Review"
-		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs & "; rm -f " & quoted form of allowFile & " " & quoted form of denyFile
+		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
+		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
 		set termCmd to shellLine & "; echo; echo '--- Finished. You can close this window. ---'; exec bash"
 		tell application "Terminal"
 			activate
@@ -172,7 +168,7 @@ on processFiles(theFiles)
 
 	display notification "Working on " & (nFiles as text) & " file" & pluralS(nFiles) & "…" with title "Anonymizer"
 
-	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & extraOpts & " " & modeArg & " " & fileArgs & "; rm -f " & quoted form of allowFile & " " & quoted form of denyFile
+	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & extraOpts & " " & modeArg & " " & fileArgs
 	set exitCode to 0
 	set shellOut to ""
 	try
@@ -180,9 +176,6 @@ on processFiles(theFiles)
 	on error errMsg number errNum
 		set exitCode to errNum
 		set shellOut to errMsg
-		try
-			do shell script "rm -f " & quoted form of allowFile & " " & quoted form of denyFile
-		end try
 	end try
 
 	if exitCode is not 0 then
@@ -300,11 +293,61 @@ on countNonEmptyLines(theText)
 	return n
 end countNonEmptyLines
 
-on listsStatusLine(allowText, denyText)
-	set nAllow to countNonEmptyLines(allowText)
-	set nDeny to countNonEmptyLines(denyText)
-	return "Allowlist " & (nAllow as text) & "  ·  Denylist " & (nDeny as text) & "  —  edit with Lists…"
-end listsStatusLine
+on templatesStatusLine(templateCSV)
+	if templateCSV is "" then return "No templates selected  —  edit with Templates…"
+	set AppleScript's text item delimiters to ","
+	set parts to text items of templateCSV
+	set AppleScript's text item delimiters to ""
+	set n to count of parts
+	set shown to ""
+	set i to 0
+	repeat with p in parts
+		set i to i + 1
+		if i > 3 then exit repeat
+		if shown is not "" then set shown to shown & ", "
+		set shown to shown & (p as text)
+	end repeat
+	if n > 3 then set shown to shown & " +" & ((n - 3) as text)
+	return (n as text) & " template(s): " & shown & "  —  Templates…"
+end templatesStatusLine
+
+on loadEnabledTemplatesCSV()
+	-- Prefer config via CLI; fall back to builtin defaults
+	try
+		set out to do shell script "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; anonymize templates print-enabled 2>/dev/null"
+		return out
+	on error
+		return "en-field-labels,en-legal-boilerplate,fi-field-labels,fi-legal-boilerplate"
+	end try
+end loadEnabledTemplatesCSV
+
+on openTemplatesUI(enabledCSV)
+	set helper to resourcePath("run-anonymize.sh")
+	set cmd to "bash " & quoted form of helper & " --templates-ui"
+	if enabledCSV is not "" then set cmd to cmd & " --enabled " & quoted form of enabledCSV
+	try
+		set shellOut to do shell script cmd
+	on error errMsg number errNum
+		if errNum is 2 then return missing value -- Cancel
+		display dialog "Templates UI failed:" & return & return & errMsg & return & return & "Install/update the anonymize CLI (brew install anonymizer) with python-tk support." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
+		return missing value
+	end try
+	-- Find ENABLED: line
+	set AppleScript's text item delimiters to return
+	set linesList to text items of shellOut
+	set AppleScript's text item delimiters to ""
+	repeat with ln in linesList
+		set s to ln as text
+		if s starts with "ENABLED:" then
+			set csv to text 9 thru -1 of s
+			return csv
+		end if
+		if s is "CANCEL" then return missing value
+	end repeat
+	-- Entire stdout might be just ENABLED:…
+	if shellOut starts with "ENABLED:" then return text 9 thru -1 of shellOut
+	return missing value
+end openTemplatesUI
 
 on loadListsFromConfig()
 	-- Returns {allowText:..., denyText:...}
@@ -545,9 +588,8 @@ on showOptionsPanel(fileNames)
 	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
 	set filesText to fileListSummary(fileNames)
 
-	set listState to loadListsFromConfig()
-	set allowText to allowText of listState
-	set denyText to denyText of listState
+	set templateCSV to loadEnabledTemplatesCSV()
+	set learnTo to ""
 
 	set lastModeRow to 0
 	set lastStyleRow to 0
@@ -571,14 +613,17 @@ on showOptionsPanel(fileNames)
 	set modeLabelH to 18
 	set styleLabelH to 18
 	set formatLabelH to 18
+	set tmplLabelH to 18
+	set tmplStatusH to 32
+	set learnLabelH to 18
 	set popupH to 28 -- NSPopUpButton row height
 	set checkH to 22
 	set btnH to 32
-	set btnW to 96
+	set btnW to 110
 	set btnGap to 10
 
-	-- Compact: popups for mode/style/format + 2 checkboxes (no lists status block)
-	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+	-- Popups + templates status + learn field + 2 checkboxes
+	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + learnLabelH + gapXs + popupH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
 
 	repeat
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
@@ -643,6 +688,21 @@ on showOptionsPanel(fileNames)
 		set formatPopup to makeOptionsPopup(formatTitles, lastFormatRow, margin, y, innerW, popupH)
 		content's addSubview:formatPopup
 
+		set y to y - gapLg - tmplLabelH
+		content's addSubview:(makeLabel("Templates", margin, y, innerW, tmplLabelH))
+		set y to y - gapXs - tmplStatusH
+		set tmplStatusField to makeFinePrint(templatesStatusLine(templateCSV), margin, y, innerW, tmplStatusH)
+		content's addSubview:tmplStatusField
+
+		set y to y - gapMd - learnLabelH
+		content's addSubview:(makeLabel("Teach into after review (optional)", margin, y, innerW, learnLabelH))
+		set y to y - gapXs - popupH
+		set learnField to current application's NSTextField's alloc()'s initWithFrame:{{margin, y}, {innerW, popupH}}
+		learnField's setStringValue:learnTo
+		learnField's setPlaceholderString:"user template id (e.g. my-company-list)"
+		learnField's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:learnField
+
 		set y to y - gapMd - checkH
 		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
@@ -667,7 +727,7 @@ on showOptionsPanel(fileNames)
 		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:openBox
 
-		-- Action bar (HIG): Cancel left · Lists… + Start right
+		-- Action bar (HIG): Cancel left · Templates… + Start right
 		set y to margin
 		set cancelBtn to makeDialogButton("Cancel", margin, y, btnW, btnH, "clickOptionsCancel:")
 		try
@@ -675,7 +735,7 @@ on showOptionsPanel(fileNames)
 		end try
 		set startX to margin + innerW - btnW
 		set listsX to startX - btnGap - btnW
-		set listsBtn to makeDialogButton("Lists…", listsX, y, btnW, btnH, "clickOptionsLists:")
+		set listsBtn to makeDialogButton("Templates…", listsX, y, btnW, btnH, "clickOptionsLists:")
 		set startBtn to makeDialogButton("Start", startX, y, btnW, btnH, "clickOptionsStart:")
 		startBtn's setKeyEquivalent:return
 		try
@@ -707,6 +767,9 @@ on showOptionsPanel(fileNames)
 		set lastOpen to false
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
+		try
+			set learnTo to (learnField's stringValue() as text)
+		end try
 
 		thePanel's orderOut_(missing value)
 
@@ -720,12 +783,12 @@ on showOptionsPanel(fileNames)
 				set wantReview to false
 				set outputFormat to "md"
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, allowText:allowText, denyText:denyText}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, learnTo:learnTo}
 		else if response is 2 then
-			set edited to showListsPanel(allowText, denyText)
-			if edited is not missing value then
-				set allowText to allowText of edited
-				set denyText to denyText of edited
+			-- Templates… → shared Tk dialog (same as Windows)
+			set newCSV to openTemplatesUI(templateCSV)
+			if newCSV is not missing value then
+				set templateCSV to newCSV
 			end if
 		else
 			return missing value

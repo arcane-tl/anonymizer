@@ -87,7 +87,7 @@ _VERB_TO_MODE: dict[str, str] = {
     "scrub": "strict",
     "full": "strict",
 }
-_META_COMMANDS = frozenset({"doctor", "examples", "templates"})
+_META_COMMANDS = frozenset({"doctor", "examples", "templates", "templates-ui"})
 
 # Options that take a following value (for argv rewrite)
 _OPTS_WITH_VALUE = frozenset(
@@ -967,11 +967,32 @@ Templates (allow/deny packs)
     )
 
 
+def cmd_templates_ui(rest: list[str] | None = None) -> None:
+    """Open the shared Tk Templates dialog (Mac droplet / desktop)."""
+    rest = rest or []
+    enabled = ""
+    i = 0
+    while i < len(rest):
+        if rest[i] in {"--enabled", "-e"} and i + 1 < len(rest):
+            enabled = rest[i + 1]
+            i += 2
+            continue
+        if rest[i].startswith("--enabled="):
+            enabled = rest[i].split("=", 1)[1]
+            i += 1
+            continue
+        i += 1
+    from anonymizer.gui.app import run_templates_ui
+
+    raise SystemExit(run_templates_ui(enabled))
+
+
 def cmd_templates(rest: list[str] | None = None) -> None:
     """List or show allow/deny templates."""
     from anonymizer.anonymize.templates import (
         default_enabled_ids,
         discover_templates,
+        resolve_enabled_ids,
         user_templates_dir,
     )
 
@@ -979,6 +1000,25 @@ def cmd_templates(rest: list[str] | None = None) -> None:
     packs = discover_templates()
     defaults = set(default_enabled_ids(packs))
     sub = rest[0].casefold() if rest else "list"
+    if sub in {"print-enabled", "enabled"}:
+        # For AppleScript / shell without opening Tk
+        ids = resolve_enabled_ids(config_templates=None, all_templates=packs)
+        # Prefer config if present
+        try:
+            from anonymizer.lists_io import default_config_path
+            from anonymizer.anonymize.config import load_config
+
+            cfg_path = default_config_path()
+            if cfg_path.is_file():
+                cfg = load_config(cfg_path)
+                ids = resolve_enabled_ids(
+                    config_templates=cfg.templates_enabled,
+                    all_templates=packs,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        print(",".join(ids))
+        return
     if sub in {"list", "ls", ""}:
         console.print("[bold]Templates[/bold]")
         console.print(f"[dim]User dir:[/dim] {user_templates_dir()}")
@@ -1028,7 +1068,8 @@ def cmd_templates(rest: list[str] | None = None) -> None:
         console.print(f"[red]Unknown template:[/red] {tid}")
         raise SystemExit(2)
     console.print(
-        "Usage: anonymize templates [list|show ID]\n"
+        "Usage: anonymize templates [list|show ID|print-enabled]\n"
+        "  anonymize templates-ui [--enabled id1,id2]\n"
         "  anonymize FILE --template id1,id2\n"
         "  anonymize FILE --review --learn-to my-pack"
     )
@@ -1418,6 +1459,8 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
             cmd_doctor()
         elif low == "templates":
             cmd_templates(args[idx + 1 :])
+        elif low == "templates-ui":
+            cmd_templates_ui(args[idx + 1 :])
         else:
             cmd_examples()
         return None

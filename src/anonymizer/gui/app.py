@@ -1246,6 +1246,45 @@ class OptionsApp(tk.Tk):
         )
         self.templates_lbl.pack(anchor=tk.W, pady=(0, 4))
 
+        tk.Label(
+            root,
+            text="Teach into after review (optional)",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(12, 4))
+        self.learn_to_var = tk.StringVar(value="")
+        learn_choices = [""] + [
+            t.id for t in packs if not t.builtin
+        ]
+        # Always allow typing a new id via combobox values + free entry
+        if ttk is not None:
+            learn_box = ttk.Combobox(
+                root,
+                textvariable=self.learn_to_var,
+                values=learn_choices,
+                font=_FONT_SMALL,
+            )
+            learn_box.pack(fill=tk.X, pady=(0, 4))
+        else:
+            tk.Entry(
+                root,
+                textvariable=self.learn_to_var,
+                bg=_BG_WELL,
+                fg=_TEXT,
+                font=_FONT_SMALL,
+                insertbackground=_TEXT,
+            ).pack(fill=tk.X, pady=(0, 4))
+        tk.Label(
+            root,
+            text="User template id to update after review (leave empty to skip).",
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).pack(anchor=tk.W)
+
         # Extra vertical separation: format field vs toggle group
         _dark_check(
             root,
@@ -1393,6 +1432,9 @@ class OptionsApp(tk.Tk):
             "--template",
             ",".join(self.enabled_template_ids),
         ]
+        learn_to = (self.learn_to_var.get() or "").strip()
+        if learn_to and want_review:
+            common_flags.extend(["--learn-to", learn_to])
 
         if want_review:
             cmds = [
@@ -1720,6 +1762,45 @@ def _guess_outputs(
             if n.is_file():
                 paths.append(str(n))
     return paths
+
+
+def run_templates_ui(enabled_csv: str = "") -> int:
+    """Open TemplatesDialog; print ENABLED:id1,id2 or CANCEL. Exit 0/2/1.
+
+    Used by Mac droplet (and optional desktop tooling) so Mac and Windows
+    share one Templates UI implementation.
+    """
+    if tk is None:
+        print("error: tkinter is not available", file=sys.stderr)
+        return 1
+    enabled = [x.strip() for x in (enabled_csv or "").split(",") if x.strip()]
+    if not enabled:
+        enabled = default_enabled_ids()
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.lift()
+        root.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    try:
+        dlg = TemplatesDialog(root, enabled)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: templates UI failed: {exc}", file=sys.stderr)
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+        return 1
+    try:
+        root.destroy()
+    except tk.TclError:
+        pass
+    if dlg.result is None:
+        print("CANCEL")
+        return 2
+    print("ENABLED:" + ",".join(dlg.result))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

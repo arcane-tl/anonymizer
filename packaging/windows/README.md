@@ -107,9 +107,10 @@ Options (same as Mac):
 - Mode pop-up: Strict / Standard / Extract  
 - Output style pop-up: stable placeholders or delete redacted data  
 - Output format pop-up: Markdown / Source filetype / Both  
+- **Templates…** — allow/deny packs (enable for run, edit user packs)  
+- **Teach into** — optional user template after review (`--learn-to`)  
 - Review findings before saving (default on)  
 - Open result when finished  
-- Lists… (allow / deny → config YAML; not on main panel)  
 
 ## Helper (advanced)
 

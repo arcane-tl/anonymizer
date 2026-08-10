@@ -9,9 +9,13 @@
 #   --review              Document review window (via --review-window on the CLI)
 #   --redact-style STYLE  placeholder (default) | remove
 #   --format FMT          md (default) | source | both (source = redacted PDF/DOCX)
-#   --config PATH         YAML config (allowlist, denylist, …)
-#   --allow-from PATH     One allowlist string per line → temp config merge
-#   --deny-from PATH      One denylist string per line → temp config merge
+#   --config PATH         YAML config
+#   --template IDS        Comma-separated template ids → CLI --template
+#   --learn-to ID         After review, teach pack (CLI --learn-to)
+#   --templates-ui        Open Templates dialog; print ENABLED:id1,id2 (or CANCEL)
+#   --enabled IDS         Initial enabled ids for --templates-ui
+#   --allow-from PATH     Legacy allowlist lines → temp config merge
+#   --deny-from PATH      Legacy denylist lines → temp config merge
 #
 # On success, prints one line per written output file to stdout:
 #   OUTPUT:/absolute/path/to/file.md
@@ -30,17 +34,23 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: run-anonymize.sh [options] [mode] file [file ...]
+       run-anonymize.sh --templates-ui [--enabled id1,id2]
 
   --review              Document review window before saving
   --redact-style STYLE  placeholder | remove (default: placeholder)
   --format FMT          md | source | both (default: md)
   --config PATH         YAML config file
-  --allow-from PATH     Allowlist file (one string per line)
-  --deny-from PATH      Denylist file (one string per line)
+  --template IDS        Template packs for this run (comma-separated)
+  --learn-to ID         Teach review decisions into user template
+  --templates-ui        Open Templates… dialog (shared Tk UI)
+  --enabled IDS         Starting selection for --templates-ui
+  --allow-from PATH     Legacy allowlist file (one string per line)
+  --deny-from PATH      Legacy denylist file (one string per line)
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
 Stdout (success): one OUTPUT:/abs/path line per written file (MD and/or native).
+--templates-ui stdout: ENABLED:id1,id2  or  CANCEL
 
 Environment:
   ANONYMIZER_BIN   Absolute path to the anonymize executable
@@ -200,6 +210,10 @@ OUTPUT_FORMAT=""
 CONFIG_PATH=""
 ALLOW_FROM=""
 DENY_FROM=""
+TEMPLATE_IDS=""
+LEARN_TO=""
+TEMPLATES_UI=0
+UI_ENABLED=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -221,6 +235,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --config)
       CONFIG_PATH="${2:-}"
+      shift 2
+      ;;
+    --template|--templates)
+      TEMPLATE_IDS="${2:-}"
+      shift 2
+      ;;
+    --learn-to)
+      LEARN_TO="${2:-}"
+      shift 2
+      ;;
+    --templates-ui)
+      TEMPLATES_UI=1
+      shift
+      ;;
+    --enabled)
+      UI_ENABLED="${2:-}"
       shift 2
       ;;
     --allow-from)
@@ -245,6 +275,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Shared Templates dialog (Mac droplet Templates… button)
+if [[ "$TEMPLATES_UI" -eq 1 ]]; then
+  BIN="$(find_anonymize)" || exit 1
+  UI_ARGS=(templates-ui)
+  if [[ -n "$UI_ENABLED" ]]; then
+    UI_ARGS+=(--enabled "$UI_ENABLED")
+  fi
+  # Do not use set -e failure mask: preserve exit 2 = Cancel
+  set +e
+  "$BIN" "${UI_ARGS[@]}"
+  ui_rc=$?
+  set -e
+  exit "$ui_rc"
+fi
 
 if [[ $# -lt 1 ]]; then
   usage >&2
@@ -291,6 +336,12 @@ if [[ -n "$CONFIG_PATH" || -n "$ALLOW_FROM" || -n "$DENY_FROM" || -n "$REDACT_ST
 fi
 if [[ -n "$OUTPUT_FORMAT" ]]; then
   EXTRA_ARGS+=(--format "$OUTPUT_FORMAT")
+fi
+if [[ -n "$TEMPLATE_IDS" ]]; then
+  EXTRA_ARGS+=(--template "$TEMPLATE_IDS")
+fi
+if [[ -n "$LEARN_TO" ]]; then
+  EXTRA_ARGS+=(--learn-to "$LEARN_TO")
 fi
 cleanup_config() {
   if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
