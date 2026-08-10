@@ -192,7 +192,7 @@ anonymize --help
 | **Mac** | Open **Anonymizer** from Applications / `~/Applications`, drop files (or pick files). Needs CLI on PATH for the droplet. |
 | **Windows** | Start Menu **Anonymizer** (after Setup.exe). Choose documents → same options as Mac. |
 
-GUI options (Mac + Windows): mode / style / format pop-ups, **Templates…** (allow/deny packs), optional **Teach into** after review, **Review** (default on), open when finished.
+GUI options (Mac + Windows): mode / style / format pop-ups, **Templates…** (allow/deny packs), **Review** (default on; teach packs from the review window), open when finished.
 
 ---
 
@@ -276,7 +276,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--template` | Comma-separated template ids (allow/deny packs). Default: builtin packs marked default. |
 | `--learn-to` | After `--review`, merge keep-clear / user-added surfaces into a user template. |
 
-**GUIs (Mac + Windows):** mode / style / format pop-ups, **Templates…** (shared Tk pack editor; Mac droplet launches `anonymize templates-ui`), optional teach-into, review (default on). Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
+**GUIs (Mac + Windows):** mode / style / format pop-ups, **Templates…** (shared Tk pack editor; Mac uses `anonymize templates-ui`), review (default on). Teach keep-clear/new adds into a user pack from the **review window**. Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
 
 ---
 

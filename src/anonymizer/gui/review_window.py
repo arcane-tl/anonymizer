@@ -1245,10 +1245,20 @@ def run_review_window(
     file_label: str | None = None,
     on_allowlist: Callable[[str], None] | None = None,
     on_denylist: Callable[[str, str], None] | None = None,
+    learn_to: str | None = None,
 ) -> ReviewSession | None:
-    """Open the review UI. Returns session on Save, ``None`` on Cancel."""
+    """Open the review UI. Returns session on Save, ``None`` on Cancel.
+
+    *learn_to*: optional user template id pre-selected for “Teach into…” on Save
+    (also read from env ``ANONYMIZER_LEARN_TO`` if not passed).
+    """
     if tk is None:
         raise RuntimeError("tkinter is not available")
+
+    import os as _os
+
+    if not learn_to:
+        learn_to = (_os.environ.get("ANONYMIZER_LEARN_TO") or "").strip() or None
 
     _sb_log_reset()
     result: dict[str, ReviewSession | None] = {"session": None}
@@ -1292,8 +1302,12 @@ def run_review_window(
     foot_inner = tk.Frame(foot_bar, bg=_BG_ELEVATED, padx=14, pady=10)
     foot_inner.pack(fill=tk.X)
 
+    # Row 1: status + Cancel / Save
+    foot_row = tk.Frame(foot_inner, bg=_BG_ELEVATED)
+    foot_row.pack(fill=tk.X)
+
     tk.Label(
-        foot_inner,
+        foot_row,
         textvariable=status_var,
         bg=_BG_ELEVATED,
         fg=_TEXT,
@@ -1301,7 +1315,7 @@ def run_review_window(
         anchor=tk.W,
     ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    act = tk.Frame(foot_inner, bg=_BG_ELEVATED)
+    act = tk.Frame(foot_row, bg=_BG_ELEVATED)
     act.pack(side=tk.RIGHT)
 
     def _chip_button(
@@ -1372,6 +1386,63 @@ def run_review_window(
         canvas.bind("<Leave>", lambda _e: _paint(hover=False))
         wrap.bind("<Button-1>", _run)
         return wrap
+
+    # Row 2: Teach into user template (Mac + Windows + CLI --review-window)
+    teach_bar = tk.Frame(foot_inner, bg=_BG_ELEVATED)
+    teach_bar.pack(fill=tk.X, pady=(8, 0))
+    _learn_preselect = (learn_to or "").strip()
+    teach_var = tk.BooleanVar(value=bool(_learn_preselect))
+    teach_id_var = tk.StringVar(value=_learn_preselect)
+    tk.Checkbutton(
+        teach_bar,
+        text="Teach keep-clear & new adds into",
+        variable=teach_var,
+        bg=_BG_ELEVATED,
+        fg=_TEXT,
+        activebackground=_BG_ELEVATED,
+        activeforeground=_TEXT,
+        selectcolor=_BG_PANEL,
+        font=_FONT_SMALL,
+        highlightthickness=0,
+    ).pack(side=tk.LEFT, padx=(0, 8))
+    _user_pack_ids: list[str] = []
+    try:
+        from anonymizer.anonymize.templates import discover_templates
+
+        _user_pack_ids = [t.id for t in discover_templates() if not t.builtin]
+    except Exception:  # noqa: BLE001
+        _user_pack_ids = []
+    teach_combo_vals = list(_user_pack_ids)
+    if _learn_preselect and _learn_preselect not in teach_combo_vals:
+        teach_combo_vals = [_learn_preselect, *teach_combo_vals]
+    try:
+        from tkinter import ttk as _ttk
+
+        teach_combo = _ttk.Combobox(
+            teach_bar,
+            textvariable=teach_id_var,
+            values=teach_combo_vals,
+            width=28,
+            font=_FONT_SMALL,
+        )
+        teach_combo.pack(side=tk.LEFT, padx=(0, 8))
+    except Exception:  # noqa: BLE001
+        tk.Entry(
+            teach_bar,
+            textvariable=teach_id_var,
+            width=28,
+            font=_FONT_SMALL,
+            bg=_BG_PANEL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+    tk.Label(
+        teach_bar,
+        text="(user pack id; leave unchecked to skip)",
+        bg=_BG_ELEVATED,
+        fg=_TEXT_MUTED,
+        font=_FONT_TINY,
+    ).pack(side=tk.LEFT)
 
     _chip_button(act, "Cancel", lambda: _on_close()).pack(side=tk.LEFT, padx=(0, 8))
     _chip_button(act, "Save output", lambda: _on_save(), primary=True).pack(
@@ -2425,6 +2496,41 @@ def run_review_window(
                 + "\n\nSave output anyway?"
             )
             if not messagebox.askyesno("Confirm clear text", msg, parent=root):
+                return
+        # Optional: teach keep-clear + user-added into a user template pack
+        if teach_var.get():
+            tid = (teach_id_var.get() or "").strip()
+            if not tid:
+                messagebox.showwarning(
+                    "Teach template",
+                    "Check “Teach…” and enter a user template id, or uncheck Teach.",
+                    parent=root,
+                )
+                return
+            try:
+                from anonymizer.anonymize.templates import (
+                    session_to_teach_lists,
+                    teach_template,
+                )
+
+                allows, denies = session_to_teach_lists(session)
+                if not allows and not denies:
+                    messagebox.showinfo(
+                        "Teach template",
+                        "Nothing to teach (no keep-clear or newly added surfaces).",
+                        parent=root,
+                    )
+                else:
+                    path = teach_template(tid, session, create_title=tid)
+                    # Stash for CLI status line
+                    setattr(session, "taught_path", str(path))
+                    setattr(session, "taught_counts", (len(allows), len(denies)))
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror(
+                    "Teach template",
+                    f"Could not update template:\n{exc}",
+                    parent=root,
+                )
                 return
         result["session"] = session
         root.destroy()

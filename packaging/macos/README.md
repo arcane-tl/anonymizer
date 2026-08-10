@@ -67,12 +67,12 @@ sharp custom square and breaks size/shape next to other apps.
    - **Output style** pop-up — stable placeholders or delete redacted data  
    - **Output format** pop-up — Markdown / Source filetype / Both  
    - **Templates…** — shared Tk pack editor (same as Windows); enable packs for this run  
-   - **Teach into** — optional user template id after review  
-   - ☑ **Review findings before saving** (default on; document review window)  
+   - ☑ **Review findings before saving** (default on) — teach packs from the **review window**  
    - ☑ **Open result when finished**  
 
 **Templates…** runs `anonymize templates-ui` via `run-anonymize.sh` (needs CLI + tkinter).  
-Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
+Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.  
+**Teach** keep-clear / new adds into a user pack from the review window footer (not the options panel).
 3. Click **Start** (or Cancel).
 4. When finished (no review path):
    - **Open** checked → file opens; no extra Finder/OK popup (notification only)

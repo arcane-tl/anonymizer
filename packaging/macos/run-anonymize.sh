@@ -14,6 +14,7 @@
 #   --learn-to ID         After review, teach pack (CLI --learn-to)
 #   --templates-ui        Open Templates dialog; print ENABLED:id1,id2 (or CANCEL)
 #   --enabled IDS         Initial enabled ids for --templates-ui
+#   --out PATH            Write ENABLED/CANCEL line to PATH (Mac AppleScript)
 #   --allow-from PATH     Legacy allowlist lines → temp config merge
 #   --deny-from PATH      Legacy denylist lines → temp config merge
 #
@@ -214,6 +215,7 @@ TEMPLATE_IDS=""
 LEARN_TO=""
 TEMPLATES_UI=0
 UI_ENABLED=""
+UI_OUT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -253,6 +255,10 @@ while [[ $# -gt 0 ]]; do
       UI_ENABLED="${2:-}"
       shift 2
       ;;
+    --out)
+      UI_OUT="${2:-}"
+      shift 2
+      ;;
     --allow-from)
       ALLOW_FROM="${2:-}"
       shift 2
@@ -282,6 +288,9 @@ if [[ "$TEMPLATES_UI" -eq 1 ]]; then
   UI_ARGS=(templates-ui)
   if [[ -n "$UI_ENABLED" ]]; then
     UI_ARGS+=(--enabled "$UI_ENABLED")
+  fi
+  if [[ -n "$UI_OUT" ]]; then
+    UI_ARGS+=(--out "$UI_OUT")
   fi
   # Do not use set -e failure mask: preserve exit 2 = Cancel
   set +e

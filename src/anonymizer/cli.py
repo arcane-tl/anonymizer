@@ -564,6 +564,7 @@ def _run_pipeline(
                     original_blocks=block_texts,
                     surface=review_surface or "cli",
                     pre_keep_clear=pre_keep,
+                    learn_to=learn_to,
                 )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 130
@@ -587,7 +588,13 @@ def _run_pipeline(
                 if added_n:
                     bits.append(f"{added_n} added")
                 console.print(f"[dim]Review: {', '.join(bits)}.[/dim]")
-            if learn_to and (kept_n or added_n):
+            # Teach for terminal checklist when --learn-to set (window teaches itself)
+            if (
+                learn_to
+                and (kept_n or added_n)
+                and not getattr(session, "taught_path", None)
+                and (review_surface or "cli") == "cli"
+            ):
                 from anonymizer.anonymize.templates import teach_template
 
                 try:
@@ -971,6 +978,7 @@ def cmd_templates_ui(rest: list[str] | None = None) -> None:
     """Open the shared Tk Templates dialog (Mac droplet / desktop)."""
     rest = rest or []
     enabled = ""
+    out_path = ""
     i = 0
     while i < len(rest):
         if rest[i] in {"--enabled", "-e"} and i + 1 < len(rest):
@@ -981,10 +989,18 @@ def cmd_templates_ui(rest: list[str] | None = None) -> None:
             enabled = rest[i].split("=", 1)[1]
             i += 1
             continue
+        if rest[i] in {"--out", "-o"} and i + 1 < len(rest):
+            out_path = rest[i + 1]
+            i += 2
+            continue
+        if rest[i].startswith("--out="):
+            out_path = rest[i].split("=", 1)[1]
+            i += 1
+            continue
         i += 1
     from anonymizer.gui.app import run_templates_ui
 
-    raise SystemExit(run_templates_ui(enabled))
+    raise SystemExit(run_templates_ui(enabled, out_path=out_path or None))
 
 
 def cmd_templates(rest: list[str] | None = None) -> None:
@@ -1270,8 +1286,8 @@ def main(
         typer.Option(
             "--learn-to",
             help=(
-                "After --review, merge keep-clear and user-added surfaces into "
-                "this user template (forks if the id is a builtin)."
+                "Pre-select this user template for Teach in the review window "
+                "(or teach after terminal --review). Forks if id is a builtin."
             ),
             rich_help_panel="Common",
         ),

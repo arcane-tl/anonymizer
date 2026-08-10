@@ -139,7 +139,6 @@ on processFiles(theFiles)
 	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
 	set templateCSV to templateCSV of choices
-	set learnTo to learnTo of choices
 	if modeArg is "extract" then
 		set wantReview to false
 		-- Extract has no native redaction
@@ -153,7 +152,6 @@ on processFiles(theFiles)
 
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
 	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
-	if learnTo is not "" then set extraOpts to extraOpts & " --learn-to " & quoted form of learnTo
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
@@ -323,13 +321,19 @@ end loadEnabledTemplatesCSV
 
 on openTemplatesUI(enabledCSV)
 	set helper to resourcePath("run-anonymize.sh")
-	set cmd to "bash " & quoted form of helper & " --templates-ui"
+	set outFile to do shell script "mktemp ${TMPDIR:-/tmp}/anonymizer-templates.XXXXXX"
+	set cmd to "bash " & quoted form of helper & " --templates-ui --out " & quoted form of outFile
 	if enabledCSV is not "" then set cmd to cmd & " --enabled " & quoted form of enabledCSV
 	try
-		set shellOut to do shell script cmd
+		-- GUI must show; do shell script waits until Done/Cancel
+		do shell script cmd
+		set shellOut to do shell script "cat " & quoted form of outFile & "; rm -f " & quoted form of outFile
 	on error errMsg number errNum
+		try
+			do shell script "rm -f " & quoted form of outFile
+		end try
 		if errNum is 2 then return missing value -- Cancel
-		display dialog "Templates UI failed:" & return & return & errMsg & return & return & "Install/update the anonymize CLI (brew install anonymizer) with python-tk support." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
+		display dialog "Templates UI failed:" & return & return & errMsg & return & return & "Use CLI from this branch: anonymize templates-ui" & return & "Needs python-tk (brew formula or project .venv)." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
 		return missing value
 	end try
 	-- Find ENABLED: line
@@ -344,7 +348,6 @@ on openTemplatesUI(enabledCSV)
 		end if
 		if s is "CANCEL" then return missing value
 	end repeat
-	-- Entire stdout might be just ENABLED:…
 	if shellOut starts with "ENABLED:" then return text 9 thru -1 of shellOut
 	return missing value
 end openTemplatesUI
@@ -589,7 +592,6 @@ on showOptionsPanel(fileNames)
 	set filesText to fileListSummary(fileNames)
 
 	set templateCSV to loadEnabledTemplatesCSV()
-	set learnTo to ""
 
 	set lastModeRow to 0
 	set lastStyleRow to 0
@@ -615,15 +617,14 @@ on showOptionsPanel(fileNames)
 	set formatLabelH to 18
 	set tmplLabelH to 18
 	set tmplStatusH to 32
-	set learnLabelH to 18
 	set popupH to 28 -- NSPopUpButton row height
 	set checkH to 22
 	set btnH to 32
 	set btnW to 110
 	set btnGap to 10
 
-	-- Popups + templates status + learn field + 2 checkboxes
-	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + learnLabelH + gapXs + popupH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+	-- Popups + templates status + 2 checkboxes
+	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
 
 	repeat
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
@@ -694,15 +695,6 @@ on showOptionsPanel(fileNames)
 		set tmplStatusField to makeFinePrint(templatesStatusLine(templateCSV), margin, y, innerW, tmplStatusH)
 		content's addSubview:tmplStatusField
 
-		set y to y - gapMd - learnLabelH
-		content's addSubview:(makeLabel("Teach into after review (optional)", margin, y, innerW, learnLabelH))
-		set y to y - gapXs - popupH
-		set learnField to current application's NSTextField's alloc()'s initWithFrame:{{margin, y}, {innerW, popupH}}
-		learnField's setStringValue:learnTo
-		learnField's setPlaceholderString:"user template id (e.g. my-company-list)"
-		learnField's setFont:(current application's NSFont's systemFontOfSize:13)
-		content's addSubview:learnField
-
 		set y to y - gapMd - checkH
 		set reviewBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
 		reviewBox's setButtonType:(current application's NSButtonTypeSwitch)
@@ -767,9 +759,6 @@ on showOptionsPanel(fileNames)
 		set lastOpen to false
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
-		try
-			set learnTo to (learnField's stringValue() as text)
-		end try
 
 		thePanel's orderOut_(missing value)
 
@@ -783,7 +772,7 @@ on showOptionsPanel(fileNames)
 				set wantReview to false
 				set outputFormat to "md"
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, learnTo:learnTo}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV}
 		else if response is 2 then
 			-- Templates… → shared Tk dialog (same as Windows)
 			set newCSV to openTemplatesUI(templateCSV)

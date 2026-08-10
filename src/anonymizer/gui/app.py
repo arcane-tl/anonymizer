@@ -626,7 +626,13 @@ def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Fra
 class TemplatesDialog(tk.Toplevel):
     """Master–detail: left templates (enable for run), right allow/deny editors."""
 
-    def __init__(self, master: tk.Misc, enabled_ids: list[str]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        enabled_ids: list[str],
+        *,
+        standalone: bool = False,
+    ) -> None:
         super().__init__(master)
         self.title("Templates")
         self.resizable(True, True)
@@ -634,10 +640,19 @@ class TemplatesDialog(tk.Toplevel):
         self.minsize(700, 420)
         # Done → list of enabled template ids; Cancel → None
         self.result: list[str] | None = None
-        self.transient(master)
+        self._standalone = standalone
+        # Withdrawn/transient parents hide the dialog on macOS (droplet templates-ui).
+        if not standalone and master is not None:
+            try:
+                self.transient(master)
+            except tk.TclError:
+                pass
         self.configure(bg=_BG_APP)
         self._icon_refs = _apply_window_icons(self)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
 
         self._packs: list[Template] = discover_templates()
         self._enabled: dict[str, tk.BooleanVar] = {}
@@ -816,6 +831,16 @@ class TemplatesDialog(tk.Toplevel):
             self._load_editor(self._selected_id)
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
+        try:
+            self.update_idletasks()
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            if standalone:
+                self.attributes("-topmost", True)
+                self.after(500, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
         self.wait_window(self)
 
     def _pack_by_id(self, tid: str) -> Template | None:
@@ -1246,45 +1271,6 @@ class OptionsApp(tk.Tk):
         )
         self.templates_lbl.pack(anchor=tk.W, pady=(0, 4))
 
-        tk.Label(
-            root,
-            text="Teach into after review (optional)",
-            bg=_BG_APP,
-            fg=_TEXT,
-            font=_FONT_BOLD,
-            anchor=tk.W,
-        ).pack(anchor=tk.W, pady=(12, 4))
-        self.learn_to_var = tk.StringVar(value="")
-        learn_choices = [""] + [
-            t.id for t in packs if not t.builtin
-        ]
-        # Always allow typing a new id via combobox values + free entry
-        if ttk is not None:
-            learn_box = ttk.Combobox(
-                root,
-                textvariable=self.learn_to_var,
-                values=learn_choices,
-                font=_FONT_SMALL,
-            )
-            learn_box.pack(fill=tk.X, pady=(0, 4))
-        else:
-            tk.Entry(
-                root,
-                textvariable=self.learn_to_var,
-                bg=_BG_WELL,
-                fg=_TEXT,
-                font=_FONT_SMALL,
-                insertbackground=_TEXT,
-            ).pack(fill=tk.X, pady=(0, 4))
-        tk.Label(
-            root,
-            text="User template id to update after review (leave empty to skip).",
-            bg=_BG_APP,
-            fg=_TEXT_MUTED,
-            font=_FONT_SMALL,
-            anchor=tk.W,
-        ).pack(anchor=tk.W)
-
         # Extra vertical separation: format field vs toggle group
         _dark_check(
             root,
@@ -1432,9 +1418,6 @@ class OptionsApp(tk.Tk):
             "--template",
             ",".join(self.enabled_template_ids),
         ]
-        learn_to = (self.learn_to_var.get() or "").strip()
-        if learn_to and want_review:
-            common_flags.extend(["--learn-to", learn_to])
 
         if want_review:
             cmds = [
@@ -1764,11 +1747,18 @@ def _guess_outputs(
     return paths
 
 
-def run_templates_ui(enabled_csv: str = "") -> int:
+def run_templates_ui(
+    enabled_csv: str = "",
+    *,
+    out_path: str | Path | None = None,
+) -> int:
     """Open TemplatesDialog; print ENABLED:id1,id2 or CANCEL. Exit 0/2/1.
 
     Used by Mac droplet (and optional desktop tooling) so Mac and Windows
     share one Templates UI implementation.
+
+    *standalone* windowing avoids a withdrawn Tk root as transient parent
+    (which hides the dialog on macOS when launched via ``do shell script``).
     """
     if tk is None:
         print("error: tkinter is not available", file=sys.stderr)
@@ -1776,15 +1766,19 @@ def run_templates_ui(enabled_csv: str = "") -> int:
     enabled = [x.strip() for x in (enabled_csv or "").split(",") if x.strip()]
     if not enabled:
         enabled = default_enabled_ids()
+
+    def _emit(line: str) -> None:
+        print(line, flush=True)
+        if out_path:
+            try:
+                Path(out_path).write_text(line + "\n", encoding="utf-8")
+            except OSError as exc:
+                print(f"error: could not write {out_path}: {exc}", file=sys.stderr)
+
     root = tk.Tk()
     root.withdraw()
     try:
-        root.lift()
-        root.attributes("-topmost", True)
-    except tk.TclError:
-        pass
-    try:
-        dlg = TemplatesDialog(root, enabled)
+        dlg = TemplatesDialog(root, enabled, standalone=True)
     except Exception as exc:  # noqa: BLE001
         print(f"error: templates UI failed: {exc}", file=sys.stderr)
         try:
@@ -1797,9 +1791,9 @@ def run_templates_ui(enabled_csv: str = "") -> int:
     except tk.TclError:
         pass
     if dlg.result is None:
-        print("CANCEL")
+        _emit("CANCEL")
         return 2
-    print("ENABLED:" + ",".join(dlg.result))
+    _emit("ENABLED:" + ",".join(dlg.result))
     return 0
 
 

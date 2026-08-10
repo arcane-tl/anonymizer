@@ -654,6 +654,7 @@ def interactive_review(
     force_cli: bool = False,
     surface: str | None = None,
     pre_keep_clear: Iterable[str] | None = None,
+    learn_to: str | None = None,
 ) -> ReviewSession:
     """Interactive review: terminal checklist or document window.
 
@@ -716,7 +717,9 @@ def interactive_review(
                 "[dim]Opening review window "
                 "(toggle false positives, select text to add redactions)…[/dim]"
             )
-            finished = run_review_window(session, file_label=file_label)
+            finished = run_review_window(
+                session, file_label=file_label, learn_to=learn_to
+            )
         except SystemExit:
             raise
         except Exception as exc:  # pragma: no cover - UI env issues
@@ -735,6 +738,13 @@ def interactive_review(
                 kept,
                 console=console,
             )
+        taught = getattr(finished, "taught_path", None)
+        if taught:
+            counts = getattr(finished, "taught_counts", None)
+            extra = ""
+            if counts:
+                extra = f" ({counts[0]} allow, {counts[1]} deny)"
+            console.print(f"[dim]Taught template{extra} → {taught}[/dim]")
         return finished
 
     # Terminal checklist (default for CLI --review)

@@ -108,8 +108,7 @@ Options (same as Mac):
 - Output style pop-up: stable placeholders or delete redacted data  
 - Output format pop-up: Markdown / Source filetype / Both  
 - **Templates…** — allow/deny packs (enable for run, edit user packs)  
-- **Teach into** — optional user template after review (`--learn-to`)  
-- Review findings before saving (default on)  
+- Review findings before saving (default on) — **Teach into** pack is on the review window  
 - Open result when finished  
 
 ## Helper (advanced)
