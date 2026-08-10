@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec: frozen GUI only (CLI stays in runtime/ venv).
 # Build:  pyinstaller packaging/windows/Anonymizer.spec
-# From repo root, with anonymizer installed in the active env.
+# From repo root, with anonymizer + pyyaml installed in the active env.
 
 import sys
 from pathlib import Path
@@ -12,24 +12,63 @@ gui_entry = root / "src" / "anonymizer" / "gui" / "__main__.py"
 
 _gui_assets = root / "src" / "anonymizer" / "gui" / "assets"
 _datas = []
+_binaries = []
+_hidden = [
+    "anonymizer",
+    "anonymizer.gui",
+    "anonymizer.gui.app",
+    "anonymizer.lists_io",
+    "yaml",
+    "yaml.loader",
+    "yaml.dumper",
+    "yaml.constructor",
+    "yaml.representer",
+    "yaml.resolver",
+    "yaml.scanner",
+    "yaml.parser",
+    "yaml.composer",
+    "yaml.emitter",
+    "yaml.serializer",
+    "yaml.nodes",
+    "yaml.events",
+    "yaml.tokens",
+    "yaml.error",
+    "yaml.cyaml",
+    "_yaml",
+]
+
+# Bundle full PyYAML (package is imported as ``yaml``).
+try:
+    from PyInstaller.utils.hooks import collect_all
+
+    _yd, _yb, _yh = collect_all("yaml")
+    _datas += _yd
+    _binaries += _yb
+    _hidden += list(_yh)
+except Exception:
+    pass
+
 if _gui_assets.is_dir():
     _datas.append((str(_gui_assets), "anonymizer/gui/assets"))
 
 _icon = root / "packaging" / "windows" / "icons" / "Anonymizer.ico"
 _icon_arg = str(_icon) if _icon.is_file() else None
 
+# Fail the freeze early if PyYAML is missing on the build host.
+try:
+    import yaml  # noqa: F401
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit(
+        "PyYAML (import yaml) is required on the build host for Anonymizer.exe. "
+        "build-release.ps1 should pip-install pyyaml before PyInstaller."
+    ) from exc
+
 a = Analysis(
     [str(gui_entry)],
     pathex=[str(root / "src")],
-    binaries=[],
+    binaries=_binaries,
     datas=_datas,
-    hiddenimports=[
-        "anonymizer",
-        "anonymizer.gui",
-        "anonymizer.gui.app",
-        "anonymizer.lists_io",
-        "yaml",
-    ],
+    hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

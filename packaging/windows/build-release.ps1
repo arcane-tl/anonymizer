@@ -243,9 +243,14 @@ Write-Ok "bin\anonymize.cmd"
 
 # --- freeze GUI ---
 if (-not $SkipGuiFreeze) {
-    Write-Info "Installing PyInstaller into build host env..."
-    & $Py -m pip install -q "pyinstaller>=6.0"
-    if ($LASTEXITCODE -ne 0) { Die "pip install pyinstaller failed" }
+    # Host must have GUI imports (yaml etc.) so PyInstaller can collect them.
+    # The freeze does NOT use the embeddable runtime — only the host env.
+    Write-Info "Installing freeze deps into build host env (pyinstaller + pyyaml + package)..."
+    & $Py -m pip install -q "pyinstaller>=6.0" "pyyaml>=6.0" $wheel.FullName
+    if ($LASTEXITCODE -ne 0) { Die "pip install freeze deps failed" }
+    $freezeCheck = "import yaml, anonymizer.gui, anonymizer.lists_io; print('freeze imports ok', yaml.__name__)"
+    & $Py -c $freezeCheck
+    if ($LASTEXITCODE -ne 0) { Die "host freeze import check failed (yaml/gui)" }
     Write-Info "Freezing Anonymizer.exe (GUI only)..."
     $spec = Join-Path $Root "packaging\windows\Anonymizer.spec"
     & $Py -m PyInstaller --noconfirm --clean --distpath (Join-Path $Stage "app") --workpath (Join-Path $Dist "pyi-work") $spec

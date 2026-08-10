@@ -150,6 +150,8 @@ Select-String -Path pyproject.toml -Pattern '^version\s*='
 
 # 2) Build stage + portable zip + Setup.exe
 #    Default: EN+FI large spaCy models (best PERSON/ORG quality; larger download)
+#    Host Python must be able to `import yaml` after the script installs freeze deps
+#    (PyYAML is bundled into Anonymizer.exe; missing host pyyaml caused empty freeze).
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-release.ps1
 # Smaller installer (faster, less NER quality):
 #   ... build-release.ps1 -Models sm
