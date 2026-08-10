@@ -218,7 +218,7 @@ Requires a code-signing certificate (not included in the repo).
 
 ### Notes
 
-- **Host Python** may be 3.11–3.13; **runtime** is always embeddable **3.12.x** (pinned in `build-release.ps1`).
+- **Host Python** may be 3.11–3.13 with **tkinter** (python.org installer); **runtime** is embeddable **3.12.x** plus **copied Tcl/Tk** from the host so `--review-window` works without a system Python on the user PC.
 - Deep worktree paths: the build script may create a short junction (`C:\anon-stage`) so Inno Setup does not abort on long paths.
 - `scripts\install.ps1` remains the **developer** path (user venv under `%LOCALAPPDATA%\anonymizer`).
 

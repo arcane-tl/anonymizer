@@ -170,10 +170,91 @@ foreach ($pth in $pthFiles) {
         else { $out.Add("Lib\\site-packages") }
     }
     if (-not $hasImportSite) { $out.Add("import site") }
+    # Lib + DLLs so copied tkinter / _tkinter.pyd resolve
+    foreach ($extra in @("Lib", "DLLs")) {
+        if (-not ($out | Where-Object { $_.Trim() -eq $extra })) {
+            $idx = $out.IndexOf("import site")
+            if ($idx -ge 0) { $out.Insert($idx, $extra) }
+            else { $out.Add($extra) }
+        }
+    }
     # Write UTF-8 without BOM
     [System.IO.File]::WriteAllLines($pth.FullName, $out)
-    Write-Ok "Patched $($pth.Name) for site-packages"
+    Write-Ok "Patched $($pth.Name) for site-packages + Lib/DLLs"
 }
+
+function Copy-TkinterIntoRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string] $HostPython,
+        [Parameter(Mandatory = $true)][string] $RuntimeDir
+    )
+    # Embeddable CPython has no Tcl/Tk; review-window needs them on the CLI runtime.
+    Write-Info "Copying tkinter/Tcl/Tk from build host into runtime..."
+    $probe = "import tkinter, sys; print(sys.base_prefix); print(sys.prefix)"
+    $probeOut = & $HostPython -c $probe 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Die "Build host Python cannot import tkinter. Install python.org Python with Tcl/Tk, then rebuild.`n$probeOut"
+    }
+    $lines = @($probeOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne "" })
+    $hostPrefix = $lines[0]
+    if (-not $hostPrefix -or -not (Test-Path -LiteralPath $hostPrefix)) {
+        Die "Could not resolve host base_prefix for tkinter copy (got: $probeOut)"
+    }
+    Write-Ok "Host Python prefix (tkinter): $hostPrefix"
+
+    $dstLib = Join-Path $RuntimeDir "Lib"
+    $dstDll = Join-Path $RuntimeDir "DLLs"
+    $dstTcl = Join-Path $RuntimeDir "tcl"
+    New-Item -ItemType Directory -Force -Path $dstLib, $dstDll | Out-Null
+
+    $srcTk = Join-Path $hostPrefix "Lib\tkinter"
+    if (-not (Test-Path -LiteralPath $srcTk)) {
+        Die "Host missing Lib\tkinter at $srcTk"
+    }
+    $dstTk = Join-Path $dstLib "tkinter"
+    if (Test-Path -LiteralPath $dstTk) { Remove-Item -Recurse -Force -LiteralPath $dstTk }
+    Copy-Item -Recurse -Force -LiteralPath $srcTk -Destination $dstTk
+    Write-Ok "Copied Lib\tkinter"
+
+    # _tkinter.pyd + Tcl/Tk DLLs (names vary by Python build)
+    $srcDllDir = Join-Path $hostPrefix "DLLs"
+    $copiedPyd = $false
+    $dllPatterns = @("_tkinter*", "tcl*.dll", "tk*.dll", "tcl*.pyd", "tk*.pyd")
+    $searchDirs = @()
+    if (Test-Path -LiteralPath $srcDllDir) { $searchDirs += $srcDllDir }
+    $searchDirs += $hostPrefix
+    foreach ($dir in $searchDirs) {
+        foreach ($pat in $dllPatterns) {
+            Get-ChildItem -LiteralPath $dir -File -Filter $pat -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $dstDll $_.Name)
+                    if ($_.Name -like "_tkinter*") { $copiedPyd = $true }
+                }
+        }
+    }
+    if (-not $copiedPyd) {
+        Die "Could not find _tkinter*.pyd under $hostPrefix (DLLs or prefix root)"
+    }
+    Write-Ok "Copied _tkinter / Tcl/Tk binaries into DLLs\"
+
+    # Tcl/Tk script library tree (tcl8.6, tk8.6, …)
+    $srcTcl = Join-Path $hostPrefix "tcl"
+    if (Test-Path -LiteralPath $srcTcl) {
+        if (Test-Path -LiteralPath $dstTcl) { Remove-Item -Recurse -Force -LiteralPath $dstTcl }
+        Copy-Item -Recurse -Force -LiteralPath $srcTcl -Destination $dstTcl
+        Write-Ok "Copied tcl\ library tree"
+    } else {
+        Write-Warn "Host has no tcl\ directory at $srcTcl - tkinter may still work if DLLs are self-contained"
+    }
+}
+
+Copy-TkinterIntoRuntime -HostPython $Py -RuntimeDir $Runtime
+$tkCheck = "import tkinter; r=tkinter.Tk(); r.withdraw(); r.destroy(); print('tkinter ok')"
+& $PyEmbed -c $tkCheck
+if ($LASTEXITCODE -ne 0) {
+    Die "runtime tkinter check failed after copy - review-window would not work in Setup"
+}
+Write-Ok "Embeddable runtime has working tkinter"
 
 Write-Info "Bootstrapping pip into embeddable runtime..."
 & $PyEmbed $GetPip --no-warn-script-location
@@ -244,7 +325,7 @@ Write-Ok "bin\anonymize.cmd"
 # --- freeze GUI ---
 if (-not $SkipGuiFreeze) {
     # Host must have GUI imports (yaml etc.) so PyInstaller can collect them.
-    # The freeze does NOT use the embeddable runtime — only the host env.
+    # The freeze does NOT use the embeddable runtime - only the host env.
     Write-Info "Installing freeze deps into build host env (pyinstaller + pyyaml + package)..."
     & $Py -m pip install -q "pyinstaller>=6.0" "pyyaml>=6.0" $wheel.FullName
     if ($LASTEXITCODE -ne 0) { Die "pip install freeze deps failed" }

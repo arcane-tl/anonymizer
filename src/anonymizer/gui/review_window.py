@@ -133,7 +133,12 @@ _FONT_DOC = ("Menlo", 13) if sys.platform == "darwin" else ("Consolas", 12)
 
 
 def display_available() -> bool:
+    """True when Tk can actually run (not merely when the pure-Python package exists)."""
     if tk is None:
+        return False
+    try:
+        import _tkinter  # noqa: F401
+    except ImportError:
         return False
     if sys.platform in {"darwin", "win32"}:
         return True
@@ -1156,68 +1161,82 @@ def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, *
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
-class RoundedCard(tk.Frame):
-    """Dark card with rounded corners via background canvas."""
+# Subclass only when tkinter imported; otherwise import of this module must not crash
+# (Setup/embeddable without Tcl used to raise NoneType.Frame during require_review_capable).
+if tk is not None:
 
-    def __init__(
-        self,
-        parent: tk.Misc,
-        *,
-        bg: str = _BG_PANEL,
-        chrome: str = _BG_APP,
-        radius: int = _RADIUS,
-        pad: int = 12,
-        **kwargs,
-    ) -> None:
-        # Outer frame matches app chrome so rounded corners “float”
-        super().__init__(parent, bg=chrome, **kwargs)
-        self._fill = bg
-        self._radius = radius
-        self._canvas = tk.Canvas(self, bg=chrome, highlightthickness=0, bd=0)
-        self._canvas.pack(fill=tk.BOTH, expand=True)
-        self.inner = tk.Frame(self._canvas, bg=bg)
-        self._win = self._canvas.create_window(pad, pad, window=self.inner, anchor=tk.NW)
-        self._shape = None
-        self._pad = pad
-        self._redraw_job: str | None = None
-        self._canvas.bind("<Configure>", self._schedule_redraw)
+    class RoundedCard(tk.Frame):
+        """Dark card with rounded corners via background canvas."""
 
-    def _schedule_redraw(self, event=None) -> None:
-        """Coalesce configure storms (sash drag) into one idle redraw."""
-        if self._redraw_job is not None:
+        def __init__(
+            self,
+            parent: tk.Misc,
+            *,
+            bg: str = _BG_PANEL,
+            chrome: str = _BG_APP,
+            radius: int = _RADIUS,
+            pad: int = 12,
+            **kwargs,
+        ) -> None:
+            # Outer frame matches app chrome so rounded corners "float"
+            super().__init__(parent, bg=chrome, **kwargs)
+            self._fill = bg
+            self._radius = radius
+            self._canvas = tk.Canvas(self, bg=chrome, highlightthickness=0, bd=0)
+            self._canvas.pack(fill=tk.BOTH, expand=True)
+            self.inner = tk.Frame(self._canvas, bg=bg)
+            self._win = self._canvas.create_window(
+                pad, pad, window=self.inner, anchor=tk.NW
+            )
+            self._shape = None
+            self._pad = pad
+            self._redraw_job: str | None = None
+            self._canvas.bind("<Configure>", self._schedule_redraw)
+
+        def _schedule_redraw(self, event=None) -> None:
+            """Coalesce configure storms (sash drag) into one idle redraw."""
+            if self._redraw_job is not None:
+                try:
+                    self.after_cancel(self._redraw_job)
+                except tk.TclError:
+                    pass
             try:
-                self.after_cancel(self._redraw_job)
+                self._redraw_job = self.after_idle(self._redraw)
             except tk.TclError:
-                pass
-        try:
-            self._redraw_job = self.after_idle(self._redraw)
-        except tk.TclError:
-            self._redraw_job = None
+                self._redraw_job = None
 
-    def _redraw(self, event=None) -> None:
-        self._redraw_job = None
-        w = self._canvas.winfo_width()
-        h = self._canvas.winfo_height()
-        if w < 4 or h < 4:
-            return
-        self._canvas.delete("shape")
-        _round_rect(
-            self._canvas,
-            1,
-            1,
-            w - 2,
-            h - 2,
-            self._radius,
-            fill=self._fill,
-            outline=_BORDER,
-            width=1,
-            tags="shape",
-        )
-        self._canvas.tag_lower("shape")
-        iw = max(10, w - 2 * self._pad)
-        ih = max(10, h - 2 * self._pad)
-        self._canvas.itemconfigure(self._win, width=iw, height=ih)
-        self._canvas.coords(self._win, self._pad, self._pad)
+        def _redraw(self, event=None) -> None:
+            self._redraw_job = None
+            w = self._canvas.winfo_width()
+            h = self._canvas.winfo_height()
+            if w < 4 or h < 4:
+                return
+            self._canvas.delete("shape")
+            _round_rect(
+                self._canvas,
+                1,
+                1,
+                w - 2,
+                h - 2,
+                self._radius,
+                fill=self._fill,
+                outline=_BORDER,
+                width=1,
+                tags="shape",
+            )
+            self._canvas.tag_lower("shape")
+            iw = max(10, w - 2 * self._pad)
+            ih = max(10, h - 2 * self._pad)
+            self._canvas.itemconfigure(self._win, width=iw, height=ih)
+            self._canvas.coords(self._win, self._pad, self._pad)
+
+else:
+
+    class RoundedCard:  # type: ignore[no-redef]
+        """Stub when tkinter is unavailable."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("tkinter is not available")
 
 
 def run_review_window(

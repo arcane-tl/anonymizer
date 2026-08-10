@@ -785,8 +785,9 @@ def require_review_capable(surface: str) -> None:
             )
         elif sys.platform == "win32":
             hint = (
-                "On Windows, use a full Python install with tkinter "
-                "(python.org installer), then reinstall anonymizer."
+                "On Windows Setup installs, reinstall the latest Anonymizer-Setup "
+                "(runtime must include tkinter). For from-source installs, use a full "
+                "python.org Python with Tcl/Tk, then reinstall anonymizer."
             )
         else:
             hint = (
