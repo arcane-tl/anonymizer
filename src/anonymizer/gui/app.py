@@ -26,7 +26,7 @@ else:
     _TK_IMPORT_ERROR = None
 
 from anonymizer import __version__
-from anonymizer.anonymize.config import DenylistEntry, load_config
+from anonymizer.anonymize.config import load_config
 from anonymizer.anonymize.templates import (
     Template,
     default_enabled_ids,
@@ -38,7 +38,6 @@ from anonymizer.anonymize.templates import (
     persist_templates_enabled,
     save_template,
     slugify,
-    user_templates_dir,
 )
 from anonymizer.lists_io import default_config_path
 
