@@ -624,7 +624,10 @@ def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Fra
 
 
 class TemplatesDialog(tk.Toplevel):
-    """Master–detail: left templates (enable for run), right allow/deny editors."""
+    """Master–detail: left templates (enable for run), right allow/deny editors.
+
+    Styled to match OptionsApp (dark charcoal, chips, wells, title icon).
+    """
 
     def __init__(
         self,
@@ -634,21 +637,18 @@ class TemplatesDialog(tk.Toplevel):
         standalone: bool = False,
     ) -> None:
         super().__init__(master)
-        self.title("Templates")
+        self.title(f"Anonymizer {__version__} — Templates")
         self.resizable(True, True)
-        self.geometry("820x520")
-        self.minsize(700, 420)
+        self.geometry("860x560")
+        self.minsize(720, 440)
         # Done → list of enabled template ids; Cancel → None
         self.result: list[str] | None = None
         self._standalone = standalone
-        # Withdrawn/transient parents hide the dialog on macOS (droplet templates-ui).
-        if not standalone and master is not None:
-            try:
-                self.transient(master)
-            except tk.TclError:
-                pass
+        # Never transient(withdrawn parent) on macOS — dialog may never show.
+        # Also avoid transient to OptionsApp so Templates can freely stack above it.
         self.configure(bg=_BG_APP)
-        self._icon_refs = _apply_window_icons(self)
+        self._icon_refs: list = []
+        self._icon_refs.extend(_apply_window_icons(self))
         try:
             self.grab_set()
         except tk.TclError:
@@ -663,43 +663,59 @@ class TemplatesDialog(tk.Toplevel):
         self._loading_editor = False
         self._row_frames: dict[str, tk.Frame] = {}
 
-        outer = tk.Frame(self, bg=_BG_APP, padx=16, pady=14)
+        pad = 24
+        outer = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
         outer.pack(fill=tk.BOTH, expand=True)
 
+        _pack_title_row(outer, "Templates", self._icon_refs)
         tk.Label(
             outer,
             text=(
-                "Check packs to use on this run. Select a pack to view or edit "
-                "allow (never redact) and deny (always redact). Builtin packs "
-                "are read-only — fork to customize."
+                "Check packs for this run. Select a pack to edit allow (never redact) "
+                "and deny (always redact). Builtin packs are read-only — fork to customize."
             ),
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
-            wraplength=780,
+            wraplength=800,
             justify=tk.LEFT,
             anchor=tk.W,
-        ).pack(anchor=tk.W, pady=(0, 10))
+        ).pack(anchor=tk.W, pady=(0, 16))
 
         body = tk.Frame(outer, bg=_BG_APP)
         body.pack(fill=tk.BOTH, expand=True)
 
         # ── Left: template list ───────────────────────────────────
-        left = tk.Frame(body, bg=_BG_APP, width=240)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+        left = tk.Frame(body, bg=_BG_APP, width=250)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16))
         left.pack_propagate(False)
         tk.Label(
-            left, text="Templates", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
+            left, text="Packs", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
         ).pack(anchor=tk.W, pady=(0, 4))
 
         list_wrap = tk.Frame(
-            left, bg=_BG_WELL, highlightthickness=1, highlightbackground=_BORDER
+            left,
+            bg=_BG_WELL,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_BORDER,
         )
         list_wrap.pack(fill=tk.BOTH, expand=True)
         self._list_canvas = tk.Canvas(
             list_wrap, bg=_BG_WELL, highlightthickness=0, bd=0
         )
-        sb = tk.Scrollbar(list_wrap, orient=tk.VERTICAL, command=self._list_canvas.yview)
+        # Dark-ish scrollbar (platform native; trough where supported)
+        sb = tk.Scrollbar(
+            list_wrap,
+            orient=tk.VERTICAL,
+            command=self._list_canvas.yview,
+            bg=_BG_BTN,
+            troughcolor=_BG_WELL,
+            activebackground=_BG_BTN_HOVER,
+            highlightthickness=0,
+            bd=0,
+            width=12,
+        )
         self._list_inner = tk.Frame(self._list_canvas, bg=_BG_WELL)
         self._list_inner.bind(
             "<Configure>",
@@ -719,11 +735,11 @@ class TemplatesDialog(tk.Toplevel):
         )
 
         left_btns = tk.Frame(left, bg=_BG_APP)
-        left_btns.pack(fill=tk.X, pady=(8, 0))
-        _chip_button(left_btns, "+ New", self._new_template, width=8).pack(
-            side=tk.LEFT, padx=(0, 6)
+        left_btns.pack(fill=tk.X, pady=(10, 0))
+        _chip_button(left_btns, "+ New", self._new_template, width=9).pack(
+            side=tk.LEFT, padx=(0, 8)
         )
-        _chip_button(left_btns, "Delete", self._delete_template, width=8).pack(
+        _chip_button(left_btns, "Delete", self._delete_template, width=9).pack(
             side=tk.LEFT
         )
 
@@ -732,7 +748,7 @@ class TemplatesDialog(tk.Toplevel):
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         head = tk.Frame(right, bg=_BG_APP)
-        head.pack(fill=tk.X, pady=(0, 6))
+        head.pack(fill=tk.X, pady=(0, 4))
         self._title_lbl = tk.Label(
             head, text="", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
         )
@@ -748,11 +764,11 @@ class TemplatesDialog(tk.Toplevel):
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
-            wraplength=500,
+            wraplength=520,
             justify=tk.LEFT,
             anchor=tk.W,
         )
-        self._desc_lbl.pack(anchor=tk.W, pady=(0, 8))
+        self._desc_lbl.pack(anchor=tk.W, pady=(0, 12))
 
         tk.Label(
             right,
@@ -774,11 +790,13 @@ class TemplatesDialog(tk.Toplevel):
             highlightbackground=_BORDER,
             highlightcolor=_ACCENT,
             bd=0,
-            padx=8,
+            padx=10,
             pady=8,
             wrap=tk.WORD,
+            selectbackground=_SELECT,
+            selectforeground=_TEXT,
         )
-        self.allow_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 10))
+        self.allow_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
         self.allow_txt.bind("<<Modified>>", self._on_editor_modified)
 
         tk.Label(
@@ -801,30 +819,37 @@ class TemplatesDialog(tk.Toplevel):
             highlightbackground=_BORDER,
             highlightcolor=_ACCENT,
             bd=0,
-            padx=8,
+            padx=10,
             pady=8,
             wrap=tk.WORD,
+            selectbackground=_SELECT,
+            selectforeground=_TEXT,
         )
-        self.deny_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 10))
+        self.deny_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
         self.deny_txt.bind("<<Modified>>", self._on_editor_modified)
 
         edit_btns = tk.Frame(right, bg=_BG_APP)
-        edit_btns.pack(fill=tk.X, pady=(0, 8))
+        edit_btns.pack(fill=tk.X, pady=(0, 4))
         self._fork_btn = _chip_button(
             edit_btns, "Fork & edit…", self._fork_selected, width=12
         )
         self._fork_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self._revert_btn = _chip_button(edit_btns, "Revert", self._revert_editor, width=8)
+        self._revert_btn = _chip_button(
+            edit_btns, "Revert", self._revert_editor, width=9
+        )
         self._revert_btn.pack(side=tk.LEFT, padx=(0, 8))
         self._save_btn = _chip_button(
-            edit_btns, "Save pack", self._save_pack, primary=True, width=10
+            edit_btns, "Save pack", self._save_pack, primary=True, width=11
         )
         self._save_btn.pack(side=tk.RIGHT)
 
+        # Action bar: Cancel left · Done primary right (OptionsApp parity)
         foot = tk.Frame(outer, bg=_BG_APP)
-        foot.pack(fill=tk.X, pady=(12, 0))
-        _chip_button(foot, "Cancel", self._cancel).pack(side=tk.LEFT)
-        _chip_button(foot, "Done", self._done, primary=True).pack(side=tk.RIGHT)
+        foot.pack(fill=tk.X, pady=(20, 0))
+        _chip_button(foot, "Cancel", self._cancel, width=11).pack(side=tk.LEFT)
+        _chip_button(foot, "Done", self._done, primary=True, width=11).pack(
+            side=tk.RIGHT
+        )
 
         self._rebuild_list()
         if self._selected_id:
@@ -836,12 +861,19 @@ class TemplatesDialog(tk.Toplevel):
             self.deiconify()
             self.lift()
             self.focus_force()
-            if standalone:
-                self.attributes("-topmost", True)
-                self.after(500, lambda: self.attributes("-topmost", False))
+            # Brief raise only — never leave sticky topmost (blocks layering)
+            self.attributes("-topmost", True)
+            self.after(350, lambda: self._clear_topmost())
         except tk.TclError:
             pass
         self.wait_window(self)
+
+    def _clear_topmost(self) -> None:
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", False)
+        except tk.TclError:
+            pass
 
     def _pack_by_id(self, tid: str) -> Template | None:
         for t in self._packs:
@@ -869,8 +901,9 @@ class TemplatesDialog(tk.Toplevel):
                 selectcolor=_BG_APP,
                 highlightthickness=0,
                 bd=0,
+                cursor="hand2",
             )
-            cb.pack(side=tk.LEFT, padx=(4, 2))
+            cb.pack(side=tk.LEFT, padx=(6, 2))
             kind = "builtin" if t.builtin else "user"
             lbl = tk.Label(
                 row,
@@ -880,8 +913,9 @@ class TemplatesDialog(tk.Toplevel):
                 font=_FONT_SMALL,
                 justify=tk.LEFT,
                 anchor=tk.W,
+                cursor="hand2",
             )
-            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=4)
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=6)
             for widget in (row, lbl):
                 widget.bind("<Button-1>", lambda _e, i=t.id: self._select(i))
             self._paint_row(t.id)
@@ -1359,13 +1393,35 @@ class OptionsApp(tk.Tk):
             pass
 
     def _templates(self) -> None:
-        dlg = TemplatesDialog(self, list(self.enabled_template_ids))
-        if dlg.result is not None:
-            self.enabled_template_ids = list(dlg.result)
+        # Clear any sticky topmost and hide options so Templates can layer freely
+        try:
+            self.attributes("-topmost", False)
+        except tk.TclError:
+            pass
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
+        try:
+            # standalone=True: no transient(parent) z-order fight with OptionsApp
+            dlg = TemplatesDialog(
+                self, list(self.enabled_template_ids), standalone=True
+            )
+            if dlg.result is not None:
+                self.enabled_template_ids = list(dlg.result)
+                try:
+                    self.templates_lbl.configure(
+                        text=_templates_status(self.enabled_template_ids)
+                    )
+                except tk.TclError:
+                    pass
+        finally:
             try:
-                self.templates_lbl.configure(
-                    text=_templates_status(self.enabled_template_ids)
-                )
+                if self.winfo_exists():
+                    self.deiconify()
+                    self.lift()
+                    # Do not re-assert permanent topmost
+                    self.attributes("-topmost", False)
             except tk.TclError:
                 pass
 

@@ -761,6 +761,10 @@ on showOptionsPanel(fileNames)
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
 
 		thePanel's orderOut_(missing value)
+		-- Drop floating level while hidden so Tk Templates can sit above Anonymizer
+		try
+			thePanel's setLevel:0
+		end try
 
 		if response is 1 then
 			set modeArg to item (lastModeRow + 1) of modeArgs
@@ -779,6 +783,7 @@ on showOptionsPanel(fileNames)
 			if newCSV is not missing value then
 				set templateCSV to newCSV
 			end if
+			-- Next loop recreates panel at floating level 8 again
 		else
 			return missing value
 		end if
