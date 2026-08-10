@@ -387,6 +387,59 @@ def session_to_teach_lists(session: object) -> tuple[list[str], list[DenylistEnt
     return allow, deny
 
 
+def fork_template(t: Template) -> Template:
+    """Create a user copy of *t* (for editing builtins). Does not write disk."""
+    return Template(
+        id=slugify(f"{t.id}-custom"),
+        title=f"{t.display_title()} (my copy)",
+        description=f"Fork of {t.id}",
+        allow=list(t.allow),
+        deny=list(t.deny),
+        builtin=False,
+        default=False,
+        languages=list(t.languages),
+    )
+
+
+def lines_from_text(text: str) -> list[str]:
+    out: list[str] = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if s and not s.startswith("#"):
+            out.append(s)
+    return out
+
+
+def deny_from_lines(lines: Iterable[str]) -> list[DenylistEntry]:
+    return [DenylistEntry(text=s, entity_type="ORG") for s in lines if s]
+
+
+def persist_templates_enabled(ids: list[str], config_path: Path | None = None) -> Path:
+    """Write templates_enabled into user config YAML (preserve other keys)."""
+    from anonymizer.lists_io import default_config_path
+
+    cfg_path = config_path or default_config_path()
+    data: dict = {}
+    if cfg_path.is_file():
+        try:
+            raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = raw
+        except (OSError, yaml.YAMLError):
+            data = {}
+    data["templates_enabled"] = list(ids)
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    try:
+        cfg_path.chmod(0o600)
+    except OSError:
+        pass
+    return cfg_path
+
+
 def teach_template(
     template_id: str,
     session: object,
