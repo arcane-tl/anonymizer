@@ -189,14 +189,15 @@ function Copy-TkinterIntoRuntime {
         [Parameter(Mandatory = $true)][string] $RuntimeDir
     )
     # Embeddable CPython has no Tcl/Tk; review-window needs them on the CLI runtime.
+    # Windows Python 3.8+ only loads extension DLL deps from the pyd directory,
+    # the exe directory, and paths registered via os.add_dll_directory - not PATH alone.
     Write-Info "Copying tkinter/Tcl/Tk from build host into runtime..."
-    $probe = "import tkinter, sys; print(sys.base_prefix); print(sys.prefix)"
+    $probe = "import tkinter, sys; print(sys.base_prefix)"
     $probeOut = & $HostPython -c $probe 2>&1
     if ($LASTEXITCODE -ne 0) {
         Die "Build host Python cannot import tkinter. Install python.org Python with Tcl/Tk, then rebuild.`n$probeOut"
     }
-    $lines = @($probeOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne "" })
-    $hostPrefix = $lines[0]
+    $hostPrefix = ("$probeOut").Trim()
     if (-not $hostPrefix -or -not (Test-Path -LiteralPath $hostPrefix)) {
         Die "Could not resolve host base_prefix for tkinter copy (got: $probeOut)"
     }
@@ -205,7 +206,8 @@ function Copy-TkinterIntoRuntime {
     $dstLib = Join-Path $RuntimeDir "Lib"
     $dstDll = Join-Path $RuntimeDir "DLLs"
     $dstTcl = Join-Path $RuntimeDir "tcl"
-    New-Item -ItemType Directory -Force -Path $dstLib, $dstDll | Out-Null
+    $dstSite = Join-Path $dstLib "site-packages"
+    New-Item -ItemType Directory -Force -Path $dstLib, $dstDll, $dstSite | Out-Null
 
     $srcTk = Join-Path $hostPrefix "Lib\tkinter"
     if (-not (Test-Path -LiteralPath $srcTk)) {
@@ -216,10 +218,16 @@ function Copy-TkinterIntoRuntime {
     Copy-Item -Recurse -Force -LiteralPath $srcTk -Destination $dstTk
     Write-Ok "Copied Lib\tkinter"
 
-    # _tkinter.pyd + Tcl/Tk DLLs (names vary by Python build)
+    # _tkinter.pyd + Tcl/Tk (+ common deps). Copy into DLLs\ AND next to python.exe.
     $srcDllDir = Join-Path $hostPrefix "DLLs"
     $copiedPyd = $false
-    $dllPatterns = @("_tkinter*", "tcl*.dll", "tk*.dll", "tcl*.pyd", "tk*.pyd")
+    $copiedNames = New-Object System.Collections.Generic.List[string]
+    $dllPatterns = @(
+        "_tkinter*",
+        "tcl*.dll", "tk*.dll",
+        "tcl*.pyd", "tk*.pyd",
+        "zlib1.dll"
+    )
     $searchDirs = @()
     if (Test-Path -LiteralPath $srcDllDir) { $searchDirs += $srcDllDir }
     $searchDirs += $hostPrefix
@@ -228,6 +236,8 @@ function Copy-TkinterIntoRuntime {
             Get-ChildItem -LiteralPath $dir -File -Filter $pat -ErrorAction SilentlyContinue |
                 ForEach-Object {
                     Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $dstDll $_.Name)
+                    Copy-Item -Force -LiteralPath $_.FullName -Destination (Join-Path $RuntimeDir $_.Name)
+                    if (-not $copiedNames.Contains($_.Name)) { $copiedNames.Add($_.Name) }
                     if ($_.Name -like "_tkinter*") { $copiedPyd = $true }
                 }
         }
@@ -235,23 +245,89 @@ function Copy-TkinterIntoRuntime {
     if (-not $copiedPyd) {
         Die "Could not find _tkinter*.pyd under $hostPrefix (DLLs or prefix root)"
     }
-    Write-Ok "Copied _tkinter / Tcl/Tk binaries into DLLs\"
-
-    # Tcl/Tk script library tree (tcl8.6, tk8.6, …)
-    $srcTcl = Join-Path $hostPrefix "tcl"
-    if (Test-Path -LiteralPath $srcTcl) {
-        if (Test-Path -LiteralPath $dstTcl) { Remove-Item -Recurse -Force -LiteralPath $dstTcl }
-        Copy-Item -Recurse -Force -LiteralPath $srcTcl -Destination $dstTcl
-        Write-Ok "Copied tcl\ library tree"
-    } else {
-        Write-Warn "Host has no tcl\ directory at $srcTcl - tkinter may still work if DLLs are self-contained"
+    $hasTclDll = $false
+    $hasTkDll = $false
+    foreach ($n in $copiedNames) {
+        if ($n -match '^tcl\d' -or $n -like 'tcl*.dll') { $hasTclDll = $true }
+        if ($n -match '^tk\d' -or $n -like 'tk*.dll') { $hasTkDll = $true }
     }
+    if (-not $hasTclDll -or -not $hasTkDll) {
+        Write-Warn "Expected tcl*.dll and tk*.dll next to _tkinter; found: $($copiedNames -join ', ')"
+        if (Test-Path -LiteralPath $srcDllDir) {
+            Write-Warn "Host DLLs directory listing:"
+            Get-ChildItem -LiteralPath $srcDllDir -File | ForEach-Object { Write-Host "  host DLL: $($_.Name)" }
+        }
+        Die "Missing tcl*.dll / tk*.dll from host Python DLLs - cannot load _tkinter in runtime"
+    }
+    Write-Ok ("Copied binaries ({0}): {1}" -f $copiedNames.Count, ($copiedNames -join ", "))
+
+    # Tcl/Tk script library tree (tcl8.6, tk8.6, ...)
+    $srcTcl = Join-Path $hostPrefix "tcl"
+    if (-not (Test-Path -LiteralPath $srcTcl)) {
+        Die "Host missing tcl\ directory at $srcTcl (required for tkinter scripts)"
+    }
+    if (Test-Path -LiteralPath $dstTcl) { Remove-Item -Recurse -Force -LiteralPath $dstTcl }
+    Copy-Item -Recurse -Force -LiteralPath $srcTcl -Destination $dstTcl
+    Write-Ok "Copied tcl\ library tree"
+
+    $tclLib = Get-ChildItem -LiteralPath $dstTcl -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^tcl\d' } |
+        Select-Object -First 1
+    $tkLib = Get-ChildItem -LiteralPath $dstTcl -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^tk\d' } |
+        Select-Object -First 1
+    if (-not $tclLib -or -not $tkLib) {
+        Die "tcl\ tree missing tclN.N / tkN.N folders under $dstTcl"
+    }
+
+    # sitecustomize: register DLL dirs (Win 3.8+) + TCL/TK library paths on every start
+    $siteCustom = @"
+# Generated by build-release.ps1 - enable tkinter in embeddable runtime.
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+def _anonymizer_tk_bootstrap() -> None:
+    root = Path(sys.executable).resolve().parent
+    dll = root / "DLLs"
+    for d in (dll, root):
+        if d.is_dir() and hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(d))
+            except OSError:
+                pass
+    parts = [str(dll), str(root)]
+    path = os.environ.get("PATH", "")
+    os.environ["PATH"] = os.pathsep.join(parts + ([path] if path else []))
+    tcl_lib = root / "tcl" / "$($tclLib.Name)"
+    tk_lib = root / "tcl" / "$($tkLib.Name)"
+    if tcl_lib.is_dir():
+        os.environ.setdefault("TCL_LIBRARY", str(tcl_lib))
+    if tk_lib.is_dir():
+        os.environ.setdefault("TK_LIBRARY", str(tk_lib))
+
+_anonymizer_tk_bootstrap()
+"@
+    $sitePath = Join-Path $dstSite "sitecustomize.py"
+    [System.IO.File]::WriteAllText($sitePath, $siteCustom)
+    Write-Ok "Wrote sitecustomize.py (DLL dirs + TCL_LIBRARY=$($tclLib.Name) TK_LIBRARY=$($tkLib.Name))"
 }
 
 Copy-TkinterIntoRuntime -HostPython $Py -RuntimeDir $Runtime
+
+# import site runs sitecustomize (._pth has "import site")
 $tkCheck = "import tkinter; r=tkinter.Tk(); r.withdraw(); r.destroy(); print('tkinter ok')"
 & $PyEmbed -c $tkCheck
 if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Listing runtime DLLs for diagnosis..."
+    Get-ChildItem -LiteralPath (Join-Path $Runtime "DLLs") -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "  runtime DLL: $($_.Name)" }
+    Get-ChildItem -LiteralPath $Runtime -File -Filter "*.dll" -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "  runtime root: $($_.Name)" }
+    Get-ChildItem -LiteralPath $Runtime -File -Filter "_tkinter*" -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "  runtime root: $($_.Name)" }
     Die "runtime tkinter check failed after copy - review-window would not work in Setup"
 }
 Write-Ok "Embeddable runtime has working tkinter"
