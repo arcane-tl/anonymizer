@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# lists-io.sh — Load/save allowlist & denylist for the Mac GUI.
+# lists-io.sh — Load/save legacy allowlist & denylist (config.yaml).
 #
-# Thin wrapper around: python -m anonymizer.lists_io
+# Optional CLI helper around: python -m anonymizer.lists_io
+# Not bundled in Anonymizer.app (Templates UI uses templates-io.sh).
 # User config: ~/.config/anonymizer/config.yaml (ANONYMIZER_CONFIG override)
 #
 # Usage:

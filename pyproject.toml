@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anonymizer"
-version = "1.3.5"
+version = "1.4.0"
 description = "Local CLI to anonymize PDF/DOCX/text documents to Markdown (EN + FI)"
 readme = "README.md"
 license = "MIT"

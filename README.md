@@ -276,7 +276,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--template` | Comma-separated template ids (allow/deny packs). Default: builtin packs marked default. |
 | `--learn-to` | After `--review`, merge keep-clear / user-added surfaces into a user template. |
 
-**GUIs (Mac + Windows):** mode / style / format pop-ups, **Templates…** (shared Tk pack editor; Mac uses `anonymize templates-ui`), review (default on). Teach keep-clear/new adds into a user pack from the **review window**. Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
+**GUIs (Mac + Windows):** options open with empty file list (or pre-filled on drop/argv); **+ / −** files; **output folder** (default same folder as source, or choose `--out-dir`); mode / style / format; **Templates…** (Mac: native AppKit + `templates_io`; Windows: Tk two-step enable/edit); review (default on). Teach into user packs from the **review window**. Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
 
 ---
 

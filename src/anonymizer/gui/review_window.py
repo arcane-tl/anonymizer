@@ -124,7 +124,6 @@ _GAP = 12
 _RADIUS = 14
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
-_DONT_SAVE = "Don't save"
 
 _FONT = ("Helvetica", 13) if sys.platform == "darwin" else ("Segoe UI", 11)
 _FONT_BOLD = ("Helvetica", 14, "bold") if sys.platform == "darwin" else ("Segoe UI", 12, "bold")

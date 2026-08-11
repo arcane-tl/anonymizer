@@ -58,10 +58,8 @@ RES="$STAGE/Contents/Resources"
 mkdir -p "$RES"
 cp "$HERE/run-anonymize.sh" "$RES/run-anonymize.sh"
 chmod +x "$RES/run-anonymize.sh"
-if [[ -f "$HERE/lists-io.sh" ]]; then
-  cp "$HERE/lists-io.sh" "$RES/lists-io.sh"
-  chmod +x "$RES/lists-io.sh"
-fi
+# templates-io.sh: native Templates panel (Python bridge). lists-io.sh is no
+# longer bundled (legacy allow/deny UI removed; config still via templates_io).
 if [[ -f "$HERE/templates-io.sh" ]]; then
   cp "$HERE/templates-io.sh" "$RES/templates-io.sh"
   chmod +x "$RES/templates-io.sh"
