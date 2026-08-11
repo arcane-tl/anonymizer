@@ -8,11 +8,16 @@ from anonymizer.gui.app import (
     FORMAT_LABELS,
     MODE_LABELS,
     STYLE_LABELS,
+    _files_list_column_count,
+    _files_list_height_px,
+    _files_list_row_count,
     _guess_outputs,
     _label_for,
+    _templates_status,
     _value_for,
     resolve_dialog_icon_path,
 )
+from anonymizer.anonymize.templates import Template
 
 
 def test_resolve_dialog_icon_path_finds_packaged_asset():
@@ -72,3 +77,34 @@ def test_guess_outputs_respects_format(tmp_path: Path):
     extracted.write_text("t\n", encoding="utf-8")
     extract_outs = _guess_outputs([pdf], "extract", "both")
     assert extract_outs == [str(extracted)]
+
+
+def test_templates_status_mac_style():
+    """Active templates line: no count prefix or Templates… suffix."""
+    assert _templates_status([], []) == "No templates selected"
+    packs = [
+        Template(id="a", title="Alpha", builtin=True),
+        Template(id="b", title="Beta", builtin=False),
+    ]
+    line = _templates_status(["a", "b"], packs)
+    assert line == "Alpha, Beta"
+    assert "template(s)" not in line
+    assert "Templates" not in line
+    # Unknown id falls back to the id string
+    assert _templates_status(["missing"], packs) == "missing"
+
+
+def test_files_list_layout_helpers():
+    assert _files_list_column_count(0) == 1
+    assert _files_list_column_count(1) == 1
+    assert _files_list_column_count(2) == 2
+    assert _files_list_column_count(5) == 2
+    assert _files_list_row_count(1) == 1
+    assert _files_list_row_count(2) == 1
+    assert _files_list_row_count(3) == 2
+    assert _files_list_row_count(4) == 2
+    h1 = _files_list_height_px(1)
+    h4 = _files_list_height_px(4)
+    assert h4 > h1
+    # Cap: many files do not grow without bound
+    assert _files_list_height_px(100) == _files_list_height_px(16)

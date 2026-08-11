@@ -16,11 +16,10 @@ from pathlib import Path
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, simpledialog, ttk
+    from tkinter import filedialog, messagebox, ttk
 except ImportError as _tk_err:  # pragma: no cover
     tk = None  # type: ignore[assignment]
     ttk = None  # type: ignore[assignment]
-    simpledialog = None  # type: ignore[assignment]
     _TK_IMPORT_ERROR = _tk_err
 else:
     _TK_IMPORT_ERROR = None
@@ -248,14 +247,88 @@ def _find_anonymize() -> list[str] | None:
 def _templates_status(
     enabled_ids: list[str], all_packs: list[Template] | None = None
 ) -> str:
+    """Active-templates status line (Mac templatesStatusLine spirit).
+
+    Empty → "No templates selected". Otherwise comma-separated display titles
+    (ids as fallback). No count prefix or "— Templates…" suffix.
+    """
     packs = all_packs if all_packs is not None else discover_templates()
     by_id = {t.id: t for t in packs}
-    n = len(enabled_ids)
-    if n == 0:
-        return "No templates selected for this run  —  edit with Templates…"
-    names = [by_id[i].display_title() if i in by_id else i for i in enabled_ids[:3]]
-    more = f" +{n - 3}" if n > 3 else ""
-    return f"{n} template(s): {', '.join(names)}{more}  —  Templates…"
+    if not enabled_ids:
+        return "No templates selected"
+    names = [by_id[i].display_title() if i in by_id else i for i in enabled_ids]
+    return ", ".join(names)
+
+
+def _files_list_column_count(n_files: int) -> int:
+    """1 column for a single file; 2 columns when multiple (Mac parity)."""
+    return 2 if n_files > 1 else 1
+
+
+def _files_list_row_count(n_files: int) -> int:
+    if n_files <= 0:
+        return 1
+    cols = _files_list_column_count(n_files)
+    return (n_files + cols - 1) // cols
+
+
+def _files_list_height_px(n_files: int, *, row_h: int = 22, pad: int = 12) -> int:
+    """Dynamic files-well height from content; capped like Mac (~max rows)."""
+    rows = _files_list_row_count(n_files)
+    rows = max(1, min(rows, 8))
+    return rows * row_h + pad
+
+
+def _pack_files_list(parent: "tk.Misc", files: list[Path], *, width_px: int = 420) -> "tk.Frame":
+    """Compact multi-column file names well (Mac makeFilesListWell parity)."""
+    n = len(files)
+    cols = _files_list_column_count(n)
+    h = _files_list_height_px(n)
+    wrap = tk.Frame(
+        parent,
+        bg=_BG_WELL,
+        highlightthickness=1,
+        highlightbackground=_BORDER,
+        highlightcolor=_BORDER,
+        height=h,
+    )
+    wrap.pack(fill=tk.X, pady=(4, 4))
+    wrap.pack_propagate(False)
+    inner = tk.Frame(wrap, bg=_BG_WELL)
+    inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
+    for c in range(cols):
+        inner.columnconfigure(c, weight=1, uniform="files")
+    col_w = max(80, (width_px - 24) // cols)
+    names = [p.name for p in files]
+    for i, name in enumerate(names):
+        if cols == 1:
+            r, c = i, 0
+        else:
+            r, c = i // cols, i % cols
+        # Truncate long basenames for display
+        display = name
+        if len(display) > 36:
+            stem, _, ext = display.rpartition(".")
+            if stem and ext and len(ext) <= 5:
+                keep = 32 - len(ext)
+                display = (
+                    (stem[: max(8, keep)] + "…" + "." + ext)
+                    if keep > 0
+                    else display[:33] + "…"
+                )
+            else:
+                display = display[:33] + "…"
+        tk.Label(
+            inner,
+            text=display,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+            justify=tk.LEFT,
+            width=max(12, col_w // 7),
+        ).grid(row=r, column=c, sticky="ew", padx=(0, 8), pady=1)
+    return wrap
 
 
 def _filter_paths(paths: list[str] | tuple[str, ...]) -> list[Path]:
@@ -766,9 +839,14 @@ def _raise_toplevel(win: "tk.Misc") -> None:
 
 
 class TemplatesDialog(tk.Toplevel):
-    """Master–detail: left templates (enable for run), right allow/deny editors.
+    """Two-step Templates UI matching Mac AppKit flow.
 
-    Styled to match OptionsApp (dark charcoal, canvas chips, wells, title icon).
+    A) Enable list: checkbox + row actions (edit / duplicate / trash),
+       footer ``+ New`` left · ``Cancel`` + ``Done`` right.
+    B) Edit pack: click title/description in place; allow/deny lists;
+       Save/Cancel (user) or Close (builtin); returns to enable list.
+
+    Done persists ``templates_enabled``; Cancel discards enablement changes.
     """
 
     def __init__(
@@ -781,15 +859,13 @@ class TemplatesDialog(tk.Toplevel):
         super().__init__(master)
         self.title(f"Anonymizer {__version__} — Templates")
         self.resizable(True, True)
-        self.geometry("860x560")
-        self.minsize(720, 440)
+        self.geometry("520x520")
+        self.minsize(460, 400)
         # Done → list of enabled template ids; Cancel → None
         self.result: list[str] | None = None
         self._standalone = standalone
-        # Full-window charcoal so no Aqua default gray shows around content.
         self.configure(bg=_BG_APP)
         try:
-            # macOS: document window; avoids utility-panel stacking quirks
             if sys.platform == "darwin":
                 self.tk.call(
                     "::tk::unsupported::MacWindowStyle",
@@ -800,8 +876,6 @@ class TemplatesDialog(tk.Toplevel):
                 )
         except tk.TclError:
             pass
-        # Child of OptionsApp when parent is visible → sits above options.
-        # Never transient(withdrawn parent) on macOS — dialog may never show.
         if not standalone:
             try:
                 if bool(master.winfo_viewable()):
@@ -819,53 +893,150 @@ class TemplatesDialog(tk.Toplevel):
         self._enabled: dict[str, tk.BooleanVar] = {}
         for t in self._packs:
             self._enabled[t.id] = tk.BooleanVar(value=(t.id in enabled_ids))
-        self._selected_id: str | None = self._packs[0].id if self._packs else None
-        self._dirty = False
-        self._loading_editor = False
-        self._row_frames: dict[str, tk.Frame] = {}
+        self._view = "list"  # "list" | "edit"
+        self._edit_pack_id: str | None = None
+        self._edit_builtin = False
+        self._title_editing = False
+        self._desc_editing = False
 
-        pad = 24
-        outer = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
-        outer.pack(fill=tk.BOTH, expand=True)
+        self._pad = 24
+        self._outer = tk.Frame(self, bg=_BG_APP, padx=self._pad, pady=self._pad)
+        self._outer.pack(fill=tk.BOTH, expand=True)
+
+        self._build_list_view()
+        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Return>", self._on_return)
+        self.bind("<KP_Enter>", self._on_return)
+        try:
+            _raise_toplevel(self)
+            self.after(50, lambda: _raise_toplevel(self))
+            self.after(300, lambda: _raise_toplevel(self))
+        except tk.TclError:
+            pass
+        self.wait_window(self)
+
+    # ── shared helpers ────────────────────────────────────────────
+
+    def _clear_outer(self) -> None:
+        for w in self._outer.winfo_children():
+            w.destroy()
+
+    def _pack_by_id(self, tid: str) -> Template | None:
+        for t in self._packs:
+            if t.id == tid:
+                return t
+        return None
+
+    def _reload_packs(self) -> None:
+        prev = {tid: var.get() for tid, var in self._enabled.items()}
+        self._packs = discover_templates()
+        self._enabled = {}
+        for t in self._packs:
+            self._enabled[t.id] = tk.BooleanVar(
+                value=prev.get(t.id, False)
+            )
+
+    def _enabled_ids(self) -> list[str]:
+        return [
+            t.id
+            for t in self._packs
+            if self._enabled.get(t.id, tk.BooleanVar()).get()
+        ]
+
+    def _icon_btn(
+        self,
+        parent: tk.Misc,
+        glyph: str,
+        command,
+        *,
+        tooltip: str = "",
+        chrome: str | None = None,
+    ) -> tk.Frame:
+        """Small square action button for list rows."""
+        bg = chrome if chrome is not None else _BG_WELL
+        size = 26
+        wrap = tk.Frame(parent, bg=bg, width=size, height=size, cursor="hand2")
+        wrap.pack_propagate(False)
+        cv = tk.Canvas(
+            wrap,
+            width=size,
+            height=size,
+            bg=bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        cv.pack(fill=tk.BOTH, expand=True)
+        state = {"hover": False}
+
+        def _paint() -> None:
+            cv.delete("all")
+            fill = _BG_BTN_HOVER if state["hover"] else bg
+            cv.configure(bg=fill)
+            cv.create_text(
+                size // 2,
+                size // 2,
+                text=glyph,
+                fill=_TEXT_MUTED if not state["hover"] else _TEXT,
+                font=_FONT_SMALL,
+            )
+
+        def _run(_e=None) -> None:
+            if command is not None:
+                command()
+
+        _paint()
+        cv.bind("<Button-1>", _run)
+        wrap.bind("<Button-1>", _run)
+        cv.bind("<Enter>", lambda _e: state.update(hover=True) or _paint())
+        cv.bind("<Leave>", lambda _e: state.update(hover=False) or _paint())
+        if tooltip:
+            # Lightweight tooltip via title (cross-platform; no extra windows)
+            try:
+                wrap.configure(takefocus=0)
+                cv.configure()
+            except tk.TclError:
+                pass
+            # Store for potential accessibility; Label hover title
+            wrap._tooltip = tooltip  # type: ignore[attr-defined]
+        return wrap
+
+    # ── View A: enable list ───────────────────────────────────────
+
+    def _build_list_view(self) -> None:
+        self._view = "list"
+        self._edit_pack_id = None
+        self._clear_outer()
+        outer = self._outer
 
         _pack_title_row(outer, "Templates", self._icon_refs)
         tk.Label(
             outer,
             text=(
-                "Check packs for this run. Select a pack to edit allow (never redact) "
-                "and deny (always redact). Builtin packs are read-only — fork to customize."
+                "Turn templates on for this run. Pencil edits lists; "
+                "copy duplicates; trash deletes user templates."
             ),
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
-            wraplength=800,
+            wraplength=460,
             justify=tk.LEFT,
             anchor=tk.W,
         ).pack(anchor=tk.W, pady=(0, 16))
 
-        body = tk.Frame(outer, bg=_BG_APP)
-        body.pack(fill=tk.BOTH, expand=True)
-
-        # ── Left: template list ───────────────────────────────────
-        left = tk.Frame(body, bg=_BG_APP, width=250)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16))
-        left.pack_propagate(False)
-        tk.Label(
-            left, text="Packs", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
-        ).pack(anchor=tk.W, pady=(0, 4))
-
         list_wrap = tk.Frame(
-            left,
+            outer,
             bg=_BG_WELL,
             highlightthickness=1,
             highlightbackground=_BORDER,
             highlightcolor=_BORDER,
         )
         list_wrap.pack(fill=tk.BOTH, expand=True)
+
         self._list_canvas = tk.Canvas(
             list_wrap, bg=_BG_WELL, highlightthickness=0, bd=0
         )
-        # Dark-ish scrollbar (platform native; trough where supported)
         sb = tk.Scrollbar(
             list_wrap,
             orient=tk.VERTICAL,
@@ -892,165 +1063,35 @@ class TemplatesDialog(tk.Toplevel):
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self._list_canvas.bind(
             "<Configure>",
-            lambda e: self._list_canvas.itemconfigure(self._list_win, width=e.width),
+            lambda e: self._list_canvas.itemconfigure(
+                self._list_win, width=e.width
+            ),
         )
 
-        left_btns = tk.Frame(left, bg=_BG_APP)
-        left_btns.pack(fill=tk.X, pady=(10, 0))
-        _chip_button(left_btns, "+ New", self._new_template, width=9).pack(
-            side=tk.LEFT, padx=(0, 8)
+        self._rebuild_list_rows()
+
+        # Action bar: + New left · Cancel + Done right
+        foot = tk.Frame(outer, bg=_BG_APP)
+        foot.pack(fill=tk.X, pady=(20, 0))
+        _chip_button(foot, "+ New", self._new_template, width=9).pack(side=tk.LEFT)
+        right = tk.Frame(foot, bg=_BG_APP)
+        right.pack(side=tk.RIGHT)
+        _chip_button(right, "Cancel", self._cancel, width=11).pack(
+            side=tk.LEFT, padx=(0, 10)
         )
-        _chip_button(left_btns, "Delete", self._delete_template, width=9).pack(
+        _chip_button(right, "Done", self._done, primary=True, width=11).pack(
             side=tk.LEFT
         )
 
-        # ── Right: allow / deny ───────────────────────────────────
-        right = tk.Frame(body, bg=_BG_APP)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        head = tk.Frame(right, bg=_BG_APP)
-        head.pack(fill=tk.X, pady=(0, 4))
-        self._title_lbl = tk.Label(
-            head, text="", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
-        )
-        self._title_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._badge_lbl = tk.Label(
-            head, text="", bg=_BG_APP, fg=_TEXT_MUTED, font=_FONT_SMALL, anchor=tk.E
-        )
-        self._badge_lbl.pack(side=tk.RIGHT)
-
-        self._desc_lbl = tk.Label(
-            right,
-            text="",
-            bg=_BG_APP,
-            fg=_TEXT_MUTED,
-            font=_FONT_SMALL,
-            wraplength=520,
-            justify=tk.LEFT,
-            anchor=tk.W,
-        )
-        self._desc_lbl.pack(anchor=tk.W, pady=(0, 12))
-
-        # Equal allow / deny panes (grid weight=1 each)
-        editors = tk.Frame(right, bg=_BG_APP)
-        editors.pack(fill=tk.BOTH, expand=True)
-        editors.columnconfigure(0, weight=1)
-        editors.rowconfigure(1, weight=1, uniform="editors")
-        editors.rowconfigure(3, weight=1, uniform="editors")
-
-        tk.Label(
-            editors,
-            text="Never redact (allow)",
-            bg=_BG_APP,
-            fg=_TEXT,
-            font=_FONT_BOLD,
-            anchor=tk.W,
-        ).grid(row=0, column=0, sticky="ew")
-        self.allow_txt = tk.Text(
-            editors,
-            height=6,
-            font=_FONT_SMALL,
-            bg=_BG_WELL,
-            fg=_TEXT,
-            insertbackground=_TEXT,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=_BORDER,
-            highlightcolor=_ACCENT,
-            bd=0,
-            padx=10,
-            pady=8,
-            wrap=tk.WORD,
-            selectbackground=_SELECT,
-            selectforeground=_TEXT,
-        )
-        self.allow_txt.grid(row=1, column=0, sticky="nsew", pady=(4, 12))
-        self.allow_txt.bind("<<Modified>>", self._on_editor_modified)
-
-        tk.Label(
-            editors,
-            text="Always redact (deny)",
-            bg=_BG_APP,
-            fg=_TEXT,
-            font=_FONT_BOLD,
-            anchor=tk.W,
-        ).grid(row=2, column=0, sticky="ew")
-        self.deny_txt = tk.Text(
-            editors,
-            height=6,
-            font=_FONT_SMALL,
-            bg=_BG_WELL,
-            fg=_TEXT,
-            insertbackground=_TEXT,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=_BORDER,
-            highlightcolor=_ACCENT,
-            bd=0,
-            padx=10,
-            pady=8,
-            wrap=tk.WORD,
-            selectbackground=_SELECT,
-            selectforeground=_TEXT,
-        )
-        self.deny_txt.grid(row=3, column=0, sticky="nsew", pady=(4, 8))
-        self.deny_txt.bind("<<Modified>>", self._on_editor_modified)
-
-        edit_btns = tk.Frame(right, bg=_BG_APP)
-        edit_btns.pack(fill=tk.X, pady=(4, 0))
-        self._fork_btn = _chip_button(
-            edit_btns, "Fork & edit…", self._fork_selected, width=12
-        )
-        self._fork_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self._revert_btn = _chip_button(
-            edit_btns, "Revert", self._revert_editor, width=9
-        )
-        self._revert_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self._save_btn = _chip_button(
-            edit_btns, "Save pack", self._save_pack, primary=True, width=11
-        )
-        self._save_btn.pack(side=tk.RIGHT)
-
-        # Action bar: Cancel left · Done primary right (OptionsApp parity)
-        foot = tk.Frame(outer, bg=_BG_APP)
-        foot.pack(fill=tk.X, pady=(20, 0))
-        _chip_button(foot, "Cancel", self._cancel, width=11).pack(side=tk.LEFT)
-        _chip_button(foot, "Done", self._done, primary=True, width=11).pack(
-            side=tk.RIGHT
-        )
-
-        self._rebuild_list()
-        if self._selected_id:
-            self._load_editor(self._selected_id)
-
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
-        # Stay above OptionsApp / NSPanel for the whole dialog lifetime.
-        # Clearing topmost early let the options window cover Templates.
-        try:
-            _raise_toplevel(self)
-            # Re-assert after event loop starts (Aqua sometimes loses first raise)
-            self.after(50, lambda: _raise_toplevel(self))
-            self.after(300, lambda: _raise_toplevel(self))
-        except tk.TclError:
-            pass
-        self.wait_window(self)
-
-    def _pack_by_id(self, tid: str) -> Template | None:
-        for t in self._packs:
-            if t.id == tid:
-                return t
-        return None
-
-    def _rebuild_list(self) -> None:
+    def _rebuild_list_rows(self) -> None:
         for w in self._list_inner.winfo_children():
             w.destroy()
-        self._row_frames.clear()
         for t in self._packs:
             if t.id not in self._enabled:
                 self._enabled[t.id] = tk.BooleanVar(value=False)
-            row = tk.Frame(self._list_inner, bg=_BG_WELL, cursor="hand2")
-            row.pack(fill=tk.X, padx=4, pady=2)
-            self._row_frames[t.id] = row
+            row = tk.Frame(self._list_inner, bg=_BG_WELL)
+            row.pack(fill=tk.X, padx=6, pady=3)
+
             cb = tk.Checkbutton(
                 row,
                 variable=self._enabled[t.id],
@@ -1063,116 +1104,337 @@ class TemplatesDialog(tk.Toplevel):
                 bd=0,
                 cursor="hand2",
             )
-            cb.pack(side=tk.LEFT, padx=(6, 2))
+            cb.pack(side=tk.LEFT, padx=(4, 4))
+
             kind = "builtin" if t.builtin else "user"
             lbl = tk.Label(
                 row,
-                text=f"{t.display_title()}\n{t.id} · {kind}",
+                text=f"{t.display_title()}  ·  {kind}",
                 bg=_BG_WELL,
                 fg=_TEXT,
                 font=_FONT_SMALL,
                 justify=tk.LEFT,
                 anchor=tk.W,
-                cursor="hand2",
             )
-            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=6)
-            for widget in (row, lbl):
-                widget.bind("<Button-1>", lambda _e, i=t.id: self._select(i))
-            self._paint_row(t.id)
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 6), pady=4)
+
+            actions = tk.Frame(row, bg=_BG_WELL)
+            actions.pack(side=tk.RIGHT, padx=(0, 2))
+            tid = t.id
+            self._icon_btn(
+                actions, "✎", lambda i=tid: self._open_edit(i), tooltip="Edit template"
+            ).pack(side=tk.LEFT, padx=1)
+            self._icon_btn(
+                actions,
+                "⧉",
+                lambda i=tid: self._duplicate(i),
+                tooltip="Duplicate template",
+            ).pack(side=tk.LEFT, padx=1)
+            if not t.builtin:
+                self._icon_btn(
+                    actions,
+                    "🗑",
+                    lambda i=tid: self._delete(i),
+                    tooltip="Delete template",
+                ).pack(side=tk.LEFT, padx=1)
+
         self._list_inner.update_idletasks()
         self._list_canvas.configure(scrollregion=self._list_canvas.bbox("all"))
 
-    def _paint_row(self, tid: str) -> None:
-        fr = self._row_frames.get(tid)
-        if not fr:
-            return
-        bg = _SELECT if tid == self._selected_id else _BG_WELL
-        fr.configure(bg=bg)
-        for child in fr.winfo_children():
-            try:
-                child.configure(bg=bg, activebackground=bg)
-            except tk.TclError:
-                pass
+    # ── View B: edit pack ─────────────────────────────────────────
 
-    def _select(self, tid: str) -> None:
-        if tid == self._selected_id:
-            return
-        if self._dirty and not self._confirm_discard():
-            return
-        prev = self._selected_id
-        self._selected_id = tid
-        if prev:
-            self._paint_row(prev)
-        self._paint_row(tid)
-        self._load_editor(tid)
-
-    def _confirm_discard(self) -> bool:
-        return messagebox.askyesno(
-            "Unsaved changes",
-            "Discard unsaved edits to this pack?",
-            parent=self,
-        )
-
-    def _on_editor_modified(self, _event=None) -> None:
-        if self._loading_editor:
-            for w in (self.allow_txt, self.deny_txt):
-                w.edit_modified(False)
-            return
-        if self.allow_txt.edit_modified() or self.deny_txt.edit_modified():
-            self._dirty = True
-            for w in (self.allow_txt, self.deny_txt):
-                w.edit_modified(False)
-
-    def _load_editor(self, tid: str) -> None:
+    def _open_edit(self, tid: str) -> None:
         t = self._pack_by_id(tid)
         if t is None:
+            # May be newly created; reload
+            self._reload_packs()
+            t = self._pack_by_id(tid)
+        if t is None:
+            messagebox.showerror(
+                "Anonymizer", f"Could not load template “{tid}”.", parent=self
+            )
             return
-        self._loading_editor = True
-        self._title_lbl.configure(text=t.display_title())
-        self._badge_lbl.configure(text="builtin" if t.builtin else "user")
-        self._desc_lbl.configure(text=(t.description or "").strip())
-        self.allow_txt.configure(state=tk.NORMAL)
-        self.deny_txt.configure(state=tk.NORMAL)
-        self.allow_txt.delete("1.0", tk.END)
-        self.deny_txt.delete("1.0", tk.END)
+        self._build_edit_view(t)
+
+    def _build_edit_view(self, t: Template) -> None:
+        self._view = "edit"
+        self._edit_pack_id = t.id
+        self._edit_builtin = bool(t.builtin)
+        self._title_editing = False
+        self._desc_editing = False
+        self._clear_outer()
+        outer = self._outer
+
+        _pack_title_row(outer, "Templates", self._icon_refs)
+
+        # Click-to-edit title
+        title_row = tk.Frame(outer, bg=_BG_APP)
+        title_row.pack(fill=tk.X, pady=(8, 4))
+        self._title_label = tk.Label(
+            title_row,
+            text=t.display_title(),
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_TITLE,
+            anchor=tk.W,
+            cursor="hand2" if not t.builtin else "arrow",
+        )
+        self._title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._title_entry = tk.Entry(
+            title_row,
+            font=_FONT_TITLE,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+        )
+        # Hidden until click
+        if not t.builtin:
+            self._title_label.bind("<Button-1>", lambda _e: self._begin_title_edit())
+            self._title_entry.bind("<FocusOut>", lambda _e: self._end_title_edit())
+            self._title_entry.bind("<Return>", lambda _e: self._end_title_edit())
+
+        badge = "builtin · read-only" if t.builtin else "user"
+        tk.Label(
+            outer,
+            text=badge,
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        # Click-to-edit description (container keeps pack order above editors)
+        self._desc_frame = tk.Frame(outer, bg=_BG_APP)
+        self._desc_frame.pack(anchor=tk.W, fill=tk.X, pady=(0, 12))
+        desc_text = (t.description or "").strip() or (
+            "Click to add a description" if not t.builtin else ""
+        )
+        self._desc_label = tk.Label(
+            self._desc_frame,
+            text=desc_text,
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            wraplength=460,
+            justify=tk.LEFT,
+            anchor=tk.W,
+            cursor="hand2" if not t.builtin else "arrow",
+        )
+        self._desc_label.pack(anchor=tk.W, fill=tk.X)
+        self._desc_text = tk.Text(
+            self._desc_frame,
+            height=3,
+            font=_FONT_SMALL,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+            bd=0,
+            padx=8,
+            pady=6,
+            wrap=tk.WORD,
+        )
+        if not t.builtin:
+            self._desc_label.bind("<Button-1>", lambda _e: self._begin_desc_edit())
+            self._desc_text.bind("<FocusOut>", lambda _e: self._end_desc_edit())
+
+        # Allow / deny
+        editors = tk.Frame(outer, bg=_BG_APP)
+        editors.pack(fill=tk.BOTH, expand=True)
+        editors.columnconfigure(0, weight=1)
+        editors.rowconfigure(2, weight=1, uniform="ed")
+        editors.rowconfigure(5, weight=1, uniform="ed")
+
+        tk.Label(
+            editors,
+            text="Never redact (allow)",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            editors,
+            text="One word or phrase per line.",
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        self.allow_txt = tk.Text(
+            editors,
+            height=5,
+            font=_FONT_SMALL,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+            bd=0,
+            padx=10,
+            pady=8,
+            wrap=tk.WORD,
+            selectbackground=_SELECT,
+            selectforeground=_TEXT,
+        )
+        self.allow_txt.grid(row=2, column=0, sticky="nsew", pady=(0, 12))
         self.allow_txt.insert("1.0", "\n".join(t.allow))
+
+        tk.Label(
+            editors,
+            text="Always redact (deny)",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).grid(row=3, column=0, sticky="ew")
+        tk.Label(
+            editors,
+            text="One word or phrase per line.",
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).grid(row=4, column=0, sticky="ew", pady=(2, 4))
+        self.deny_txt = tk.Text(
+            editors,
+            height=5,
+            font=_FONT_SMALL,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_ACCENT,
+            bd=0,
+            padx=10,
+            pady=8,
+            wrap=tk.WORD,
+            selectbackground=_SELECT,
+            selectforeground=_TEXT,
+        )
+        self.deny_txt.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
         self.deny_txt.insert("1.0", "\n".join(d.text for d in t.deny))
-        for w in (self.allow_txt, self.deny_txt):
-            w.edit_modified(False)
+
         if t.builtin:
             self.allow_txt.configure(state=tk.DISABLED)
             self.deny_txt.configure(state=tk.DISABLED)
-            self._save_btn.configure(state=tk.DISABLED)
-            self._revert_btn.configure(state=tk.DISABLED)
-            try:
-                self._fork_btn.configure(state=tk.NORMAL)
-            except tk.TclError:
-                pass
-        else:
-            self.allow_txt.configure(state=tk.NORMAL)
-            self.deny_txt.configure(state=tk.NORMAL)
-            self._save_btn.configure(state=tk.NORMAL)
-            self._revert_btn.configure(state=tk.NORMAL)
-            try:
-                self._fork_btn.configure(state=tk.DISABLED)
-            except tk.TclError:
-                pass
-        self._dirty = False
-        self._loading_editor = False
 
-    def _current_editor_template(self) -> Template | None:
-        tid = self._selected_id
+        foot = tk.Frame(outer, bg=_BG_APP)
+        foot.pack(fill=tk.X, pady=(16, 0))
+        if t.builtin:
+            _chip_button(foot, "Close", self._close_edit, width=11).pack(side=tk.RIGHT)
+        else:
+            right = tk.Frame(foot, bg=_BG_APP)
+            right.pack(side=tk.RIGHT)
+            _chip_button(right, "Cancel", self._close_edit, width=11).pack(
+                side=tk.LEFT, padx=(0, 10)
+            )
+            _chip_button(
+                right, "Save", self._save_edit, primary=True, width=11
+            ).pack(side=tk.LEFT)
+
+    def _begin_title_edit(self) -> None:
+        if self._edit_builtin or self._title_editing:
+            return
+        self._end_desc_edit()
+        cur = self._title_label.cget("text")
+        self._title_entry.delete(0, tk.END)
+        self._title_entry.insert(0, cur)
+        self._title_label.pack_forget()
+        self._title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._title_entry.focus_set()
+        self._title_entry.selection_range(0, tk.END)
+        self._title_editing = True
+
+    def _end_title_edit(self) -> None:
+        if not self._title_editing:
+            return
+        t = self._title_entry.get().strip()
+        if not t:
+            t = self._title_label.cget("text")
+        self._title_label.configure(text=t)
+        self._title_entry.pack_forget()
+        self._title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._title_editing = False
+
+    def _begin_desc_edit(self) -> None:
+        if self._edit_builtin or self._desc_editing:
+            return
+        self._end_title_edit()
+        cur = self._desc_label.cget("text")
+        if cur == "Click to add a description":
+            cur = ""
+        self._desc_text.delete("1.0", tk.END)
+        self._desc_text.insert("1.0", cur)
+        self._desc_label.pack_forget()
+        self._desc_text.pack(anchor=tk.W, fill=tk.X)
+        self._desc_text.focus_set()
+        self._desc_editing = True
+
+    def _end_desc_edit(self) -> None:
+        if not self._desc_editing:
+            return
+        t = self._desc_text.get("1.0", "end-1c").strip()
+        display = t if t else "Click to add a description"
+        self._desc_label.configure(text=display)
+        self._desc_text.pack_forget()
+        self._desc_label.pack(anchor=tk.W, fill=tk.X)
+        self._desc_editing = False
+
+    def _current_edit_title(self) -> str:
+        if self._title_editing:
+            return self._title_entry.get().strip()
+        return str(self._title_label.cget("text")).strip()
+
+    def _current_edit_description(self) -> str:
+        if self._desc_editing:
+            return self._desc_text.get("1.0", "end-1c").strip()
+        t = str(self._desc_label.cget("text")).strip()
+        if t == "Click to add a description":
+            return ""
+        return t
+
+    def _save_edit(self) -> None:
+        tid = self._edit_pack_id
         if not tid:
-            return None
+            return
         base = self._pack_by_id(tid)
-        if base is None or base.builtin:
-            return base
+        if base is None:
+            return
+        if base.builtin:
+            messagebox.showinfo(
+                "Anonymizer",
+                "Builtin templates are read-only. Use the copy icon in the "
+                "list to duplicate one.",
+                parent=self,
+            )
+            return
+        self._end_title_edit()
+        self._end_desc_edit()
+        title = self._current_edit_title()
+        if not title:
+            messagebox.showwarning(
+                "Anonymizer", "Name is required.", parent=self
+            )
+            return
+        desc = self._current_edit_description()
         allow = lines_from_text(self.allow_txt.get("1.0", "end-1c"))
         deny = deny_from_lines(lines_from_text(self.deny_txt.get("1.0", "end-1c")))
-        return Template(
+        updated = Template(
             id=base.id,
-            title=base.title,
-            description=base.description,
+            title=title,
+            description=desc,
             allow=allow,
             deny=deny,
             builtin=False,
@@ -1180,77 +1442,87 @@ class TemplatesDialog(tk.Toplevel):
             path=base.path,
             languages=list(base.languages),
         )
-
-    def _save_pack(self) -> None:
-        t = self._current_editor_template()
-        if t is None or t.builtin:
-            return
         try:
-            path = save_template(t)
-            # Reload from disk
+            path = save_template(updated)
             loaded = load_template_file(path, builtin=False)
-            self._packs = [loaded if p.id == loaded.id else p for p in self._packs]
-            if not any(p.id == loaded.id for p in self._packs):
-                self._packs.append(loaded)
-            self._packs.sort(key=lambda x: (not x.builtin, x.id))
-            self._dirty = False
-            self._rebuild_list()
-            self._selected_id = loaded.id
-            self._load_editor(loaded.id)
-            messagebox.showinfo("Anonymizer", f"Saved {path.name}", parent=self)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror(
                 "Anonymizer", f"Could not save template:\n{exc}", parent=self
             )
-
-    def _revert_editor(self) -> None:
-        if self._selected_id:
-            self._load_editor(self._selected_id)
-
-    def _fork_selected(self) -> None:
-        t = self._pack_by_id(self._selected_id or "")
-        if t is None or not t.builtin:
             return
-        if self._dirty and not self._confirm_discard():
-            return
+        # Keep enablement for this id
+        was_on = self._enabled.get(loaded.id, tk.BooleanVar(value=True)).get()
+        self._reload_packs()
+        if loaded.id not in {p.id for p in self._packs}:
+            self._packs.append(loaded)
+            self._packs.sort(key=lambda x: (not x.builtin, x.id))
+        self._enabled[loaded.id] = tk.BooleanVar(value=was_on)
+        self._build_list_view()
+
+    def _close_edit(self) -> None:
+        # Discard editor; keep enablement toggles; return to list
+        self._reload_packs()
+        self._build_list_view()
+
+    # ── pack operations ───────────────────────────────────────────
+
+    def _unique_fork(self, t: Template) -> Template:
         forked = fork_template(t)
+        base = forked.id
+        n = 2
+        known = {p.id for p in self._packs}
+        while forked.id in known:
+            forked = Template(
+                id=slugify(f"{base}-{n}"),
+                title=forked.title,
+                description=forked.description,
+                allow=list(forked.allow),
+                deny=list(forked.deny),
+                builtin=False,
+                default=False,
+                languages=list(forked.languages),
+            )
+            n += 1
+        return forked
+
+    def _duplicate(self, tid: str) -> None:
+        t = self._pack_by_id(tid)
+        if t is None:
+            return
+        forked = self._unique_fork(t)
         try:
             path = save_template(forked)
             loaded = load_template_file(path, builtin=False)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror(
-                "Anonymizer", f"Could not fork template:\n{exc}", parent=self
+                "Anonymizer", f"Could not duplicate template:\n{exc}", parent=self
             )
             return
         self._packs.append(loaded)
         self._packs.sort(key=lambda x: (not x.builtin, x.id))
         self._enabled[loaded.id] = tk.BooleanVar(value=True)
-        self._selected_id = loaded.id
-        self._rebuild_list()
-        self._load_editor(loaded.id)
+        self._rebuild_list_rows()
 
     def _new_template(self) -> None:
-        if simpledialog is None:
-            return
-        if self._dirty and not self._confirm_discard():
-            return
-        name = simpledialog.askstring(
-            "New template",
-            "Name for the new pack:",
-            parent=self,
-        )
-        if not name or not name.strip():
-            return
-        tid = slugify(name)
-        if any(p.id == tid for p in self._packs):
-            messagebox.showerror(
-                "Anonymizer", f"A template named “{tid}” already exists.", parent=self
-            )
-            return
+        """Create empty user pack (default “New template”) and open edit — no name dialog."""
+        title = "New template"
+        known = {p.id for p in self._packs}
+        tid = slugify(title) or "new-template"
+        base = tid
+        n = 2
+        while tid in known:
+            tid = slugify(f"{base}-{n}")
+            n += 1
+        display = title
+        if any(p.display_title() == display for p in self._packs):
+            k = 2
+            while any(p.display_title() == f"{title} {k}" for p in self._packs):
+                k += 1
+            display = f"{title} {k}"
         t = Template(
             id=tid,
-            title=name.strip(),
-            description="User template",
+            title=display,
+            description="",
             builtin=False,
             default=False,
         )
@@ -1265,24 +1537,22 @@ class TemplatesDialog(tk.Toplevel):
         self._packs.append(loaded)
         self._packs.sort(key=lambda x: (not x.builtin, x.id))
         self._enabled[loaded.id] = tk.BooleanVar(value=True)
-        self._selected_id = loaded.id
-        self._rebuild_list()
-        self._load_editor(loaded.id)
+        self._build_edit_view(loaded)
 
-    def _delete_template(self) -> None:
-        t = self._pack_by_id(self._selected_id or "")
+    def _delete(self, tid: str) -> None:
+        t = self._pack_by_id(tid)
         if t is None:
             return
         if t.builtin:
             messagebox.showinfo(
                 "Anonymizer",
-                "Builtin packs cannot be deleted. Fork one to customize.",
+                "Builtin templates cannot be deleted.",
                 parent=self,
             )
             return
         if not messagebox.askyesno(
-            "Delete template",
-            f"Delete user pack “{t.display_title()}”?\nThis cannot be undone.",
+            "Anonymizer",
+            f"Delete template “{t.display_title()}”?\nThis cannot be undone.",
             parent=self,
         ):
             return
@@ -1296,27 +1566,13 @@ class TemplatesDialog(tk.Toplevel):
                 return
         self._packs = [p for p in self._packs if p.id != t.id]
         self._enabled.pop(t.id, None)
-        self._selected_id = self._packs[0].id if self._packs else None
-        self._dirty = False
-        self._rebuild_list()
-        if self._selected_id:
-            self._load_editor(self._selected_id)
+        self._rebuild_list_rows()
 
-    def _enabled_ids(self) -> list[str]:
-        return [t.id for t in self._packs if self._enabled.get(t.id, tk.BooleanVar()).get()]
+    # ── list Done / Cancel ────────────────────────────────────────
 
     def _done(self) -> None:
-        if self._dirty:
-            if messagebox.askyesno(
-                "Unsaved changes",
-                "Save edits to the current pack before Done?",
-                parent=self,
-            ):
-                self._save_pack()
-            elif not self._confirm_discard():
-                return
-            else:
-                self._dirty = False
+        if self._view != "list":
+            return
         ids = self._enabled_ids()
         try:
             persist_templates_enabled(ids)
@@ -1331,10 +1587,44 @@ class TemplatesDialog(tk.Toplevel):
         self.destroy()
 
     def _cancel(self) -> None:
-        if self._dirty and not self._confirm_discard():
+        if self._view == "edit":
+            self._close_edit()
             return
         self.result = None
         self.destroy()
+
+    def _on_window_close(self) -> None:
+        if self._view == "edit":
+            self._close_edit()
+            return
+        self.result = None
+        self.destroy()
+
+    def _on_escape(self, _event=None) -> str:
+        if self._view == "edit":
+            self._close_edit()
+        else:
+            self._cancel()
+        return "break"
+
+    def _on_return(self, _event=None) -> str | None:
+        # Avoid firing while typing in entry/text widgets
+        try:
+            focus = self.focus_get()
+            if focus is not None:
+                cls = focus.winfo_class()
+                if cls in {"Entry", "Text", "TEntry"}:
+                    return None
+        except tk.TclError:
+            pass
+        if self._view == "edit":
+            if not self._edit_builtin:
+                self._save_edit()
+            else:
+                self._close_edit()
+        else:
+            self._done()
+        return "break"
 
 
 class OptionsApp(tk.Tk):
@@ -1399,26 +1689,7 @@ class OptionsApp(tk.Tk):
         tk.Label(
             root, text="Files", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
         ).pack(anchor=tk.W)
-        files_box = tk.Text(
-            root,
-            height=5,
-            width=56,
-            font=_FONT_SMALL,
-            wrap=tk.WORD,
-            bg=_BG_WELL,
-            fg=_TEXT,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=_BORDER,
-            highlightcolor=_BORDER,
-            bd=0,
-            padx=10,
-            pady=8,
-        )
-        files_box.pack(fill=tk.X, pady=(4, 4))
-        files_box.insert("1.0", "\n".join(f"• {p.name}" for p in self.files))
-        # Text keeps bg/fg when disabled (no disabledbackground option)
-        files_box.configure(state=tk.DISABLED)
+        _pack_files_list(root, self.files, width_px=420)
 
         tk.Label(
             root, text="Mode", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
@@ -1447,7 +1718,7 @@ class OptionsApp(tk.Tk):
 
         tk.Label(
             root,
-            text="Templates",
+            text="Active templates",
             bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_BOLD,
@@ -1479,15 +1750,13 @@ class OptionsApp(tk.Tk):
             pady=(2, 2),
         )
 
-        # Action bar: Cancel left · Templates… + Start right
+        # Action bar: Templates… left · Cancel + Start right (Mac HIG)
         bar = tk.Frame(root, bg=_BG_APP)
         bar.pack(fill=tk.X, pady=(28, 0))
-        _chip_button(bar, "Cancel", self._on_cancel).pack(side=tk.LEFT)
+        _chip_button(bar, "Templates…", self._templates).pack(side=tk.LEFT)
         right = tk.Frame(bar, bg=_BG_APP)
         right.pack(side=tk.RIGHT)
-        _chip_button(right, "Templates…", self._templates).pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
+        _chip_button(right, "Cancel", self._on_cancel).pack(side=tk.LEFT, padx=(0, 10))
         _chip_button(right, "Start", self._start, primary=True).pack(side=tk.LEFT)
 
         self._busy = False
