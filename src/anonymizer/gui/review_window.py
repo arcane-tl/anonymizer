@@ -2838,26 +2838,8 @@ def run_review_window(
         return _open_add_type_menu(_evt)
 
     def _save() -> None:
-        kept = session.keep_clear_placeholders()
-        if kept:
-            lines = []
-            for ph in kept[:12]:
-                f = session.get(ph)
-                if f:
-                    snip = f.original.replace("\n", " ")
-                    if len(snip) > 60:
-                        snip = snip[:59] + "…"
-                    lines.append(f"  {ph} — {snip}")
-            more = f"\n  … and {len(kept) - 12} more" if len(kept) > 12 else ""
-            msg = (
-                f"{len(kept)} item(s) will appear in CLEAR TEXT:\n\n"
-                + "\n".join(lines)
-                + more
-                + "\n\nSave output anyway?"
-            )
-            if not messagebox.askyesno("Confirm clear text", msg, parent=root):
-                return
-        # Teach is applied from Findings toolbar (not on Save output)
+        # No confirm dialog on Save — apply session and close immediately.
+        # Teach is applied from Findings toolbar (not on Save output).
         result["session"] = session
         root.destroy()
 

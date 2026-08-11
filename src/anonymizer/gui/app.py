@@ -1997,23 +1997,9 @@ class OptionsApp(tk.Tk):
             side=tk.RIGHT
         )
 
-        self.files_box = tk.Text(
-            root,
-            height=3,
-            width=56,
-            font=_FONT_SMALL,
-            wrap=tk.WORD,
-            bg=_BG_WELL,
-            fg=_TEXT,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=_BORDER,
-            highlightcolor=_BORDER,
-            bd=0,
-            padx=10,
-            pady=8,
-        )
-        self.files_box.pack(fill=tk.X, pady=(4, 4))
+        # Placeholder host for file bullets (rebuilt by _refresh_files_ui)
+        self.files_host = tk.Frame(root, bg=_BG_APP)
+        self.files_host.pack(fill=tk.X, pady=(4, 4))
 
         tk.Label(
             root, text="Mode", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
@@ -2169,19 +2155,25 @@ class OptionsApp(tk.Tk):
         n = len(self.files)
         if n == 0:
             head = "No documents yet"
-            body = "No files yet — use + to add"
         else:
             head = f"{n} document{'s' if n != 1 else ''} ready"
-            body = "\n".join(f"• {p.name}" for p in self.files)
         sub = f"{head}  ·  {self._save_caption()}  ·  {_privacy_caption()}"
         try:
             self.sub_lbl.configure(text=sub)
-            self.files_box.configure(state=tk.NORMAL)
-            self.files_box.delete("1.0", tk.END)
-            self.files_box.insert("1.0", body)
-            # Dynamic height: ~1 line min, ~6 max
-            lines = max(1, min(6, body.count("\n") + 1))
-            self.files_box.configure(height=lines, state=tk.DISABLED)
+            for w in self.files_host.winfo_children():
+                w.destroy()
+            if n == 0:
+                tk.Label(
+                    self.files_host,
+                    text="No files yet — use + to add",
+                    bg=_BG_APP,
+                    fg=_TEXT_MUTED,
+                    font=_FONT_SMALL,
+                    anchor=tk.W,
+                ).pack(anchor=tk.W)
+            else:
+                # Window-colored 1–2 column bullets (Mac parity)
+                _pack_files_list(self.files_host, self.files, width_px=420)
         except tk.TclError:
             pass
 
@@ -2414,7 +2406,14 @@ class OptionsApp(tk.Tk):
                 for p in self.files
             ]
             try:
-                self._run_review_batch(cmds, want_open, out_dir=out_dir)
+                self._run_review_batch(
+                    cmds,
+                    want_open,
+                    files=list(self.files),
+                    mode=mode,
+                    out_fmt=out_fmt,
+                    out_dir=out_dir,
+                )
             finally:
                 try:
                     Path(cfg_path).unlink(missing_ok=True)
@@ -2464,16 +2463,7 @@ class OptionsApp(tk.Tk):
             return
 
         if want_open and outputs:
-            for out in outputs:
-                try:
-                    if sys.platform == "darwin":
-                        subprocess.run(["open", out], check=False)
-                    elif sys.platform == "win32":
-                        os.startfile(out)  # type: ignore[attr-defined]
-                    else:
-                        subprocess.run(["xdg-open", out], check=False)
-                except OSError:
-                    pass
+            _open_result_paths(outputs)
             _log("OptionsApp done (open results) → destroy")
             self.destroy()
             return
@@ -2540,18 +2530,17 @@ class OptionsApp(tk.Tk):
         cmds: list[list[str]],
         want_open: bool,
         *,
+        files: list[Path] | None = None,
+        mode: str = "strict",
+        out_fmt: str = "md",
         out_dir: Path | None = None,
     ) -> None:
         """Run CLI with --review-window; wait for each job and surface errors.
 
-        Windows: do **not** fire-and-forget a Terminal ``cmd /k … & echo Finished``
-        chain (that prints Finished even when review never stayed open). Wait on
-        the CLI process so the Tk review window can take focus; optional progress
-        console via CREATE_NEW_CONSOLE.
-
-        *out_dir* is already on each cmd when set; kept for API clarity / open-folder.
+        On success: optionally open outputs (Open checkbox); **no** Done dialog.
+        ANONYMIZER_OPEN is not honored by the Python CLI — GUI opens after exit.
         """
-        del out_dir  # flags already embedded in cmds
+        src_files = list(files or self.files)
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
@@ -2567,15 +2556,17 @@ class OptionsApp(tk.Tk):
         # Windows / Linux: wait for CLI (review window is interactive).
         errors: list[str] = []
         cancelled = 0
+        outputs: list[str] = []
         try:
             self.withdraw()
         except tk.TclError:
             pass
 
-        for cmd in cmds:
+        for i, cmd in enumerate(cmds):
+            fpath = src_files[i] if i < len(src_files) else None
             _log(f"REVIEW RUN: {' '.join(cmd[:6])}…")
             try:
-                # Capture stderr so "No such option: --template" is visible in the dialog.
+                # Capture stderr so CLI errors are visible in the dialog.
                 # Review window is still a separate Tk UI from the CLI process.
                 proc = subprocess.run(
                     cmd,
@@ -2592,7 +2583,13 @@ class OptionsApp(tk.Tk):
 
             code = int(proc.returncode or 0)
             if code == 0:
-                _log("REVIEW ok")
+                outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
+                if not outs and fpath is not None:
+                    outs = _guess_outputs(
+                        [fpath], mode, out_fmt, out_dir=out_dir
+                    )
+                outputs.extend(outs)
+                _log(f"REVIEW ok outs={len(outs)}")
                 continue
             if code == 130:
                 cancelled += 1
@@ -2601,7 +2598,6 @@ class OptionsApp(tk.Tk):
             detail = (proc.stderr or proc.stdout or "").strip()
             if detail:
                 _log(f"REVIEW FAIL exit={code} stderr:\n{detail[:2000]}")
-                # First meaningful line(s) for the dialog
                 short = "\n".join(detail.splitlines()[:8])
                 if len(short) > 400:
                     short = short[:400] + "…"
@@ -2632,12 +2628,15 @@ class OptionsApp(tk.Tk):
                 parent=self if self.winfo_exists() else None,
             )
         elif not errors:
-            messagebox.showinfo(
-                "Anonymizer",
-                "Done. Outputs are next to your original files "
-                "(Markdown and/or source, per your format choice).",
-                parent=self if self.winfo_exists() else None,
-            )
+            # Success: open outputs if requested; never show a Done alert.
+            if want_open and outputs:
+                _open_result_paths(outputs)
+                _log(f"REVIEW done open=1 n_out={len(outputs)}")
+            else:
+                _log(
+                    f"REVIEW done open=0 n_out={len(outputs)} "
+                    f"(no success dialog)"
+                )
 
 
 def shlex_quote(s: str) -> str:
@@ -2657,6 +2656,21 @@ def _parse_outputs(stdout: str, stderr: str) -> list[str]:
                 if p:
                     out.append(p)
     return out
+
+
+def _open_result_paths(paths: list[str]) -> None:
+    """Open output files in the OS default app (Open-result checkbox)."""
+    for out in paths:
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", out], check=False)
+            elif sys.platform == "win32":
+                os.startfile(out)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", out], check=False)
+            _log(f"opened result: {out}")
+        except OSError as exc:
+            _log(f"open result failed {out}: {exc}")
 
 
 def _guess_outputs(
