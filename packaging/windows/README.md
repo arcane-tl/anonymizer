@@ -53,10 +53,12 @@ Start Menu → Anonymizer
   or:  anonymize-gui path\to\a.pdf path\to\b.docx
 ```
 
-Opens straight into the **options** panel (same product logic as Mac).  
-No files yet → use **+** under Files to add (multi-location). **−** removes.  
-Drag-drop / argv paths pre-fill the list.  
-**Output folder** defaults to *same folder as source file (default)*; **Choose…** sets `--out-dir`.
+Opens straight into the **options** panel (same product logic as Mac):
+
+- No files yet → **+** under Files (add from several folders). **−** removes.
+- Drag-drop / argv paths pre-fill the list.
+- **Output folder** defaults to *same folder as source file (default)*; **Choose…** sets CLI `--out-dir`.
+- **Templates…**, mode / style / format, Review (document window), Open when finished — same layout idea as Mac.
 
 ### GUI won’t open / no log file
 
@@ -130,19 +132,18 @@ anonymize-gui
 
 ### One-shot release build (copy-paste)
 
-Run on a **Windows** PC after `main` has the version you want (e.g. **1.2.0** already in `pyproject.toml`):
+Run on a **Windows** PC on the **same commit as the Mac release** (usually tag `v1.4.0` or `main` after the version bump):
 
 ```powershell
 # 0) Clone or update (same commit as the Mac release)
 git clone https://github.com/arcane-tl/anonymizer.git
 cd anonymizer
 # or:  cd path\to\anonymizer
-git checkout main
-git pull origin main
+git fetch --tags
+git checkout v1.4.0   # or: git checkout main && git pull
 
-# Confirm version (must match the release tag, e.g. 1.2.0)
+# Confirm version (must match the release tag, e.g. 1.4.0)
 Select-String -Path pyproject.toml -Pattern '^version\s*='
-
 # 1) Prerequisites (once per machine)
 #    - Python 3.11+ on the *build host* (for PyInstaller + wheel)
 #      winget install Python.Python.3.12

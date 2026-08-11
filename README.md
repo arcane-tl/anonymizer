@@ -185,14 +185,14 @@ anonymize examples    # more copy-paste commands
 anonymize --help
 ```
 
-**Desktop GUI**
+**Desktop GUI** (same product logic on Mac and Windows)
 
 | | |
 |--|--|
-| **Mac** | Open **Anonymizer** from Applications / `~/Applications`, drop files (or pick files). Needs CLI on PATH for the droplet. |
-| **Windows** | Start Menu **Anonymizer** (after Setup.exe). Choose documents → same options as Mac. |
+| **Mac** | **Anonymizer.app** (Applications / Homebrew cask). Double-click opens options with an empty file list, or drop files to pre-fill. Needs CLI on PATH for the droplet. |
+| **Windows** | Start Menu **Anonymizer** (after Setup.exe), or portable `Anonymizer.exe`. |
 
-GUI options (Mac + Windows): mode / style / format pop-ups, **Templates…** (allow/deny packs), **Review** (default on; teach packs from the review window), open when finished.
+In options: **Files** with **+** / **−** (add from several folders), mode / style / format, **output folder** (default: same folder as the source), **Templates…**, **Review findings** (opens the document review window; default on), **Open result when finished**.
 
 ---
 

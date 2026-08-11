@@ -96,7 +96,7 @@ Open app or drop files → [ Options window ] → work → [ Done ]
 
 ### Review
 
-Needs a real terminal for the checkbox UI. If Review is checked, Terminal opens after Start; opening the result follows the Open checkbox (no second prompt).
+When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`): toggle false positives, add redactions, teach templates. Opening results follows the **Open result when finished** checkbox (no second prompt).
 
 ## How it works
 
@@ -123,7 +123,8 @@ xcrun notarytool store-credentials anonymizer-notary \
   --issuer XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
 
 # Build → sign → notarize → staple → dist/Anonymizer-VERSION.zip
-./packaging/macos/release-app.sh --version 1.0.1
+./packaging/macos/release-app.sh --version 1.4.0
+# or omit --version to use pyproject.toml via scripts/version.sh
 ```
 
 | File | Role |
