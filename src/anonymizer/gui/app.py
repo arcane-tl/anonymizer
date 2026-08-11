@@ -416,6 +416,146 @@ def _filter_paths(paths: object) -> list[Path]:
     return files
 
 
+def _merge_paths(existing: list[Path], added: list[Path]) -> list[Path]:
+    """Append *added* paths, skipping duplicates (by resolve())."""
+    seen = {p.resolve() for p in existing}
+    out = list(existing)
+    for p in added:
+        try:
+            key = p.resolve()
+        except OSError:
+            key = p
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _truncate_path_display(path: Path | str, max_len: int = 48) -> str:
+    s = str(path)
+    if len(s) <= max_len:
+        return s
+    return "…" + s[-(max_len - 1) :]
+
+
+def _icon_chip(
+    parent: "tk.Misc",
+    glyph: str,
+    command,
+    *,
+    tooltip: str = "",
+    chrome: str | None = None,
+) -> "tk.Frame":
+    """Small square + / − control for the Files toolbar."""
+    chrome_bg = chrome if chrome is not None else _BG_APP
+    size = 28
+    wrap = tk.Frame(parent, bg=chrome_bg, width=size, height=size, cursor="hand2")
+    wrap.pack_propagate(False)
+    cv = tk.Canvas(
+        wrap,
+        width=size,
+        height=size,
+        bg=chrome_bg,
+        highlightthickness=0,
+        bd=0,
+        cursor="hand2",
+    )
+    cv.pack(fill=tk.BOTH, expand=True)
+
+    def _paint(*, hover: bool = False) -> None:
+        fill = _BG_BTN_HOVER if hover else _BG_BTN
+        cv.delete("all")
+        _round_rect(cv, 1, 1, size - 2, size - 2, 7, fill=fill, outline=_BORDER, width=1)
+        cv.create_text(
+            size // 2,
+            size // 2,
+            text=glyph,
+            fill=_TEXT,
+            font=_FONT_BOLD,
+        )
+
+    def _run(_e=None) -> None:
+        if command is not None:
+            command()
+
+    _paint()
+    cv.bind("<Button-1>", _run)
+    wrap.bind("<Button-1>", _run)
+    cv.bind("<Enter>", lambda _e: _paint(hover=True))
+    cv.bind("<Leave>", lambda _e: _paint(hover=False))
+    if tooltip:
+        _attach_simple_tooltip(wrap, tooltip)
+        _attach_simple_tooltip(cv, tooltip)
+    return wrap
+
+
+def _attach_simple_tooltip(widget: "tk.Misc", text: str) -> None:
+    """Solid rectangular tip (reliable on Windows and macOS Tk)."""
+    state: dict[str, object] = {"after": None, "tip": None}
+
+    def _hide(_event=None) -> None:
+        job = state.get("after")
+        if job is not None:
+            try:
+                widget.after_cancel(job)  # type: ignore[arg-type]
+            except tk.TclError:
+                pass
+            state["after"] = None
+        tip = state.get("tip")
+        if tip is not None:
+            try:
+                tip.destroy()  # type: ignore[union-attr]
+            except tk.TclError:
+                pass
+            state["tip"] = None
+
+    def _show() -> None:
+        state["after"] = None
+        if not text.strip():
+            return
+        try:
+            if not widget.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _hide()
+        tip = tk.Toplevel(widget)
+        tip.wm_overrideredirect(True)
+        try:
+            tip.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tip.configure(bg=_BORDER)
+        lbl = tk.Label(
+            tip,
+            text=text,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            font=_FONT_SMALL,
+            padx=10,
+            pady=5,
+            justify=tk.LEFT,
+        )
+        lbl.pack(padx=1, pady=1)
+        tip.update_idletasks()
+        x = widget.winfo_rootx() + 8
+        y = widget.winfo_rooty() + widget.winfo_height() + 4
+        tip.geometry(f"+{x}+{y}")
+        state["tip"] = tip
+
+    def _schedule(_event=None) -> None:
+        _hide()
+        try:
+            state["after"] = widget.after(350, _show)
+        except tk.TclError:
+            pass
+
+    widget.bind("<Enter>", _schedule, add="+")
+    widget.bind("<Leave>", _hide, add="+")
+    widget.bind("<ButtonPress>", _hide, add="+")
+
+
 def resolve_dialog_icon_path() -> Path | None:
     """Locate the dialog/app icon PNG (packaged asset, frozen, or Mac packaging)."""
     candidates: list[Path] = [
@@ -1776,10 +1916,18 @@ class TemplatesDialog(tk.Toplevel):
 
 
 class OptionsApp(tk.Tk):
-    def __init__(self, files: list[Path]) -> None:
-        _log(f"OptionsApp __init__ begin n={len(files)}")
+    def __init__(self, files: list[Path] | None = None) -> None:
+        n_in = len(files or [])
+        _log(f"OptionsApp __init__ begin n={n_in}")
         super().__init__()
-        self.files = [p.resolve() for p in files]
+        # Full paths; empty list is valid (user adds via +).
+        self.files: list[Path] = []
+        for p in files or []:
+            try:
+                self.files.append(p.resolve())
+            except OSError:
+                self.files.append(p)
+        self.out_dir: Path | None = None  # None = next to original files
         self.title(f"Anonymizer {__version__}")
         self.resizable(False, False)
         self.configure(bg=_BG_APP)
@@ -1816,6 +1964,7 @@ class OptionsApp(tk.Tk):
         pad = 24
         root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
         root.pack(fill=tk.BOTH, expand=True)
+        self._root_frm = root
 
         _pack_title_row(
             root,
@@ -1823,24 +1972,48 @@ class OptionsApp(tk.Tk):
             self._icon_refs,
         )
 
-        n = len(self.files)
-        sub = (
-            f"{n} document{'s' if n != 1 else ''} ready  ·  "
-            f"Saves next to original  ·  {_privacy_caption()}"
-        )
-        tk.Label(
+        self.sub_lbl = tk.Label(
             root,
-            text=sub,
+            text="",
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
             anchor=tk.W,
-        ).pack(anchor=tk.W, pady=(0, 16))
+        )
+        self.sub_lbl.pack(anchor=tk.W, pady=(0, 16))
 
+        # Files header: label + Add / Remove
+        files_head = tk.Frame(root, bg=_BG_APP)
+        files_head.pack(fill=tk.X)
         tk.Label(
-            root, text="Files", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
-        ).pack(anchor=tk.W)
-        _pack_files_list(root, self.files, width_px=420)
+            files_head, text="Files", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
+        ).pack(side=tk.LEFT)
+        files_tools = tk.Frame(files_head, bg=_BG_APP)
+        files_tools.pack(side=tk.RIGHT)
+        _icon_chip(files_tools, "−", self._remove_file, tooltip="Remove file").pack(
+            side=tk.RIGHT, padx=(6, 0)
+        )
+        _icon_chip(files_tools, "+", self._add_files, tooltip="Add file").pack(
+            side=tk.RIGHT
+        )
+
+        self.files_box = tk.Text(
+            root,
+            height=3,
+            width=56,
+            font=_FONT_SMALL,
+            wrap=tk.WORD,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_BORDER,
+            bd=0,
+            padx=10,
+            pady=8,
+        )
+        self.files_box.pack(fill=tk.X, pady=(4, 4))
 
         tk.Label(
             root, text="Mode", bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
@@ -1867,6 +2040,38 @@ class OptionsApp(tk.Tk):
         ).pack(anchor=tk.W, pady=(16, 4))
         _dark_popup(root, self.format_var, FORMAT_LABELS)
 
+        # Output folder (after format, before templates) — Mac parity
+        tk.Label(
+            root,
+            text="Output folder",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(16, 4))
+        out_row = tk.Frame(root, bg=_BG_APP)
+        out_row.pack(fill=tk.X)
+        # Buttons first so row height follows chips; label fills and centers vertically
+        out_btns = tk.Frame(out_row, bg=_BG_APP)
+        out_btns.pack(side=tk.RIGHT)
+        self._out_clear_btn = _chip_button(
+            out_btns, "Clear", self._clear_out_dir, width=7
+        )
+        self._out_clear_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        _chip_button(out_btns, "Choose…", self._choose_out_dir, width=9).pack(
+            side=tk.RIGHT
+        )
+        self.out_dir_lbl = tk.Label(
+            out_row,
+            text="same folder as source file (default)",
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+            justify=tk.LEFT,
+        )
+        self.out_dir_lbl.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+
         tk.Label(
             root,
             text="Active templates",
@@ -1887,7 +2092,6 @@ class OptionsApp(tk.Tk):
         )
         self.templates_lbl.pack(anchor=tk.W, pady=(0, 4))
 
-        # Extra vertical separation: format field vs toggle group
         _dark_check(
             root,
             "Review findings before saving",
@@ -1901,7 +2105,7 @@ class OptionsApp(tk.Tk):
             pady=(2, 2),
         )
 
-        # Action bar: Templates… left · Cancel + Start right (Mac HIG)
+        # Action bar: Templates… left · Cancel + Start right (Mac parity)
         bar = tk.Frame(root, bg=_BG_APP)
         bar.pack(fill=tk.X, pady=(28, 0))
         _chip_button(bar, "Templates…", self._templates).pack(side=tk.LEFT)
@@ -1919,6 +2123,9 @@ class OptionsApp(tk.Tk):
         self.bind("<Return>", self._on_return)
         self.bind("<KP_Enter>", self._on_return)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self._refresh_files_ui()
+        self._refresh_out_dir_ui()
 
         # Ensure window is on screen (Windows often starts behind). Soft focus:
         # lift/topmost without focus_force so we do not yank keystrokes mid-type.
@@ -1952,6 +2159,131 @@ class OptionsApp(tk.Tk):
 
     def _clear_topmost_soon(self) -> None:
         self._safe_topmost(False)
+
+    def _save_caption(self) -> str:
+        if self.out_dir is not None:
+            return "Saves to chosen folder"
+        return "Saves next to original"
+
+    def _refresh_files_ui(self) -> None:
+        n = len(self.files)
+        if n == 0:
+            head = "No documents yet"
+            body = "No files yet — use + to add"
+        else:
+            head = f"{n} document{'s' if n != 1 else ''} ready"
+            body = "\n".join(f"• {p.name}" for p in self.files)
+        sub = f"{head}  ·  {self._save_caption()}  ·  {_privacy_caption()}"
+        try:
+            self.sub_lbl.configure(text=sub)
+            self.files_box.configure(state=tk.NORMAL)
+            self.files_box.delete("1.0", tk.END)
+            self.files_box.insert("1.0", body)
+            # Dynamic height: ~1 line min, ~6 max
+            lines = max(1, min(6, body.count("\n") + 1))
+            self.files_box.configure(height=lines, state=tk.DISABLED)
+        except tk.TclError:
+            pass
+
+    def _refresh_out_dir_ui(self) -> None:
+        try:
+            if self.out_dir is None:
+                self.out_dir_lbl.configure(text="same folder as source file (default)")
+                self._out_clear_btn.configure(state=tk.DISABLED)
+            else:
+                self.out_dir_lbl.configure(
+                    text=_truncate_path_display(self.out_dir, 52)
+                )
+                self._out_clear_btn.configure(state=tk.NORMAL)
+            self.sub_lbl.configure(
+                text=(
+                    f"{'No documents yet' if not self.files else (str(len(self.files)) + ' document' + ('s' if len(self.files) != 1 else '') + ' ready')}"
+                    f"  ·  {self._save_caption()}  ·  {_privacy_caption()}"
+                )
+            )
+        except tk.TclError:
+            pass
+
+    def _add_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            parent=self,
+            title="Add documents",
+            filetypes=_FILETYPES,
+        )
+        if not paths:
+            return
+        added = _filter_paths(_coerce_path_args(paths))
+        if not added:
+            messagebox.showwarning(
+                "Anonymizer",
+                "No supported files selected.\n\n"
+                "Supported: PDF, DOCX, TXT, Markdown.",
+                parent=self,
+            )
+            return
+        before = len(self.files)
+        self.files = _merge_paths(self.files, added)
+        self._refresh_files_ui()
+        _log(f"OptionsApp add files +{len(self.files) - before} total={len(self.files)}")
+
+    def _remove_file(self) -> None:
+        if not self.files:
+            return
+        if len(self.files) == 1:
+            self.files.clear()
+            self._refresh_files_ui()
+            return
+        # Popover menu of basenames
+        menu = tk.Menu(
+            self,
+            tearoff=0,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            activebackground=_SELECT,
+            activeforeground=_TEXT,
+            bd=0,
+            font=_FONT_SMALL,
+        )
+        for i, p in enumerate(self.files):
+            menu.add_command(
+                label=p.name,
+                command=lambda idx=i: self._remove_at(idx),
+            )
+        try:
+            menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
+
+    def _remove_at(self, index: int) -> None:
+        if 0 <= index < len(self.files):
+            del self.files[index]
+            self._refresh_files_ui()
+            _log(f"OptionsApp remove index={index} total={len(self.files)}")
+
+    def _choose_out_dir(self) -> None:
+        initial = str(self.out_dir) if self.out_dir else str(Path.home())
+        path = filedialog.askdirectory(
+            parent=self,
+            title="Choose output folder",
+            initialdir=initial,
+            mustexist=True,
+        )
+        if not path:
+            return
+        try:
+            self.out_dir = Path(path).expanduser().resolve()
+        except OSError:
+            self.out_dir = Path(path).expanduser()
+        self._refresh_out_dir_ui()
+        _log(f"OptionsApp out_dir={self.out_dir}")
+
+    def _clear_out_dir(self) -> None:
+        self.out_dir = None
+        self._refresh_out_dir_ui()
+        _log("OptionsApp out_dir cleared")
 
     def _safe_topmost(self, value: bool) -> None:
         try:
@@ -2024,6 +2356,14 @@ class OptionsApp(tk.Tk):
                 pass
 
     def _run_start(self) -> None:
+        if not self.files:
+            messagebox.showinfo(
+                "Anonymizer",
+                "Add at least one document.\n\nUse + under Files to choose PDF, DOCX, or text.",
+                parent=self,
+            )
+            return
+
         cli = _find_anonymize()
         if not cli:
             messagebox.showerror(
@@ -2044,6 +2384,7 @@ class OptionsApp(tk.Tk):
             out_fmt = "md"
         want_review = self.review_var.get() and mode != "extract"
         want_open = self.open_var.get()
+        out_dir = self.out_dir
 
         cfg_path = self._write_temp_config(style, self.enabled_template_ids)
         common_flags = [
@@ -2059,10 +2400,12 @@ class OptionsApp(tk.Tk):
             common_flags.extend(
                 ["--template", ",".join(self.enabled_template_ids)]
             )
+        if out_dir is not None:
+            common_flags.extend(["--out-dir", str(out_dir)])
         _log(
             f"_run_start mode={mode} style={style} fmt={out_fmt} "
-            f"review={want_review} templates={self.enabled_template_ids!r} "
-            f"cli={cli!r}"
+            f"review={want_review} out_dir={out_dir!r} "
+            f"templates={self.enabled_template_ids!r} cli={cli!r}"
         )
 
         if want_review:
@@ -2071,7 +2414,7 @@ class OptionsApp(tk.Tk):
                 for p in self.files
             ]
             try:
-                self._run_review_batch(cmds, want_open)
+                self._run_review_batch(cmds, want_open, out_dir=out_dir)
             finally:
                 try:
                     Path(cfg_path).unlink(missing_ok=True)
@@ -2103,7 +2446,7 @@ class OptionsApp(tk.Tk):
                     continue
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs:
-                    outs = _guess_outputs([fpath], mode, out_fmt)
+                    outs = _guess_outputs([fpath], mode, out_fmt, out_dir=out_dir)
                 outputs.extend(outs)
         finally:
             try:
@@ -2148,7 +2491,7 @@ class OptionsApp(tk.Tk):
         if outputs and messagebox.askyesno(
             "Anonymizer", msg + "\n\nShow in folder?", parent=self
         ):
-            folder = str(Path(outputs[0]).parent)
+            folder = str(out_dir) if out_dir is not None else str(Path(outputs[0]).parent)
             if sys.platform == "darwin":
                 subprocess.run(["open", folder], check=False)
             elif sys.platform == "win32":
@@ -2192,14 +2535,23 @@ class OptionsApp(tk.Tk):
         )
         return cfg_path
 
-    def _run_review_batch(self, cmds: list[list[str]], want_open: bool) -> None:
+    def _run_review_batch(
+        self,
+        cmds: list[list[str]],
+        want_open: bool,
+        *,
+        out_dir: Path | None = None,
+    ) -> None:
         """Run CLI with --review-window; wait for each job and surface errors.
 
         Windows: do **not** fire-and-forget a Terminal ``cmd /k … & echo Finished``
         chain (that prints Finished even when review never stayed open). Wait on
         the CLI process so the Tk review window can take focus; optional progress
         console via CREATE_NEW_CONSOLE.
+
+        *out_dir* is already on each cmd when set; kept for API clarity / open-folder.
         """
+        del out_dir  # flags already embedded in cmds
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
@@ -2288,111 +2640,6 @@ class OptionsApp(tk.Tk):
             )
 
 
-class LauncherApp(tk.Tk):
-    """Always-visible first window: pick files or quit (never silent)."""
-
-    def __init__(self) -> None:
-        _log("LauncherApp __init__ begin")
-        super().__init__()
-        self.title(f"Anonymizer {__version__}")
-        self.resizable(False, False)
-        self.configure(bg=_BG_APP)
-        self.chosen: list[Path] = []
-        self._icon_refs: list[tk.PhotoImage] = []
-        self._icon_refs.extend(_apply_window_icons(self))
-
-        # Fixed content width so title, caption, and full-width chips align
-        content_w = 420
-        frm = tk.Frame(self, bg=_BG_APP, padx=28, pady=28, width=content_w + 56)
-        frm.pack(fill=tk.BOTH, expand=True)
-
-        _pack_title_row(
-            frm,
-            f"Anonymizer (version {__version__})",
-            self._icon_refs,
-        )
-        tk.Label(
-            frm,
-            text=(
-                "Choose PDF, DOCX, or text documents to anonymize.\n"
-                f"Saves next to the original · {_privacy_caption()}"
-            ),
-            bg=_BG_APP,
-            fg=_TEXT_MUTED,
-            font=_FONT,
-            justify=tk.LEFT,
-            anchor=tk.W,
-            wraplength=content_w,
-        ).pack(anchor=tk.W, fill=tk.X, pady=(8, 20))
-
-        _chip_button(
-            frm, "Choose documents…", self._pick, primary=True, fill_x=True
-        ).pack(fill=tk.X, pady=4)
-        _chip_button(frm, "Quit", self.destroy, fill_x=True).pack(fill=tk.X, pady=4)
-
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.update_idletasks()
-        try:
-            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-            w = max(self.winfo_reqwidth(), content_w + 56)
-            h = max(self.winfo_reqheight(), 240)
-            self.geometry(
-                f"{w}x{h}+{max(40, (sw - w) // 2)}+{max(40, (sh - h) // 2)}"
-            )
-        except tk.TclError:
-            pass
-        self.deiconify()
-        self.lift()
-        try:
-            self.attributes("-topmost", True)
-            self.after(600, self._clear_topmost)
-        except tk.TclError:
-            pass
-        _log(f"LauncherApp ready geom={self.geometry()!r}")
-        _debug_box(f"Launcher ready\n{self.geometry()}\nLog: {_log_path()}")
-
-    def _clear_topmost(self) -> None:
-        try:
-            if self.winfo_exists():
-                self.attributes("-topmost", False)
-        except tk.TclError:
-            pass
-
-    def _pick(self) -> None:
-        paths = filedialog.askopenfilenames(
-            parent=self,
-            title="Choose documents to anonymize",
-            filetypes=_FILETYPES,
-        )
-        raw = _coerce_path_args(paths)
-        files = _filter_paths(raw)
-        _log(f"Launcher pick raw={len(raw)} filtered={len(files)}")
-        if not files:
-            if raw:
-                messagebox.showwarning(
-                    "Anonymizer",
-                    "No supported files selected.\n\n"
-                    "Supported: PDF, DOCX, TXT, Markdown.",
-                    parent=self,
-                )
-            return
-        self.chosen = files
-        # Defer destroy until after the native dialog fully unwinds (Windows).
-        # Immediate destroy of the parent can leave the app stuck with no options window.
-        self.after(50, self._finish_pick)
-
-    def _finish_pick(self) -> None:
-        try:
-            self.quit()
-        except tk.TclError:
-            pass
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
-
-
 def shlex_quote(s: str) -> str:
     if sys.platform == "win32":
         return '"' + s.replace('"', '\\"') + '"'
@@ -2416,6 +2663,8 @@ def _guess_outputs(
     files: list[Path],
     mode: str,
     output_format: str = "md",
+    *,
+    out_dir: Path | None = None,
 ) -> list[str]:
     """Best-effort paths when CLI OUTPUT: lines are missing."""
     fmt = "md" if mode == "extract" else (output_format or "md")
@@ -2423,17 +2672,18 @@ def _guess_outputs(
     write_native = fmt in ("source", "both") and mode != "extract"
     paths: list[str] = []
     for f in files:
+        base = out_dir if out_dir is not None else f.parent
         if write_md:
             if mode == "extract":
-                cand = f.with_name(f"{f.stem}.md")
-                if cand.resolve() == f.resolve():
-                    cand = f.with_name(f"{f.stem}.extracted.md")
+                cand = base / f"{f.stem}.md"
+                if out_dir is None and cand.resolve() == f.resolve():
+                    cand = base / f"{f.stem}.extracted.md"
             else:
-                cand = f.with_name(f"{f.stem}.anonymized.md")
+                cand = base / f"{f.stem}.anonymized.md"
             if cand.is_file():
                 paths.append(str(cand))
         if write_native and f.suffix.lower() in {".pdf", ".docx"}:
-            n = f.with_name(f"{f.stem}.anonymized{f.suffix.lower()}")
+            n = base / f"{f.stem}.anonymized{f.suffix.lower()}"
             if n.is_file():
                 paths.append(str(n))
     return paths
@@ -2511,37 +2761,10 @@ def main(argv: list[str] | None = None) -> int:
         args = list(sys.argv[1:] if argv is None else argv)
         # Strip Windows empty args
         args = [a for a in args if a and a.strip()]
+        # Always open options: empty list unless argv / drag-drop paths.
         _log(f"main: raw args n={len(args)}")
         files = _filter_paths(args)
-        _log(f"main: filtered files n={len(files)}")
-
-        if not files:
-            _log("main: opening LauncherApp (no CLI files)")
-            _debug_box("Opening file launcher…")
-            launcher = LauncherApp()
-            launcher.mainloop()
-            files = list(getattr(launcher, "chosen", []) or [])
-            try:
-                launcher.destroy()
-            except tk.TclError:
-                pass
-            if not files:
-                _log("no files chosen; exit")
-                return 0
-            _log(
-                "launcher → options files="
-                + str(len(files))
-                + " names="
-                + ",".join(p.name for p in files[:5])
-            )
-            # Windows: clear default root so a fresh OptionsApp Tk starts cleanly.
-            if sys.platform == "win32":
-                try:
-                    tk._default_root = None  # type: ignore[attr-defined]
-                except Exception:  # noqa: BLE001
-                    pass
-
-        _log(f"main: opening OptionsApp n={len(files)}")
+        _log(f"main: opening OptionsApp n={len(files)} (empty ok — add with +)")
         _debug_box(f"Opening options for {len(files)} file(s)…")
         app = OptionsApp(files)
         try:

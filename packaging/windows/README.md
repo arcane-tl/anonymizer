@@ -53,7 +53,10 @@ Start Menu → Anonymizer
   or:  anonymize-gui path\to\a.pdf path\to\b.docx
 ```
 
-First window is always **Anonymizer** with **Choose documents…** (then the options panel).
+Opens straight into the **options** panel (same product logic as Mac).  
+No files yet → use **+** under Files to add (multi-location). **−** removes.  
+Drag-drop / argv paths pre-fill the list.  
+**Output folder** defaults to *same folder as source file (default)*; **Choose…** sets `--out-dir`.
 
 ### GUI won’t open / no log file
 

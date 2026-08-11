@@ -49,8 +49,15 @@ property editSaveBtn : missing value
 property editCloseBtn : missing value
 -- After duplicate, enable the new template on list rebuild
 property templatesExtraEnableId : ""
+-- Options session: full POSIX paths (mutable add/remove) + optional out dir
+property optionsFilePaths : {}
+property optionsOutDir : ""
 
 on clickOptionsStart_(sender)
+	if (count of optionsFilePaths) is 0 then
+		display dialog "Add at least one document." & return & return & "Use + under Files to choose PDF, DOCX, or text." buttons {"OK"} default button 1 with icon note with title "Anonymizer"
+		return
+	end if
 	set optionsModalCode to 1
 	current application's NSApp's stopModal()
 end clickOptionsStart_
@@ -64,6 +71,77 @@ on clickOptionsCancel_(sender)
 	set optionsModalCode to 0
 	current application's NSApp's stopModal()
 end clickOptionsCancel_
+
+on clickOptionsAddFiles_(sender)
+	-- Multi-select open; merge into optionsFilePaths; rebuild panel (code 4)
+	try
+		set theFiles to choose file with prompt "Add documents" with multiple selections allowed
+		set added to normalizeFileList(theFiles)
+		repeat with fRef in added
+			set pp to filePOSIXPath(fRef)
+			if pp ends with "/" then set pp to text 1 thru -2 of pp
+			if isSupportedDocumentPath(pp) then
+				if not pathListContains(optionsFilePaths, pp) then
+					set end of optionsFilePaths to pp
+				end if
+			end if
+		end repeat
+	on error number errNum
+		if errNum is -128 then return -- user cancelled
+	end try
+	set optionsModalCode to 4
+	current application's NSApp's stopModal()
+end clickOptionsAddFiles_
+
+on clickOptionsRemoveFiles_(sender)
+	set n to count of optionsFilePaths
+	if n is 0 then return
+	if n is 1 then
+		set optionsFilePaths to {}
+		set optionsModalCode to 4
+		current application's NSApp's stopModal()
+		return
+	end if
+	set labels to basenamesFromPaths(optionsFilePaths)
+	try
+		set chosen to choose from list labels with prompt "Remove file" OK button name "Remove" cancel button name "Cancel" without multiple selections allowed
+		if chosen is false then return
+		set pick to item 1 of chosen as text
+		set newList to {}
+		set removed to false
+		repeat with i from 1 to n
+			set bn to basenameFromPath(item i of optionsFilePaths)
+			if (not removed) and (bn is pick) then
+				set removed to true
+			else
+				set end of newList to item i of optionsFilePaths
+			end if
+		end repeat
+		set optionsFilePaths to newList
+	on error number errNum
+		if errNum is -128 then return
+	end try
+	set optionsModalCode to 4
+	current application's NSApp's stopModal()
+end clickOptionsRemoveFiles_
+
+on clickOptionsChooseOutDir_(sender)
+	try
+		set folderRef to choose folder with prompt "Choose output folder"
+		set optionsOutDir to POSIX path of folderRef
+		if optionsOutDir ends with "/" then set optionsOutDir to text 1 thru -2 of optionsOutDir
+	on error number errNum
+		if errNum is -128 then return
+	end try
+	set optionsModalCode to 4
+	current application's NSApp's stopModal()
+end clickOptionsChooseOutDir_
+
+on clickOptionsClearOutDir_(sender)
+	set optionsOutDir to ""
+	set optionsModalCode to 4
+	current application's NSApp's stopModal()
+end clickOptionsClearOutDir_
 
 on clickTemplatesDone_(sender)
 	set templatesModalCode to 1
@@ -330,9 +408,9 @@ on quitAnonymizerApp()
 end quitAnonymizerApp
 
 on run
+	-- Always open options; user adds files with + unless they drag-dropped (on open).
 	try
-		set theFiles to choose file with prompt "Choose documents to anonymize" with multiple selections allowed
-		processFiles(normalizeFileList(theFiles))
+		processFiles({})
 	on error errMsg number errNum
 		if errNum is -128 then
 			quitAnonymizerApp()
@@ -376,22 +454,57 @@ on filePOSIXPath(fRef)
 	error "Could not read path for dropped file."
 end filePOSIXPath
 
+on isSupportedDocumentPath(pp)
+	set low to do shell script "printf '%s' " & quoted form of pp & " | tr '[:upper:]' '[:lower:]'"
+	if low ends with ".pdf" then return true
+	if low ends with ".docx" then return true
+	if low ends with ".txt" then return true
+	if low ends with ".md" then return true
+	if low ends with ".text" then return true
+	if low ends with ".markdown" then return true
+	return false
+end isSupportedDocumentPath
+
+on pathListContains(lst, pp)
+	repeat with itemPath in lst
+		if (itemPath as text) is pp then return true
+	end repeat
+	return false
+end pathListContains
+
+on basenameFromPath(pp)
+	try
+		return do shell script "basename " & quoted form of pp
+	end try
+	return pp as text
+end basenameFromPath
+
+on basenamesFromPaths(paths)
+	set names to {}
+	repeat with pp in paths
+		set end of names to basenameFromPath(pp as text)
+	end repeat
+	return names
+end basenamesFromPaths
+
 on processFiles(theFiles)
-	set fileNames to {}
-	set posixFiles to {}
+	-- Build mutable session path list (full POSIX paths)
+	set optionsFilePaths to {}
+	set optionsOutDir to ""
 	set nIn to count of theFiles
 	repeat with i from 1 to nIn
 		set fRef to item i of theFiles
 		set pp to filePOSIXPath(fRef)
 		if pp ends with "/" then set pp to text 1 thru -2 of pp
-		set end of posixFiles to quoted form of pp
-		set end of fileNames to do shell script "basename " & quoted form of pp
+		if isSupportedDocumentPath(pp) then
+			if not pathListContains(optionsFilePaths, pp) then
+				set end of optionsFilePaths to pp
+			end if
+		end if
 	end repeat
-	set nFiles to count of fileNames
-	if nFiles is 0 then return
 
-	-- One window: mode, style, format, templates, review/open
-	set choices to showOptionsPanel(fileNames)
+	-- One window: files (+/−), mode, style, format, out folder, templates, review/open
+	set choices to showOptionsPanel()
 	if choices is missing value then return
 
 	set modeArg to modeArg of choices
@@ -400,6 +513,13 @@ on processFiles(theFiles)
 	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
 	set templateCSV to templateCSV of choices
+	set outDirPath to outDirPath of choices
+	set finalPaths to filePaths of choices
+	set nFiles to count of finalPaths
+	if nFiles is 0 then
+		display dialog "Add at least one document." & return & return & "Use + under Files to choose PDF, DOCX, or text." buttons {"OK"} default button 1 with icon note with title "Anonymizer"
+		return
+	end if
 	if modeArg is "extract" then
 		set wantReview to false
 		-- Extract has no native redaction
@@ -407,12 +527,17 @@ on processFiles(theFiles)
 	end if
 
 	set helper to resourcePath("run-anonymize.sh")
-	set fileArgs to my joinSpace(posixFiles)
+	set quotedPaths to {}
+	repeat with pp in finalPaths
+		set end of quotedPaths to quoted form of (pp as text)
+	end repeat
+	set fileArgs to my joinSpace(quotedPaths)
 	set openEnv to "0"
 	if wantOpen then set openEnv to "1"
 
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
 	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
+	if outDirPath is not "" then set extraOpts to extraOpts & " --out-dir " & quoted form of outDirPath
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
@@ -604,6 +729,30 @@ on makeWrappingFinePrint(titleText, x, y, w, h)
 	end try
 	return lab
 end makeWrappingFinePrint
+
+on makeOutFolderPathLabel(titleText, x, y, w, h)
+	-- Single-line muted path / default caption; height matches optical line for mid-align with Choose…
+	set lab to current application's NSTextField's alloc()'s initWithFrame:{{x, y}, {w, h}}
+	lab's setStringValue:titleText
+	lab's setEditable:false
+	lab's setSelectable:true
+	lab's setBezeled:false
+	lab's setBordered:false
+	lab's setDrawsBackground:false
+	lab's setFont:(current application's NSFont's systemFontOfSize:12)
+	try
+		lab's setTextColor:(current application's NSColor's secondaryLabelColor())
+	end try
+	try
+		lab's setAlignment:(current application's NSTextAlignmentLeft)
+		lab's cell()'s setWraps:false
+		lab's cell()'s setScrollable:false
+		lab's setLineBreakMode:(current application's NSLineBreakByTruncatingMiddle)
+		lab's setMaximumNumberOfLines:1
+		lab's setUsesSingleLineMode:true
+	end try
+	return lab
+end makeOutFolderPathLabel
 
 on loadEnabledTemplatesCSV()
 	try
@@ -1450,9 +1599,11 @@ on filesListColumnCount(nFiles)
 end filesListColumnCount
 
 on filesListHeightForNames(names)
-	-- Dynamic height: 1 column if single file, else 2 columns
+	-- Dynamic height: 1 column if single file, else 2 columns; empty well still visible
 	set n to count of names
-	if n < 1 then set n to 1
+	if n < 1 then
+		return filesListRowHeight() + 8
+	end if
 	set cols to filesListColumnCount(n)
 	set rows to (n + cols - 1) div cols
 	set rowH to filesListRowHeight()
@@ -1506,8 +1657,20 @@ on makeFilesListWell(names, x, y, w, h)
 	return shell
 end makeFilesListWell
 
+on truncateMiddle(s, maxLen)
+	try
+		set t to s as text
+	on error
+		return ""
+	end try
+	if (length of t) <= maxLen then return t
+	if maxLen < 8 then return text 1 thru maxLen of t
+	set keep to (maxLen - 1) div 2
+	return (text 1 thru keep of t) & "…" & (text ((length of t) - keep + 1) thru -1 of t)
+end truncateMiddle
+
 on makeIconButton(x, y, w, h, tagIndex, symbolName, tooltipText, actionName)
-	-- SF Symbol icon button (pencil / copy / trash)
+	-- SF Symbol icon button (pencil / copy / trash / plus / minus)
 	set btn to current application's NSButton's alloc()'s initWithFrame:{{x, y}, {w, h}}
 	btn's setBezelStyle:(current application's NSBezelStyleInline)
 	try
@@ -1520,6 +1683,8 @@ on makeIconButton(x, y, w, h, tagIndex, symbolName, tooltipText, actionName)
 	if symbolName is "pencil" then set fallback to "✎"
 	if symbolName is "trash" then set fallback to "⌫"
 	if symbolName is "plus.square.on.square" then set fallback to "⧉"
+	if symbolName is "plus" then set fallback to "+"
+	if symbolName is "minus" then set fallback to "−"
 	try
 		set img to current application's NSImage's imageWithSystemSymbolName:symbolName accessibilityDescription:tooltipText
 		if img is not missing value then
@@ -1638,11 +1803,8 @@ on showListsPanel(allowText, denyText)
 end showListsPanel
 
 -- Main options panel: clear hierarchy, breathing room, HIG action bar
-on showOptionsPanel(fileNames)
-	set nFiles to count of fileNames
-	set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
-	set displayNames to fileNamesForDisplay(fileNames)
-
+-- Uses session properties optionsFilePaths / optionsOutDir (mutable across rebuilds).
+on showOptionsPanel()
 	set templateCSV to loadEnabledTemplatesCSV()
 
 	set lastModeRow to 0
@@ -1663,29 +1825,43 @@ on showOptionsPanel(fileNames)
 	set titleRowH to iconSize
 	set subH to 18
 	set filesLabelH to 18
-	set filesH to filesListHeightForNames(displayNames)
 	set modeLabelH to 18
 	set styleLabelH to 18
 	set formatLabelH to 18
+	set outLabelH to 18
 	set tmplLabelH to 18
 	set popupH to 28 -- NSPopUpButton row height
 	set checkH to 22
 	set btnH to 32
 	set btnW to 110
 	set btnGap to 10
+	set iconBtnW to 28
 	set innerWForMeasure to panelW - margin * 2
-	set statusLineText to templatesStatusLine(templateCSV)
-	set tmplStatusH to heightForWrappingText(statusLineText, innerWForMeasure, 11)
-
-	-- Popups + templates status + 2 checkboxes
-	set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
 
 	repeat
+		set displayNames to basenamesFromPaths(optionsFilePaths)
+		set nFiles to count of optionsFilePaths
+		if nFiles is 0 then
+			set header to "No documents yet"
+		else
+			set header to (nFiles as text) & " document" & pluralS(nFiles) & " ready"
+		end if
+		if optionsOutDir is "" then
+			set saveCaption to "Saves next to original"
+		else
+			set saveCaption to "Saves to chosen folder"
+		end if
+
 		-- Status may change after Templates…; remeasure and grow/shrink panel
 		set statusLineText to templatesStatusLine(templateCSV)
 		set tmplStatusH to heightForWrappingText(statusLineText, panelW - margin * 2, 11)
 		set filesH to filesListHeightForNames(displayNames)
-		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+		set outPathText to "same folder as source file (default)"
+		if optionsOutDir is not "" then set outPathText to truncateMiddle(optionsOutDir, 48)
+		-- Match Choose… / Clear button height so helper text can sit on the same midline
+		set outPathH to btnH
+
+		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
@@ -1707,13 +1883,22 @@ on showOptionsPanel(fileNames)
 		addTitleRow(content, panelW, y)
 
 		set y to y - gapSm - subH
-		content's addSubview:(makeCaption(header & "  ·  Saves next to original  ·  Private on this Mac", margin, y, innerW, subH))
+		content's addSubview:(makeCaption(header & "  ·  " & saveCaption & "  ·  Private on this Mac", margin, y, innerW, subH))
 
 		set y to y - gapLg - filesLabelH
-		content's addSubview:(makeLabel("Files", margin, y, innerW, filesLabelH))
+		content's addSubview:(makeLabel("Files", margin, y, innerW - iconBtnW * 2 - 12, filesLabelH))
+		-- + Add / − Remove (tooltips via makeIconButton)
+		set addX to margin + innerW - iconBtnW
+		set remX to addX - 6 - iconBtnW
+		content's addSubview:(makeIconButton(remX, y - 4, iconBtnW, filesLabelH + 6, 0, "minus", "Remove file", "clickOptionsRemoveFiles:"))
+		content's addSubview:(makeIconButton(addX, y - 4, iconBtnW, filesLabelH + 6, 0, "plus", "Add file", "clickOptionsAddFiles:"))
 
 		set y to y - gapXs - filesH
-		content's addSubview:(makeFilesListWell(displayNames, margin, y, innerW, filesH))
+		if nFiles is 0 then
+			content's addSubview:(makeCaption("No files yet — use + to add", margin, y + filesH / 2 - 8, innerW, 16))
+		else
+			content's addSubview:(makeFilesListWell(displayNames, margin, y, innerW, filesH))
+		end if
 
 		set y to y - gapLg - modeLabelH
 		content's addSubview:(makeLabel("Mode", margin, y, innerW, modeLabelH))
@@ -1735,6 +1920,26 @@ on showOptionsPanel(fileNames)
 		set y to y - gapXs - popupH
 		set formatPopup to makeOptionsPopup(formatTitles, lastFormatRow, margin, y, innerW, popupH)
 		content's addSubview:formatPopup
+
+		set y to y - gapLg - outLabelH
+		content's addSubview:(makeLabel("Output folder", margin, y, innerW, outLabelH))
+		set y to y - gapXs - outPathH
+		set pathW to innerW - 180
+		if pathW < 160 then set pathW to 160
+		-- Single-line helper optically centered to Choose… / Clear (same row y + btnH)
+		set pathLineH to 16
+		set pathTextY to y + ((btnH - pathLineH) div 2)
+		content's addSubview:(makeOutFolderPathLabel(outPathText, margin, pathTextY, pathW, pathLineH))
+		set chooseW to 90
+		set clearW to 70
+		set chooseX to margin + innerW - chooseW
+		set clearX to chooseX - btnGap - clearW
+		if optionsOutDir is not "" then
+			set clearBtn to makeDialogButton("Clear", clearX, y, clearW, btnH, "clickOptionsClearOutDir:")
+			content's addSubview:clearBtn
+		end if
+		set chooseBtn to makeDialogButton("Choose…", chooseX, y, chooseW, btnH, "clickOptionsChooseOutDir:")
+		content's addSubview:chooseBtn
 
 		set y to y - gapLg - tmplLabelH
 		content's addSubview:(makeLabel("Active templates", margin, y, innerW, tmplLabelH))
@@ -1830,7 +2035,14 @@ on showOptionsPanel(fileNames)
 				set wantReview to false
 				set outputFormat to "md"
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
+		else if response is 4 then
+			-- File list / out-dir changed — rebuild panel
+			try
+				thePanel's orderOut_(missing value)
+				thePanel's setDelegate:(missing value)
+				thePanel's |close|()
+			end try
 		else if response is 2 then
 			-- Templates… → shared Tk dialog; options stays visible under it
 			try

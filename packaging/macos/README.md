@@ -60,27 +60,30 @@ sharp custom square and breaks size/shape next to other apps.
 
 ## Use — one options window
 
-1. Drop files onto **Anonymizer** (or double-click → pick files).
+1. **Double-click** the app → options opens with **no files** (add with **+**).  
+   **Drop** files onto Anonymizer → options opens with those files pre-filled.
 2. A **single window** shows:
-   - File list  
+   - **Files** — list with **+** (Add file) / **−** (Remove file); multi-location add  
    - **Mode** pop-up — Strict / Standard / Extract  
    - **Output style** pop-up — stable placeholders or delete redacted data  
    - **Output format** pop-up — Markdown / Source filetype / Both  
-   - **Templates…** — native AppKit pack editor (same chrome as options); enable packs for this run  
+   - **Output folder** — default *same folder as source file (default)*, or **Choose…** a directory (`--out-dir`)  
+   - **Templates…** — native AppKit pack editor; enable packs for this run  
    - ☑ **Review findings before saving** (default on) — teach packs from the **review window**  
    - ☑ **Open result when finished**  
+   - Action bar: **Templates…** left · **Cancel** + **Start** right  
 
 **Templates…** is a native panel in the droplet (not Tk). Data goes through `templates-io.sh` → `python -m anonymizer.templates_io`.  
 Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.  
-Windows still uses the shared Tk `templates-ui`.  
-**Teach** keep-clear / new adds into a user pack from the review window footer (not the options panel).
-3. Click **Start** (or Cancel).
+Windows Tk options/templates share the same product logic.  
+**Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
+3. Click **Start** (or Cancel). Start requires at least one file.
 4. When finished (no review path):
    - **Open** checked → file opens; no extra Finder/OK popup (notification only)
    - **Open** unchecked → one **Done** dialog with **Show in Finder**
 
 ```text
-Drop → [ Options window ] → work → [ Done ]
+Open app or drop files → [ Options window ] → work → [ Done ]
 ```
 
 ### Modes (pop-up)

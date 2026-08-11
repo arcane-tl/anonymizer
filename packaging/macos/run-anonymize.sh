@@ -17,6 +17,7 @@
 #   --out PATH            Write ENABLED/CANCEL line to PATH (Mac AppleScript)
 #   --allow-from PATH     Legacy allowlist lines → temp config merge
 #   --deny-from PATH      Legacy denylist lines → temp config merge
+#   --out-dir PATH        Write outputs under PATH (CLI --out-dir)
 #
 # On success, prints one line per written output file to stdout:
 #   OUTPUT:/absolute/path/to/file.md
@@ -47,6 +48,7 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   --enabled IDS         Starting selection for --templates-ui
   --allow-from PATH     Legacy allowlist file (one string per line)
   --deny-from PATH      Legacy denylist file (one string per line)
+  --out-dir PATH        Write all outputs under PATH
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
@@ -108,8 +110,12 @@ expected_output_path() {
   local input_path="$1"
   local mode="$2"
   local dir base stem name in_abs out_abs
-  dir=$(cd "$(dirname -- "$input_path")" && pwd)
   base=$(basename -- "$input_path")
+  if [[ -n "${OUT_DIR:-}" ]]; then
+    dir=$(cd "$OUT_DIR" && pwd)
+  else
+    dir=$(cd "$(dirname -- "$input_path")" && pwd)
+  fi
   if [[ "$base" == *.* ]]; then
     stem="${base%.*}"
   else
@@ -118,7 +124,7 @@ expected_output_path() {
 
   if [[ "$mode" == "extract" ]]; then
     name="${stem}.md"
-    in_abs="${dir}/${base}"
+    in_abs="$(cd "$(dirname -- "$input_path")" && pwd)/${base}"
     out_abs="${dir}/${name}"
     if [[ "$in_abs" == "$out_abs" ]]; then
       name="${stem}.extracted.md"
@@ -133,8 +139,12 @@ expected_output_path() {
 expected_native_output_path() {
   local input_path="$1"
   local dir base stem ext name
-  dir=$(cd "$(dirname -- "$input_path")" && pwd)
   base=$(basename -- "$input_path")
+  if [[ -n "${OUT_DIR:-}" ]]; then
+    dir=$(cd "$OUT_DIR" && pwd)
+  else
+    dir=$(cd "$(dirname -- "$input_path")" && pwd)
+  fi
   ext="${base##*.}"
   ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
   if [[ "$base" == *.* ]]; then
@@ -213,6 +223,7 @@ ALLOW_FROM=""
 DENY_FROM=""
 TEMPLATE_IDS=""
 LEARN_TO=""
+OUT_DIR=""
 TEMPLATES_UI=0
 UI_ENABLED=""
 UI_OUT=""
@@ -245,6 +256,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --learn-to)
       LEARN_TO="${2:-}"
+      shift 2
+      ;;
+    --out-dir)
+      OUT_DIR="${2:-}"
       shift 2
       ;;
     --templates-ui)
@@ -351,6 +366,10 @@ if [[ -n "$TEMPLATE_IDS" ]]; then
 fi
 if [[ -n "$LEARN_TO" ]]; then
   EXTRA_ARGS+=(--learn-to "$LEARN_TO")
+fi
+if [[ -n "$OUT_DIR" ]]; then
+  mkdir -p "$OUT_DIR"
+  EXTRA_ARGS+=(--out-dir "$OUT_DIR")
 fi
 cleanup_config() {
   if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
