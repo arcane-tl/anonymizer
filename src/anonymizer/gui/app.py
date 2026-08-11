@@ -62,7 +62,8 @@ SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".text", ".markdown"}
 _FILETYPES = [
     ("PDF", "*.pdf"),
     ("Word documents", "*.docx"),
-    ("Text / Markdown", "*.txt *.md"),
+    ("Text", "*.txt"),
+    ("Markdown", "*.md"),
     ("All files", "*.*"),
 ]
 
@@ -118,8 +119,33 @@ def _log(msg: str) -> None:
         p = _log_path()
         with p.open("a", encoding="utf-8") as f:
             f.write(msg.rstrip() + "\n")
+            f.flush()
     except OSError:
         pass
+    # Mirror to console when present (dev / run-gui-dev.ps1)
+    try:
+        print(f"[anonymizer-gui] {msg}", file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _gui_debug_enabled() -> bool:
+    v = (os.environ.get("ANONYMIZER_GUI_DEBUG") or "").strip().lower()
+    return v in {"1", "true", "yes", "on"}
+
+
+def _debug_box(text: str) -> None:
+    """Optional step MessageBox when ANONYMIZER_GUI_DEBUG=1."""
+    if not _gui_debug_enabled():
+        return
+    _log(f"DEBUG BOX: {text}")
+    try:
+        if tk is not None:
+            messagebox.showinfo("Anonymizer debug", text)
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    _message_box("Anonymizer debug", text)
 
 
 def _message_box(title: str, text: str) -> None:
@@ -197,7 +223,12 @@ def _probe_cli_base(base: Path) -> list[str] | None:
 
 
 def _find_anonymize() -> list[str] | None:
-    """Return argv prefix for the anonymize CLI, or None if not found."""
+    """Return argv prefix for the anonymize CLI, or None if not found.
+
+    Non-frozen (dev): prefer ``sys.executable -m anonymizer.cli`` so Start uses
+    the same package tree as the GUI (via PYTHONPATH). Preferring the Setup
+    install first caused exit 2 when an older install lacked ``--template``.
+    """
     env = os.environ.get("ANONYMIZER_BIN")
     if env and Path(env).is_file():
         return _cli_prefix_for_path(env)
@@ -208,27 +239,26 @@ def _find_anonymize() -> list[str] | None:
         found = _probe_cli_base(_app_dir()) or _probe_cli_base(_app_dir().parent)
         if found:
             return found
+        return None
 
-    # Install prefixes (Setup.exe → %LOCALAPPDATA%\Anonymizer, install.ps1 → anonymizer)
-    local_app = Path(os.environ.get("LOCALAPPDATA", ""))
-    for base in (
-        local_app / "Anonymizer",
-        local_app / "anonymizer",
-        _app_dir(),
-        _app_dir().parent,
-    ):
-        found = _probe_cli_base(base)
-        if found:
-            return found
+    # Dev / python -m anonymizer.gui: same interpreter + code as this process.
+    exe = Path(sys.executable)
+    if exe.is_file():
+        try:
+            import anonymizer.cli  # noqa: F401
 
-    which = shutil.which("anonymize")
-    if which:
-        return _cli_prefix_for_path(which)
+            prefix = [str(exe), "-m", "anonymizer.cli"]
+            _log(f"_find_anonymize: using GUI interpreter {prefix!r}")
+            return prefix
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_find_anonymize: sys.executable cannot import anonymizer.cli: {exc}")
 
+    # Worktree / repo layout near this source file
     here = Path(__file__).resolve()
     for root in (here.parents[3], here.parents[2], Path.cwd()):
         found = _probe_cli_base(root)
         if found:
+            _log(f"_find_anonymize: repo probe {found!r}")
             return found
         for rel in (
             ".venv/Scripts/python.exe",
@@ -241,6 +271,19 @@ def _find_anonymize() -> list[str] | None:
             cand = root / rel
             if cand.is_file():
                 return _cli_prefix_for_path(cand)
+
+    which = shutil.which("anonymize")
+    if which:
+        _log(f"_find_anonymize: PATH anonymize {which!r}")
+        return _cli_prefix_for_path(which)
+
+    # Last resort: installed Setup (may lag feature flags vs this GUI)
+    local_app = Path(os.environ.get("LOCALAPPDATA", ""))
+    for base in (local_app / "Anonymizer", local_app / "anonymizer"):
+        found = _probe_cli_base(base)
+        if found:
+            _log(f"_find_anonymize: fallback install {found!r}")
+            return found
     return None
 
 
@@ -331,9 +374,36 @@ def _pack_files_list(parent: "tk.Misc", files: list[Path], *, width_px: int = 42
     return wrap
 
 
-def _filter_paths(paths: list[str] | tuple[str, ...]) -> list[Path]:
+def _coerce_path_args(paths: object) -> list[str]:
+    """Normalize filedialog / argv results to a list of path strings.
+
+    Windows ``askopenfilenames`` usually returns a tuple, but a single selection
+    can occasionally arrive as a bare string. Iterating a string yields
+    characters and silently drops every file — treat str/Path as one path.
+    """
+    if paths is None:
+        return []
+    if isinstance(paths, (str, Path)):
+        s = str(paths).strip()
+        return [s] if s else []
+    try:
+        seq = list(paths)  # type: ignore[arg-type]
+    except TypeError:
+        s = str(paths).strip()
+        return [s] if s else []
+    out: list[str] = []
+    for item in seq:
+        if item is None:
+            continue
+        s = str(item).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _filter_paths(paths: object) -> list[Path]:
     files: list[Path] = []
-    for a in paths:
+    for a in _coerce_path_args(paths):
         p = Path(a).expanduser()
         try:
             p = p.resolve()
@@ -1629,6 +1699,7 @@ class TemplatesDialog(tk.Toplevel):
 
 class OptionsApp(tk.Tk):
     def __init__(self, files: list[Path]) -> None:
+        _log(f"OptionsApp __init__ begin n={len(files)}")
         super().__init__()
         self.files = [p.resolve() for p in files]
         self.title(f"Anonymizer {__version__}")
@@ -1642,7 +1713,9 @@ class OptionsApp(tk.Tk):
             pass
 
         # Templates enabled for this run (builtin defaults or config)
+        _log("OptionsApp discover_templates…")
         packs = discover_templates()
+        _log(f"OptionsApp packs={len(packs)}")
         cfg_enabled: list[str] | None = None
         try:
             cfg_path = default_config_path()
@@ -1781,15 +1854,26 @@ class OptionsApp(tk.Tk):
             self.geometry(f"+{x}+{y}")
         except tk.TclError:
             pass
+        self.deiconify()
         self.lift()
         try:
             self.attributes("-topmost", True)
-            self.after(400, lambda: self._safe_topmost(False))
+            self.after(600, self._clear_topmost_soon)
         except tk.TclError:
             pass
         # Enable Return → Start only after focus has settled
         self.after(500, self._enable_return_shortcut)
-        _log(f"OptionsApp ready files={len(self.files)}")
+        _log(
+            f"OptionsApp ready files={len(self.files)} "
+            f"geom={self.geometry()!r} viewable={self.winfo_viewable()}"
+        )
+        _debug_box(
+            f"Options window ready\n{len(self.files)} file(s)\n{self.geometry()}\n"
+            f"Log: {_log_path()}"
+        )
+
+    def _clear_topmost_soon(self) -> None:
+        self._safe_topmost(False)
 
     def _safe_topmost(self, value: bool) -> None:
         try:
@@ -1891,9 +1975,17 @@ class OptionsApp(tk.Tk):
             style,
             "--format",
             out_fmt,
-            "--template",
-            ",".join(self.enabled_template_ids),
         ]
+        # Only pass --template when something is selected (empty string confuses old CLIs).
+        if self.enabled_template_ids:
+            common_flags.extend(
+                ["--template", ",".join(self.enabled_template_ids)]
+            )
+        _log(
+            f"_run_start mode={mode} style={style} fmt={out_fmt} "
+            f"review={want_review} templates={self.enabled_template_ids!r} "
+            f"cli={cli!r}"
+        )
 
         if want_review:
             cmds = [
@@ -2051,18 +2143,18 @@ class OptionsApp(tk.Tk):
             pass
 
         for cmd in cmds:
-            _log(f"REVIEW RUN: {cmd[0] if cmd else '?'} …")
+            _log(f"REVIEW RUN: {' '.join(cmd[:6])}…")
             try:
-                if sys.platform == "win32":
-                    # New console for progress; process is waited so review can block.
-                    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-                    proc = subprocess.run(
-                        cmd,
-                        env=env,
-                        creationflags=creationflags,
-                    )
-                else:
-                    proc = subprocess.run(cmd, env=env)
+                # Capture stderr so "No such option: --template" is visible in the dialog.
+                # Review window is still a separate Tk UI from the CLI process.
+                proc = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
             except OSError as exc:
                 errors.append(str(exc))
                 _log(f"REVIEW FAIL spawn: {exc}")
@@ -2076,8 +2168,17 @@ class OptionsApp(tk.Tk):
                 cancelled += 1
                 _log("REVIEW cancelled (130)")
                 continue
-            errors.append(f"exit {code}")
-            _log(f"REVIEW FAIL exit={code}")
+            detail = (proc.stderr or proc.stdout or "").strip()
+            if detail:
+                _log(f"REVIEW FAIL exit={code} stderr:\n{detail[:2000]}")
+                # First meaningful line(s) for the dialog
+                short = "\n".join(detail.splitlines()[:8])
+                if len(short) > 400:
+                    short = short[:400] + "…"
+                errors.append(f"exit {code}\n{short}")
+            else:
+                errors.append(f"exit {code}")
+                _log(f"REVIEW FAIL exit={code}")
 
         try:
             if self.winfo_exists():
@@ -2113,6 +2214,7 @@ class LauncherApp(tk.Tk):
     """Always-visible first window: pick files or quit (never silent)."""
 
     def __init__(self) -> None:
+        _log("LauncherApp __init__ begin")
         super().__init__()
         self.title(f"Anonymizer {__version__}")
         self.resizable(False, False)
@@ -2150,10 +2252,26 @@ class LauncherApp(tk.Tk):
         self.bind("<Escape>", lambda _e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.update_idletasks()
+        try:
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            w, h = max(self.winfo_reqwidth(), 360), max(self.winfo_reqheight(), 200)
+            self.geometry(f"+{max(40, (sw - w) // 2)}+{max(40, (sh - h) // 2)}")
+        except tk.TclError:
+            pass
+        self.deiconify()
         self.lift()
         try:
             self.attributes("-topmost", True)
-            self.after(400, lambda: self.attributes("-topmost", False))
+            self.after(600, self._clear_topmost)
+        except tk.TclError:
+            pass
+        _log(f"LauncherApp ready geom={self.geometry()!r}")
+        _debug_box(f"Launcher ready\n{self.geometry()}\nLog: {_log_path()}")
+
+    def _clear_topmost(self) -> None:
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", False)
         except tk.TclError:
             pass
 
@@ -2163,9 +2281,11 @@ class LauncherApp(tk.Tk):
             title="Choose documents to anonymize",
             filetypes=_FILETYPES,
         )
-        files = _filter_paths(list(paths) if paths else [])
+        raw = _coerce_path_args(paths)
+        files = _filter_paths(raw)
+        _log(f"Launcher pick raw={len(raw)} filtered={len(files)}")
         if not files:
-            if paths:
+            if raw:
                 messagebox.showwarning(
                     "Anonymizer",
                     "No supported files selected.\n\n"
@@ -2174,7 +2294,19 @@ class LauncherApp(tk.Tk):
                 )
             return
         self.chosen = files
-        self.destroy()
+        # Defer destroy until after the native dialog fully unwinds (Windows).
+        # Immediate destroy of the parent can leave the app stuck with no options window.
+        self.after(50, self._finish_pick)
+
+    def _finish_pick(self) -> None:
+        try:
+            self.quit()
+        except tk.TclError:
+            pass
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
 
 def shlex_quote(s: str) -> str:
@@ -2274,7 +2406,11 @@ def run_templates_ui(
 
 
 def main(argv: list[str] | None = None) -> int:
-    _log(f"--- anonymize-gui start platform={sys.platform} argv={argv or sys.argv}")
+    _log(
+        f"--- anonymize-gui start platform={sys.platform} "
+        f"argv={argv or sys.argv} log={_log_path()} "
+        f"debug={_gui_debug_enabled()}"
+    )
     if tk is None:
         msg = (
             "tkinter is not available in this Python build.\n\n"
@@ -2291,18 +2427,51 @@ def main(argv: list[str] | None = None) -> int:
         args = list(sys.argv[1:] if argv is None else argv)
         # Strip Windows empty args
         args = [a for a in args if a and a.strip()]
+        _log(f"main: raw args n={len(args)}")
         files = _filter_paths(args)
+        _log(f"main: filtered files n={len(files)}")
 
         if not files:
+            _log("main: opening LauncherApp (no CLI files)")
+            _debug_box("Opening file launcher…")
             launcher = LauncherApp()
             launcher.mainloop()
-            files = launcher.chosen
+            files = list(getattr(launcher, "chosen", []) or [])
+            try:
+                launcher.destroy()
+            except tk.TclError:
+                pass
             if not files:
                 _log("no files chosen; exit")
                 return 0
+            _log(
+                "launcher → options files="
+                + str(len(files))
+                + " names="
+                + ",".join(p.name for p in files[:5])
+            )
+            # Windows: clear default root so a fresh OptionsApp Tk starts cleanly.
+            if sys.platform == "win32":
+                try:
+                    tk._default_root = None  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    pass
 
+        _log(f"main: opening OptionsApp n={len(files)}")
+        _debug_box(f"Opening options for {len(files)} file(s)…")
         app = OptionsApp(files)
+        try:
+            app.deiconify()
+            app.lift()
+            app.focus_force()
+            if sys.platform == "win32":
+                app.attributes("-topmost", True)
+                app.after(600, app._clear_topmost_soon)
+        except tk.TclError:
+            pass
+        _log("main: entering OptionsApp mainloop")
         app.mainloop()
+        _log("main: OptionsApp mainloop ended")
         return 0
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
