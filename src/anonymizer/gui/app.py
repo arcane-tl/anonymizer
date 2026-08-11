@@ -67,23 +67,45 @@ _FILETYPES = [
     ("All files", "*.*"),
 ]
 
-# ── Dark theme (Mac options panel parity) ─────────────────────────
-_BG_APP = "#2C2C2E"  # charcoal panel
-_BG_WELL = "#1C1C1E"  # files / text wells
-_BG_BTN = "#3A3A3C"  # secondary buttons
-_BG_BTN_HOVER = "#48484A"
-_BORDER = "#3A3A3C"
-_TEXT = "#F5F5F7"
-_TEXT_MUTED = "#98989D"
-_ACCENT = "#0A84FF"  # macOS system blue
-_ACCENT_HOVER = "#409CFF"
-_TEXT_ON_ACCENT = "#FFFFFF"
-_SELECT = "#1E3A5F"
+# ── Dark theme ────────────────────────────────────────────────────
+# macOS: match native NSPanel (windowBackgroundColor / controlAccent).
+# Windows: slightly elevated charcoal (OptionsApp chrome).
+if sys.platform == "darwin":
+    _BG_APP = "#1E1E1E"  # AppKit windowBackgroundColor (Dark)
+    _BG_WELL = "#282828"  # underPage / elevated field
+    _BG_BTN = "#3A3A3C"
+    _BG_BTN_HOVER = "#48484A"
+    _BORDER = "#3A3A3C"
+    _TEXT = "#FFFFFF"
+    _TEXT_MUTED = "#98989D"
+    _ACCENT = "#007AFF"  # controlAccent
+    _ACCENT_HOVER = "#409CFF"
+    _TEXT_ON_ACCENT = "#FFFFFF"
+    _SELECT = "#0059D1"  # selectedContentBackground approx
+else:
+    _BG_APP = "#2C2C2E"
+    _BG_WELL = "#1C1C1E"
+    _BG_BTN = "#3A3A3C"
+    _BG_BTN_HOVER = "#48484A"
+    _BORDER = "#3A3A3C"
+    _TEXT = "#F5F5F7"
+    _TEXT_MUTED = "#98989D"
+    _ACCENT = "#0A84FF"
+    _ACCENT_HOVER = "#409CFF"
+    _TEXT_ON_ACCENT = "#FFFFFF"
+    _SELECT = "#1E3A5F"
 
-_FONT = ("Segoe UI", 11)
-_FONT_BOLD = ("Segoe UI", 12, "bold")
-_FONT_TITLE = ("Segoe UI", 16, "bold")
-_FONT_SMALL = ("Segoe UI", 10)
+# Platform fonts: Segoe on Windows; system UI on macOS (matches NSPanel).
+if sys.platform == "darwin":
+    _FONT = (".AppleSystemUIFont", 13)
+    _FONT_BOLD = (".AppleSystemUIFont", 13, "bold")
+    _FONT_TITLE = (".AppleSystemUIFont", 17, "bold")
+    _FONT_SMALL = (".AppleSystemUIFont", 12)
+else:
+    _FONT = ("Segoe UI", 11)
+    _FONT_BOLD = ("Segoe UI", 12, "bold")
+    _FONT_TITLE = ("Segoe UI", 16, "bold")
+    _FONT_SMALL = ("Segoe UI", 10)
 _ICON_TITLE_PX = 44
 
 
@@ -566,6 +588,26 @@ def _dark_check(
     return cb
 
 
+def _round_rect(canvas: "tk.Canvas", x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
+    """Draw a rounded rectangle on a canvas (macOS-safe solid fills)."""
+    r = max(0, min(r, (x2 - x1) // 2, (y2 - y1) // 2))
+    points = [
+        x1 + r, y1,
+        x2 - r, y1,
+        x2, y1,
+        x2, y1 + r,
+        x2, y2 - r,
+        x2, y2,
+        x2 - r, y2,
+        x1 + r, y2,
+        x1, y2,
+        x1, y2 - r,
+        x1, y1 + r,
+        x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **kwargs)
+
+
 def _chip_button(
     parent: "tk.Misc",
     text: str,
@@ -573,31 +615,101 @@ def _chip_button(
     *,
     primary: bool = False,
     width: int | None = 11,
-) -> "tk.Button":
-    """Compact action chip (~Mac 96×32 dialog buttons when width=11)."""
-    if primary:
-        bg, fg, active = _ACCENT, _TEXT_ON_ACCENT, _ACCENT_HOVER
-    else:
-        bg, fg, active = _BG_BTN, _TEXT, _BG_BTN_HOVER
-    kw: dict = dict(
-        text=text,
-        command=command,
-        bg=bg,
-        fg=fg,
-        activebackground=active,
-        activeforeground=fg,
-        disabledforeground=_TEXT_MUTED,
-        font=_FONT,  # same size for Cancel / Lists… / Start (Mac HIG-ish)
-        relief=tk.FLAT,
-        bd=0,
-        padx=10,
-        pady=4,
-        cursor="hand2",
-        highlightthickness=0,
-    )
+    chrome: str | None = None,
+) -> "tk.Frame":
+    """Rounded pill button drawn on canvas.
+
+    Aqua ignores ``tk.Button`` bg/fg; canvas fills match OptionsApp chrome on
+    both macOS and Windows. Supports ``.configure(state=...)`` for enable/disable.
+    """
+    chrome_bg = chrome if chrome is not None else _BG_APP
+    fill_idle = _ACCENT if primary else _BG_BTN
+    fill_hover = _ACCENT_HOVER if primary else _BG_BTN_HOVER
+    fill_disabled = _BG_WELL if primary else _BG_WELL
+    fg_idle = _TEXT_ON_ACCENT if primary else _TEXT
+    fg_disabled = _TEXT_MUTED
+    outline = _ACCENT if primary else _BORDER
+    font = _FONT_BOLD if primary else _FONT
+    pad_x, pad_y, radius = 14, 7, 8
+
+    probe = tk.Label(parent, text=text, font=font)
+    try:
+        probe.update_idletasks()
+        tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
+    finally:
+        probe.destroy()
+    # Optional min width in "character cells" (parity with old tk.Button width=)
+    min_w = 0
     if width is not None:
-        kw["width"] = width
-    return tk.Button(parent, **kw)
+        probe2 = tk.Label(parent, text="0" * max(1, width), font=font)
+        try:
+            probe2.update_idletasks()
+            min_w = probe2.winfo_reqwidth() + pad_x
+        finally:
+            probe2.destroy()
+    bw = max(tw + pad_x * 2, min_w, 72)
+    bh = max(th + pad_y * 2, 32)
+
+    wrap = tk.Frame(parent, bg=chrome_bg, width=bw, height=bh, cursor="hand2")
+    wrap.pack_propagate(False)
+    canvas = tk.Canvas(
+        wrap,
+        width=bw,
+        height=bh,
+        bg=chrome_bg,
+        highlightthickness=0,
+        bd=0,
+        cursor="hand2",
+    )
+    canvas.pack(fill=tk.BOTH, expand=True)
+
+    state: dict = {"enabled": True, "hover": False}
+
+    def _paint() -> None:
+        enabled = state["enabled"]
+        hover = state["hover"] and enabled
+        if not enabled:
+            fill, fg = fill_disabled, fg_disabled
+            ol = _BORDER
+        elif hover:
+            fill, fg, ol = fill_hover, fg_idle, outline
+        else:
+            fill, fg, ol = fill_idle, fg_idle, outline
+        canvas.delete("all")
+        _round_rect(
+            canvas, 1, 1, bw - 2, bh - 2, radius, fill=fill, outline=ol, width=1
+        )
+        canvas.create_text(bw // 2, bh // 2, text=text, fill=fg, font=font)
+
+    def _run(_e=None) -> None:
+        if state["enabled"] and command is not None:
+            command()
+
+    def _configure(cnf=None, **kw):  # type: ignore[no-untyped-def]
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+        elif cnf is not None and not kw:
+            # cnf as single option name → Frame.configure
+            return tk.Frame.configure(wrap, cnf)
+        if "state" in kw:
+            st = kw.pop("state")
+            state["enabled"] = st not in (tk.DISABLED, "disabled", 0, "0")
+            wrap.configure(cursor="hand2" if state["enabled"] else "arrow")
+            canvas.configure(cursor="hand2" if state["enabled"] else "arrow")
+            _paint()
+        if kw:
+            return tk.Frame.configure(wrap, **kw)
+        return None
+
+    wrap.configure = _configure  # type: ignore[method-assign]
+    wrap.config = _configure  # type: ignore[method-assign]
+
+    _paint()
+    canvas.bind("<Button-1>", _run)
+    canvas.bind("<Enter>", lambda _e: state.update(hover=True) or _paint())
+    canvas.bind("<Leave>", lambda _e: state.update(hover=False) or _paint())
+    wrap.bind("<Button-1>", _run)
+    return wrap
 
 
 def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Frame":
@@ -623,10 +735,40 @@ def _pack_title_row(parent: "tk.Misc", title: str, icon_holder: list) -> "tk.Fra
     return row
 
 
+def _raise_toplevel(win: "tk.Misc") -> None:
+    """Bring a Tk window to the front (sticky topmost; activate on macOS)."""
+    try:
+        win.update_idletasks()
+        win.deiconify()
+        win.lift()
+        win.focus_force()
+        win.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    if sys.platform == "darwin":
+        # Separate process (templates-ui via do shell script) must steal focus
+        # from the Anonymizer NSPanel app or it stays buried.
+        try:
+            pid = os.getpid()
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'tell application "System Events" to set frontmost of '
+                    f"first process whose unix id is {pid} to true",
+                ],
+                check=False,
+                capture_output=True,
+                timeout=3,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class TemplatesDialog(tk.Toplevel):
     """Master–detail: left templates (enable for run), right allow/deny editors.
 
-    Styled to match OptionsApp (dark charcoal, chips, wells, title icon).
+    Styled to match OptionsApp (dark charcoal, canvas chips, wells, title icon).
     """
 
     def __init__(
@@ -644,9 +786,28 @@ class TemplatesDialog(tk.Toplevel):
         # Done → list of enabled template ids; Cancel → None
         self.result: list[str] | None = None
         self._standalone = standalone
-        # Never transient(withdrawn parent) on macOS — dialog may never show.
-        # Also avoid transient to OptionsApp so Templates can freely stack above it.
+        # Full-window charcoal so no Aqua default gray shows around content.
         self.configure(bg=_BG_APP)
+        try:
+            # macOS: document window; avoids utility-panel stacking quirks
+            if sys.platform == "darwin":
+                self.tk.call(
+                    "::tk::unsupported::MacWindowStyle",
+                    "style",
+                    self._w,
+                    "document",
+                    "closeBox collapseBox resizable",
+                )
+        except tk.TclError:
+            pass
+        # Child of OptionsApp when parent is visible → sits above options.
+        # Never transient(withdrawn parent) on macOS — dialog may never show.
+        if not standalone:
+            try:
+                if bool(master.winfo_viewable()):
+                    self.transient(master)
+            except tk.TclError:
+                pass
         self._icon_refs: list = []
         self._icon_refs.extend(_apply_window_icons(self))
         try:
@@ -770,17 +931,24 @@ class TemplatesDialog(tk.Toplevel):
         )
         self._desc_lbl.pack(anchor=tk.W, pady=(0, 12))
 
+        # Equal allow / deny panes (grid weight=1 each)
+        editors = tk.Frame(right, bg=_BG_APP)
+        editors.pack(fill=tk.BOTH, expand=True)
+        editors.columnconfigure(0, weight=1)
+        editors.rowconfigure(1, weight=1, uniform="editors")
+        editors.rowconfigure(3, weight=1, uniform="editors")
+
         tk.Label(
-            right,
+            editors,
             text="Never redact (allow)",
             bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_BOLD,
             anchor=tk.W,
-        ).pack(anchor=tk.W)
+        ).grid(row=0, column=0, sticky="ew")
         self.allow_txt = tk.Text(
-            right,
-            height=9,
+            editors,
+            height=6,
             font=_FONT_SMALL,
             bg=_BG_WELL,
             fg=_TEXT,
@@ -796,20 +964,20 @@ class TemplatesDialog(tk.Toplevel):
             selectbackground=_SELECT,
             selectforeground=_TEXT,
         )
-        self.allow_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
+        self.allow_txt.grid(row=1, column=0, sticky="nsew", pady=(4, 12))
         self.allow_txt.bind("<<Modified>>", self._on_editor_modified)
 
         tk.Label(
-            right,
+            editors,
             text="Always redact (deny)",
             bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_BOLD,
             anchor=tk.W,
-        ).pack(anchor=tk.W)
+        ).grid(row=2, column=0, sticky="ew")
         self.deny_txt = tk.Text(
-            right,
-            height=7,
+            editors,
+            height=6,
             font=_FONT_SMALL,
             bg=_BG_WELL,
             fg=_TEXT,
@@ -825,11 +993,11 @@ class TemplatesDialog(tk.Toplevel):
             selectbackground=_SELECT,
             selectforeground=_TEXT,
         )
-        self.deny_txt.pack(fill=tk.BOTH, expand=True, pady=(4, 12))
+        self.deny_txt.grid(row=3, column=0, sticky="nsew", pady=(4, 8))
         self.deny_txt.bind("<<Modified>>", self._on_editor_modified)
 
         edit_btns = tk.Frame(right, bg=_BG_APP)
-        edit_btns.pack(fill=tk.X, pady=(0, 4))
+        edit_btns.pack(fill=tk.X, pady=(4, 0))
         self._fork_btn = _chip_button(
             edit_btns, "Fork & edit…", self._fork_selected, width=12
         )
@@ -856,24 +1024,16 @@ class TemplatesDialog(tk.Toplevel):
             self._load_editor(self._selected_id)
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
+        # Stay above OptionsApp / NSPanel for the whole dialog lifetime.
+        # Clearing topmost early let the options window cover Templates.
         try:
-            self.update_idletasks()
-            self.deiconify()
-            self.lift()
-            self.focus_force()
-            # Brief raise only — never leave sticky topmost (blocks layering)
-            self.attributes("-topmost", True)
-            self.after(350, lambda: self._clear_topmost())
+            _raise_toplevel(self)
+            # Re-assert after event loop starts (Aqua sometimes loses first raise)
+            self.after(50, lambda: _raise_toplevel(self))
+            self.after(300, lambda: _raise_toplevel(self))
         except tk.TclError:
             pass
         self.wait_window(self)
-
-    def _clear_topmost(self) -> None:
-        try:
-            if self.winfo_exists():
-                self.attributes("-topmost", False)
-        except tk.TclError:
-            pass
 
     def _pack_by_id(self, tid: str) -> Template | None:
         for t in self._packs:
@@ -1393,37 +1553,28 @@ class OptionsApp(tk.Tk):
             pass
 
     def _templates(self) -> None:
-        # Clear any sticky topmost and hide options so Templates can layer freely
+        # Keep Options visible underneath; Templates is transient + topmost.
         try:
             self.attributes("-topmost", False)
         except tk.TclError:
             pass
-        try:
-            self.withdraw()
-        except tk.TclError:
-            pass
-        try:
-            # standalone=True: no transient(parent) z-order fight with OptionsApp
-            dlg = TemplatesDialog(
-                self, list(self.enabled_template_ids), standalone=True
-            )
-            if dlg.result is not None:
-                self.enabled_template_ids = list(dlg.result)
-                try:
-                    self.templates_lbl.configure(
-                        text=_templates_status(self.enabled_template_ids)
-                    )
-                except tk.TclError:
-                    pass
-        finally:
+        dlg = TemplatesDialog(
+            self, list(self.enabled_template_ids), standalone=False
+        )
+        if dlg.result is not None:
+            self.enabled_template_ids = list(dlg.result)
             try:
-                if self.winfo_exists():
-                    self.deiconify()
-                    self.lift()
-                    # Do not re-assert permanent topmost
-                    self.attributes("-topmost", False)
+                self.templates_lbl.configure(
+                    text=_templates_status(self.enabled_template_ids)
+                )
             except tk.TclError:
                 pass
+        try:
+            if self.winfo_exists():
+                self.lift()
+                self.focus_force()
+        except tk.TclError:
+            pass
 
     def _start(self) -> None:
         if self._busy:

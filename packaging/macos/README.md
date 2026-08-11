@@ -66,12 +66,13 @@ sharp custom square and breaks size/shape next to other apps.
    - **Mode** pop-up — Strict / Standard / Extract  
    - **Output style** pop-up — stable placeholders or delete redacted data  
    - **Output format** pop-up — Markdown / Source filetype / Both  
-   - **Templates…** — shared Tk pack editor (same as Windows); enable packs for this run  
+   - **Templates…** — native AppKit pack editor (same chrome as options); enable packs for this run  
    - ☑ **Review findings before saving** (default on) — teach packs from the **review window**  
    - ☑ **Open result when finished**  
 
-**Templates…** runs `anonymize templates-ui` via `run-anonymize.sh` (needs CLI + tkinter).  
+**Templates…** is a native panel in the droplet (not Tk). Data goes through `templates-io.sh` → `python -m anonymizer.templates_io`.  
 Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.  
+Windows still uses the shared Tk `templates-ui`.  
 **Teach** keep-clear / new adds into a user pack from the review window footer (not the options panel).
 3. Click **Start** (or Cancel).
 4. When finished (no review path):

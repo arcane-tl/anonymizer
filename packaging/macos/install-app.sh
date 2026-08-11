@@ -62,6 +62,10 @@ if [[ -f "$HERE/lists-io.sh" ]]; then
   cp "$HERE/lists-io.sh" "$RES/lists-io.sh"
   chmod +x "$RES/lists-io.sh"
 fi
+if [[ -f "$HERE/templates-io.sh" ]]; then
+  cp "$HERE/templates-io.sh" "$RES/templates-io.sh"
+  chmod +x "$RES/templates-io.sh"
+fi
 
 # Canonical version from pyproject.toml (or ANONYMIZER_VERSION override)
 ROOT="$(cd "$HERE/../.." && pwd)"

@@ -101,6 +101,7 @@ def _sb_log(action: str, *, pane: str = "?", rate_hz: float = 0.0, **fields: obj
 _BG_APP = "#0F1115"  # near-black charcoal — window
 _BG_PANEL = "#1A1D24"  # dark slate — cards
 _BG_ELEVATED = "#242830"  # raised charcoal — toolbars / footer
+_BG_TIP = "#12141A"  # tooltip fill — darker than elevated, still readable
 _BG_SELECTED = "#1E3A5F"  # deep navy — selected list row
 _BORDER = "#3A3F4B"  # soft grey border
 
@@ -123,6 +124,7 @@ _GAP = 12
 _RADIUS = 14
 _LIST_SNIPPET_MAX = 48
 _SEARCH_PLACEHOLDER = "Search findings…"
+_DONT_SAVE = "Don't save"
 
 _FONT = ("Helvetica", 13) if sys.platform == "darwin" else ("Segoe UI", 11)
 _FONT_BOLD = ("Helvetica", 14, "bold") if sys.platform == "darwin" else ("Segoe UI", 12, "bold")
@@ -1142,7 +1144,7 @@ class OverlayScrollbar:
 
 
 def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
-    """Draw a rounded rectangle on a canvas."""
+    """Draw a rounded rectangle on a canvas (smooth polygon — fine for large cards)."""
     r = max(0, min(r, (x2 - x1) // 2, (y2 - y1) // 2))
     points = [
         x1 + r, y1,
@@ -1161,12 +1163,163 @@ def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, r: int, *
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
+def _attach_tooltip(widget: "tk.Misc", text: str | Callable[[], str]) -> None:
+    """Solid rectangular tip (borderless Toplevel + Label).
+
+    macOS Aqua Tk composites ``systemTransparent`` as **black**, not see-through,
+    so rounded bubbles with transparent corners always showed a black slab
+    outside the stroke. A solid themed rectangle is the reliable look.
+    """
+    if tk is None:
+        return
+    state: dict[str, object] = {"after": None}
+
+    def _resolve() -> str:
+        try:
+            raw = text() if callable(text) else text
+        except Exception:  # noqa: BLE001
+            raw = ""
+        return (raw if isinstance(raw, str) else str(raw)).strip()
+
+    def _root() -> "tk.Misc | None":
+        try:
+            if not widget.winfo_exists():
+                return None
+            return widget.winfo_toplevel()
+        except tk.TclError:
+            return None
+
+    def _host(root: "tk.Misc") -> dict[str, object]:
+        existing = getattr(root, "_anonymizer_tip_host", None)
+        if isinstance(existing, dict) and existing.get("win") is not None:
+            return existing
+
+        win = tk.Toplevel(root)
+        win.withdraw()
+        win.overrideredirect(True)
+        try:
+            win.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        win.configure(bg=_BG_TIP)
+        lbl = tk.Label(
+            win,
+            text="",
+            bg=_BG_TIP,
+            fg=_TEXT,
+            font=_FONT_TINY,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=_BORDER,
+            highlightcolor=_BORDER,
+            padx=10,
+            pady=5,
+            justify=tk.LEFT,
+        )
+        lbl.pack()
+        host: dict[str, object] = {"win": win, "label": lbl}
+        setattr(root, "_anonymizer_tip_host", host)
+        return host
+
+    def _cancel_job() -> None:
+        job = state.get("after")
+        if job is not None:
+            try:
+                widget.after_cancel(job)  # type: ignore[arg-type]
+            except tk.TclError:
+                pass
+            state["after"] = None
+
+    def _hide(_event=None) -> None:
+        _cancel_job()
+        root = _root()
+        if root is None:
+            return
+        host = getattr(root, "_anonymizer_tip_host", None)
+        if not isinstance(host, dict):
+            return
+        win = host.get("win")
+        if win is None:
+            return
+        try:
+            win.withdraw()  # type: ignore[union-attr]
+        except tk.TclError:
+            pass
+
+    def _show() -> None:
+        state["after"] = None
+        msg = _resolve()
+        if not msg:
+            return
+        root = _root()
+        if root is None:
+            return
+        try:
+            host = _host(root)
+            win = host["win"]
+            lbl = host["label"]
+            assert isinstance(win, tk.Toplevel)
+            assert isinstance(lbl, tk.Label)
+            lbl.configure(text=msg)
+            win.update_idletasks()
+
+            wx = widget.winfo_rootx()
+            wy = widget.winfo_rooty()
+            ww = max(widget.winfo_width(), 1)
+            wh = max(widget.winfo_height(), 1)
+            tw = max(win.winfo_reqwidth(), 1)
+            th = max(win.winfo_reqheight(), 1)
+            sx = wx + max(4, ww // 4)
+            sy = wy + wh + 4
+            try:
+                if sy + th + 8 > root.winfo_screenheight():
+                    sy = wy - th - 4
+            except tk.TclError:
+                pass
+            win.geometry(f"+{sx}+{sy}")
+            win.deiconify()
+            win.lift()
+        except tk.TclError:
+            pass
+
+    def _schedule(_event=None) -> None:
+        _cancel_job()
+        try:
+            state["after"] = widget.after(250, _show)
+        except tk.TclError:
+            pass
+
+    def _leave(event=None) -> None:
+        if event is not None:
+            try:
+                w = widget.winfo_containing(event.x_root, event.y_root)
+                parent = w
+                while parent is not None:
+                    if parent == widget:
+                        return
+                    try:
+                        parent = parent.master  # type: ignore[assignment]
+                    except Exception:  # noqa: BLE001
+                        break
+            except tk.TclError:
+                pass
+        _hide()
+
+    widget.bind("<Enter>", _schedule, add="+")
+    widget.bind("<Leave>", _leave, add="+")
+    widget.bind("<ButtonPress>", _hide, add="+")
+
+
 # Subclass only when tkinter imported; otherwise import of this module must not crash
 # (Setup/embeddable without Tcl used to raise NoneType.Frame during require_review_capable).
 if tk is not None:
 
     class RoundedCard(tk.Frame):
-        """Dark card with rounded corners via background canvas."""
+        """Dark card with rounded corners via background canvas.
+
+        *size_to_content*: height follows inner widgets (avoids Canvas default ~200px
+        blowing up footers). Default False expands to fill (Findings/Document panes).
+        """
 
         def __init__(
             self,
@@ -1176,22 +1329,54 @@ if tk is not None:
             chrome: str = _BG_APP,
             radius: int = _RADIUS,
             pad: int = 12,
+            size_to_content: bool = False,
             **kwargs,
         ) -> None:
             # Outer frame matches app chrome so rounded corners "float"
             super().__init__(parent, bg=chrome, **kwargs)
             self._fill = bg
             self._radius = radius
-            self._canvas = tk.Canvas(self, bg=chrome, highlightthickness=0, bd=0)
-            self._canvas.pack(fill=tk.BOTH, expand=True)
+            self._pad = pad
+            self._size_to_content = size_to_content
+            self._canvas = tk.Canvas(
+                self,
+                bg=chrome,
+                highlightthickness=0,
+                bd=0,
+                # Default Canvas is 300×200 — force tiny seed when sizing to content
+                height=1 if size_to_content else None,
+                width=1 if size_to_content else None,
+            )
+            if size_to_content:
+                self._canvas.pack(fill=tk.X, expand=False)
+            else:
+                self._canvas.pack(fill=tk.BOTH, expand=True)
             self.inner = tk.Frame(self._canvas, bg=bg)
             self._win = self._canvas.create_window(
                 pad, pad, window=self.inner, anchor=tk.NW
             )
             self._shape = None
-            self._pad = pad
             self._redraw_job: str | None = None
             self._canvas.bind("<Configure>", self._schedule_redraw)
+            if size_to_content:
+                self.inner.bind("<Configure>", self._fit_to_inner)
+
+        def _fit_to_inner(self, _event=None) -> None:
+            """Set canvas height from inner reqheight (content-sized cards)."""
+            try:
+                self.inner.update_idletasks()
+                ih = max(1, self.inner.winfo_reqheight())
+                iw = max(1, self.inner.winfo_reqwidth())
+                self._canvas.itemconfigure(
+                    self._win, width=iw, height=ih
+                )
+                total_h = ih + 2 * self._pad
+                total_w = max(self._canvas.winfo_width(), iw + 2 * self._pad)
+                self._canvas.configure(height=total_h)
+                self._canvas.coords(self._win, self._pad, self._pad)
+                self._redraw()
+            except tk.TclError:
+                pass
 
         def _schedule_redraw(self, event=None) -> None:
             """Coalesce configure storms (sash drag) into one idle redraw."""
@@ -1225,10 +1410,21 @@ if tk is not None:
                 tags="shape",
             )
             self._canvas.tag_lower("shape")
-            iw = max(10, w - 2 * self._pad)
-            ih = max(10, h - 2 * self._pad)
-            self._canvas.itemconfigure(self._win, width=iw, height=ih)
-            self._canvas.coords(self._win, self._pad, self._pad)
+            if self._size_to_content:
+                # Width tracks card; height already set by _fit_to_inner
+                try:
+                    iw = max(10, w - 2 * self._pad)
+                    self._canvas.itemconfigure(
+                        self._win, width=iw
+                    )
+                    self._canvas.coords(self._win, self._pad, self._pad)
+                except tk.TclError:
+                    pass
+            else:
+                iw = max(10, w - 2 * self._pad)
+                ih = max(10, h - 2 * self._pad)
+                self._canvas.itemconfigure(self._win, width=iw, height=ih)
+                self._canvas.coords(self._win, self._pad, self._pad)
 
 else:
 
@@ -1296,27 +1492,60 @@ def run_review_window(
     # Pack order: footer BOTTOM first, then header TOP, then paned fills middle
     # (so Cancel/Save/status never get swallowed by the split pane)
 
-    # ── Footer (fixed bottom — always visible) ────────────────────
-    foot_bar = tk.Frame(outer, bg=_BG_ELEVATED, highlightbackground=_BORDER, highlightthickness=1)
-    foot_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(_GAP, 0))
-    foot_inner = tk.Frame(foot_bar, bg=_BG_ELEVATED, padx=14, pady=10)
-    foot_inner.pack(fill=tk.X)
+    # ── Footer (content-height, rounded like Findings/Document cards)
+    # Width comes only from pack(fill=X) on foot_shell — never outer.winfo_width()
+    # (outer includes padx; forcing that width made the bar overflow the window).
+    # Horizontal pad ≥ radius so side arcs stay visible; vertical pad is tighter.
+    foot_shell = tk.Frame(outer, bg=_BG_APP)
+    foot_shell.pack(side=tk.BOTTOM, fill=tk.X, pady=(_GAP, 0))
+    foot_cv = tk.Canvas(foot_shell, bg=_BG_APP, highlightthickness=0, bd=0, height=50)
+    foot_cv.pack(fill=tk.X, expand=False)
+    foot_inner = tk.Frame(foot_cv, bg=_BG_PANEL)
+    # pad must be ≥ radius on both axes or the rectangular create_window
+    # paints over the curved corners (same fill colour → looks square).
+    _foot_radius = 10
+    _foot_pad_x = _foot_radius
+    _foot_pad_y = _foot_radius
+    _foot_win = foot_cv.create_window(
+        _foot_pad_x, _foot_pad_y, window=foot_inner, anchor=tk.NW
+    )
 
-    # Row 1: status + Cancel / Save
-    foot_row = tk.Frame(foot_inner, bg=_BG_ELEVATED)
-    foot_row.pack(fill=tk.X)
+    def _sync_footer(_event=None) -> None:
+        try:
+            foot_inner.update_idletasks()
+            # Actual allocated width from pack — never outer (padx would overflow).
+            sw = foot_shell.winfo_width()
+            if sw < 4 and _event is not None and getattr(_event, "width", 0) > 4:
+                sw = int(_event.width)
+            if sw < 4:
+                sw = max(foot_cv.winfo_width(), 200)
+            ih = max(foot_inner.winfo_reqheight(), 34)
+            iw = max(sw - 2 * _foot_pad_x, 100)
+            foot_cv.itemconfigure(_foot_win, width=iw, height=ih)
+            foot_cv.coords(_foot_win, _foot_pad_x, _foot_pad_y)
+            total_h = ih + 2 * _foot_pad_y
+            # Height only — width is owned by pack(fill=X).
+            foot_cv.configure(height=total_h)
+            foot_cv.delete("shape")
+            _round_rect(
+                foot_cv,
+                1,
+                1,
+                sw - 2,
+                total_h - 2,
+                _foot_radius,
+                fill=_BG_PANEL,
+                outline=_BORDER,
+                width=1,
+                tags="shape",
+            )
+            foot_cv.tag_lower("shape")
+        except tk.TclError:
+            pass
 
-    tk.Label(
-        foot_row,
-        textvariable=status_var,
-        bg=_BG_ELEVATED,
-        fg=_TEXT,
-        font=_FONT_BOLD,
-        anchor=tk.W,
-    ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    act = tk.Frame(foot_row, bg=_BG_ELEVATED)
-    act.pack(side=tk.RIGHT)
+    foot_inner.bind("<Configure>", lambda e: root.after_idle(_sync_footer))
+    foot_shell.bind("<Configure>", lambda e: root.after_idle(_sync_footer))
+    foot_cv.bind("<Configure>", lambda e: root.after_idle(_sync_footer))
 
     def _chip_button(
         parent: tk.Frame,
@@ -1324,15 +1553,15 @@ def run_review_window(
         command,
         *,
         primary: bool = False,
+        chrome: str = _BG_PANEL,
     ) -> tk.Frame:
         """Rounded pill button drawn on canvas (macOS-safe colours)."""
-        bg = _HL_SELECTED_BG if primary else _BG_PANEL
+        bg = _HL_SELECTED_BG if primary else _BG_ELEVATED
         fg = _TEXT_ON_BLUE if primary else _TEXT
         outline = _ACCENT if primary else _BORDER
         font = _FONT_BOLD if primary else _FONT
         pad_x, pad_y, radius = 18, 8, 10
 
-        # Measure text for canvas size
         probe = tk.Label(parent, text=text, font=font)
         probe.update_idletasks()
         tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
@@ -1340,13 +1569,13 @@ def run_review_window(
         bw = tw + pad_x * 2
         bh = max(th + pad_y * 2, 34)
 
-        wrap = tk.Frame(parent, bg=_BG_ELEVATED, width=bw, height=bh, cursor="hand2")
+        wrap = tk.Frame(parent, bg=chrome, width=bw, height=bh, cursor="hand2")
         wrap.pack_propagate(False)
         canvas = tk.Canvas(
             wrap,
             width=bw,
             height=bh,
-            bg=_BG_ELEVATED,
+            bg=chrome,
             highlightthickness=0,
             bd=0,
             cursor="hand2",
@@ -1387,67 +1616,30 @@ def run_review_window(
         wrap.bind("<Button-1>", _run)
         return wrap
 
-    # Row 2: Teach into user template (Mac + Windows + CLI --review-window)
-    teach_bar = tk.Frame(foot_inner, bg=_BG_ELEVATED)
-    teach_bar.pack(fill=tk.X, pady=(8, 0))
-    _learn_preselect = (learn_to or "").strip()
-    teach_var = tk.BooleanVar(value=bool(_learn_preselect))
-    teach_id_var = tk.StringVar(value=_learn_preselect)
-    tk.Checkbutton(
-        teach_bar,
-        text="Teach keep-clear & new adds into",
-        variable=teach_var,
-        bg=_BG_ELEVATED,
-        fg=_TEXT,
-        activebackground=_BG_ELEVATED,
-        activeforeground=_TEXT,
-        selectcolor=_BG_PANEL,
-        font=_FONT_SMALL,
-        highlightthickness=0,
-    ).pack(side=tk.LEFT, padx=(0, 8))
-    _user_pack_ids: list[str] = []
-    try:
-        from anonymizer.anonymize.templates import discover_templates
+    # One row: redaction stats (left) · Cancel + Save (right)
+    foot_row = tk.Frame(foot_inner, bg=_BG_PANEL)
+    foot_row.pack(fill=tk.X)
 
-        _user_pack_ids = [t.id for t in discover_templates() if not t.builtin]
-    except Exception:  # noqa: BLE001
-        _user_pack_ids = []
-    teach_combo_vals = list(_user_pack_ids)
-    if _learn_preselect and _learn_preselect not in teach_combo_vals:
-        teach_combo_vals = [_learn_preselect, *teach_combo_vals]
-    try:
-        from tkinter import ttk as _ttk
-
-        teach_combo = _ttk.Combobox(
-            teach_bar,
-            textvariable=teach_id_var,
-            values=teach_combo_vals,
-            width=28,
-            font=_FONT_SMALL,
-        )
-        teach_combo.pack(side=tk.LEFT, padx=(0, 8))
-    except Exception:  # noqa: BLE001
-        tk.Entry(
-            teach_bar,
-            textvariable=teach_id_var,
-            width=28,
-            font=_FONT_SMALL,
-            bg=_BG_PANEL,
-            fg=_TEXT,
-            insertbackground=_TEXT,
-        ).pack(side=tk.LEFT, padx=(0, 8))
     tk.Label(
-        teach_bar,
-        text="(user pack id; leave unchecked to skip)",
-        bg=_BG_ELEVATED,
-        fg=_TEXT_MUTED,
-        font=_FONT_TINY,
-    ).pack(side=tk.LEFT)
+        foot_row,
+        textvariable=status_var,
+        bg=_BG_PANEL,
+        fg=_TEXT,
+        font=_FONT_BOLD,
+        anchor=tk.W,
+    ).pack(side=tk.LEFT, fill=tk.Y)
 
-    _chip_button(act, "Cancel", lambda: _on_close()).pack(side=tk.LEFT, padx=(0, 8))
-    _chip_button(act, "Save output", lambda: _on_save(), primary=True).pack(
-        side=tk.LEFT
+    act = tk.Frame(foot_row, bg=_BG_PANEL)
+    act.pack(side=tk.RIGHT)
+
+    _chip_button(act, "Cancel", lambda: _on_close(), chrome=_BG_PANEL).pack(
+        side=tk.LEFT, padx=(0, 8)
     )
+    _chip_button(
+        act, "Save output", lambda: _on_save(), primary=True, chrome=_BG_PANEL
+    ).pack(side=tk.LEFT)
+    root.after_idle(_sync_footer)
+    root.after(50, _sync_footer)
 
     shortcuts = tk.Label(
         outer,
@@ -1461,25 +1653,12 @@ def run_review_window(
     )
     shortcuts.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
 
-    # Header
+    # Header (window title only — preview lives on Document card)
     header = tk.Frame(outer, bg=_BG_APP)
     header.pack(side=tk.TOP, fill=tk.X, pady=(0, _GAP))
     tk.Label(
         header, text=title, bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
     ).pack(side=tk.LEFT)
-    tk.Checkbutton(
-        header,
-        text="Preview redacted",
-        variable=preview_redacted,
-        command=lambda: _refresh_doc(),
-        bg=_BG_APP,
-        fg=_TEXT,
-        activebackground=_BG_APP,
-        activeforeground=_TEXT,
-        selectcolor=_BG_ELEVATED,
-        font=_FONT,
-        highlightthickness=0,
-    ).pack(side=tk.RIGHT)
 
     # Main split: drag sash to resize Findings | Document
     paned = tk.PanedWindow(
@@ -1664,6 +1843,129 @@ def run_review_window(
     _draw_funnel(active=False)
     for w in (icon_box, funnel):
         w.bind("<Button-1>", _open_filter_menu)
+    _attach_tooltip(icon_box, "Filters")
+
+    # --- Teach: tray icon → pick user template (apply immediately) ---
+    _learn_preselect = (learn_to or "").strip()
+    _user_templates: list[tuple[str, str]] = []  # (id, title)
+    try:
+        from anonymizer.anonymize.templates import discover_templates
+
+        _user_templates = [
+            (t.id, t.display_title())
+            for t in discover_templates()
+            if not t.builtin
+        ]
+    except Exception:  # noqa: BLE001
+        _user_templates = []
+    _last_taught_id: list[str] = [
+        _learn_preselect
+        if _learn_preselect and any(i == _learn_preselect for i, _ in _user_templates)
+        else ""
+    ]
+
+    teach_box = tk.Frame(
+        tools, bg=_BG_PANEL, width=_CTRL_H, height=_CTRL_H, cursor="hand2"
+    )
+    teach_box.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 2))
+    teach_box.pack_propagate(False)
+    teach_cv = tk.Canvas(
+        teach_box,
+        width=_ICON,
+        height=_ICON,
+        bg=_BG_PANEL,
+        highlightthickness=0,
+        bd=0,
+        cursor="hand2",
+    )
+    teach_cv.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+    def _draw_teach_icon(*, active: bool = False) -> None:
+        """Tray / download-into-template glyph."""
+        teach_cv.delete("all")
+        color = _ACCENT if active else _TEXT_MUTED
+        s = _ICON / 18.0
+
+        def _f(x: float, y: float) -> tuple[float, float]:
+            return x * s, y * s
+
+        wline = max(1.5, s)
+        # Tray
+        teach_cv.create_line(*_f(3, 12), *_f(3, 16), fill=color, width=wline)
+        teach_cv.create_line(*_f(3, 16), *_f(15, 16), fill=color, width=wline)
+        teach_cv.create_line(*_f(15, 16), *_f(15, 12), fill=color, width=wline)
+        # Arrow down into tray
+        teach_cv.create_line(*_f(9, 3), *_f(9, 11), fill=color, width=wline)
+        teach_cv.create_line(*_f(5, 8), *_f(9, 12), fill=color, width=wline)
+        teach_cv.create_line(*_f(13, 8), *_f(9, 12), fill=color, width=wline)
+
+    def _teach_into(tid: str) -> None:
+        try:
+            from anonymizer.anonymize.templates import (
+                session_to_teach_lists,
+                teach_template,
+            )
+
+            allows, denies = session_to_teach_lists(session)
+            if not allows and not denies:
+                messagebox.showinfo(
+                    "Update template",
+                    "Nothing to teach (no keep-clear or newly added surfaces).",
+                    parent=root,
+                )
+                return
+            path = teach_template(tid, session, create_title=tid)
+            setattr(session, "taught_path", str(path))
+            setattr(session, "taught_counts", (len(allows), len(denies)))
+            _last_taught_id[0] = tid
+            _draw_teach_icon(active=True)
+            title = next((t for i, t in _user_templates if i == tid), tid)
+            _status_flash(
+                f"Updated “{title}”: {len(allows)} keep-clear, {len(denies)} new"
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(
+                "Update template",
+                f"Could not update template:\n{exc}",
+                parent=root,
+            )
+
+    def _open_teach_menu(_event=None) -> None:
+        menu = tk.Menu(
+            root,
+            tearoff=0,
+            bg=_BG_ELEVATED,
+            fg=_TEXT,
+            activebackground=_BG_SELECTED,
+            activeforeground=_TEXT,
+            bd=0,
+            font=_FONT,
+        )
+        if not _user_templates:
+            menu.add_command(label="No user templates", state=tk.DISABLED)
+        else:
+            last = _last_taught_id[0]
+            for tid, title in _user_templates:
+                mark = "✓  " if tid == last else "    "
+                label = f"{mark}{title}" if title == tid else f"{mark}{title}  ({tid})"
+                menu.add_command(
+                    label=label,
+                    command=lambda i=tid: _teach_into(i),
+                )
+        try:
+            x = teach_box.winfo_rootx()
+            y = teach_box.winfo_rooty() + teach_box.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
+
+    _draw_teach_icon(active=bool(_last_taught_id[0]))
+    for w in (teach_box, teach_cv):
+        w.bind("<Button-1>", _open_teach_menu)
+    _attach_tooltip(teach_box, "Update template with these findings")
 
     def _layout_toolbar() -> None:
         _redraw_search_shell()
@@ -1854,6 +2156,64 @@ def run_review_window(
     tk.Label(
         doc_header, text="Document", bg=_BG_PANEL, fg=_TEXT, font=_FONT_BOLD
     ).pack(side=tk.LEFT)
+
+    # Eye icon: toggle output / findings preview
+    _EYE_SIZE = 22
+    eye_box = tk.Frame(
+        doc_header, bg=_BG_PANEL, width=_CTRL_H, height=_CTRL_H, cursor="hand2"
+    )
+    eye_box.pack(side=tk.RIGHT)
+    eye_box.pack_propagate(False)
+    eye_cv = tk.Canvas(
+        eye_box,
+        width=_EYE_SIZE,
+        height=_EYE_SIZE,
+        bg=_BG_PANEL,
+        highlightthickness=0,
+        bd=0,
+        cursor="hand2",
+    )
+    eye_cv.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+    def _draw_eye(*, filled: bool = False) -> None:
+        eye_cv.delete("all")
+        color = _ACCENT if filled else _TEXT_MUTED
+        s = _EYE_SIZE / 24.0
+        wline = max(1.5, s)
+
+        def _p(x: float, y: float) -> tuple[float, float]:
+            return x * s, y * s
+
+        # Clean eye: outer oval + iris (+ pupil when filled)
+        eye_cv.create_oval(
+            *_p(2, 7), *_p(22, 17), outline=color, width=wline, fill=""
+        )
+        if filled:
+            eye_cv.create_oval(
+                *_p(8, 9), *_p(16, 15), outline=color, fill=color, width=wline
+            )
+            eye_cv.create_oval(
+                *_p(10, 10), *_p(14, 14), outline=_BG_PANEL, fill=_BG_PANEL
+            )
+        else:
+            eye_cv.create_oval(
+                *_p(9, 10), *_p(15, 14), outline=color, width=wline, fill=""
+            )
+
+    def _eye_tip() -> str:
+        if preview_redacted.get():
+            return "Toggle findings preview"
+        return "Toggle output preview"
+
+    def _toggle_preview(_event=None) -> None:
+        preview_redacted.set(not preview_redacted.get())
+        _draw_eye(filled=preview_redacted.get())
+        _refresh_doc()
+
+    _draw_eye(filled=False)
+    for w in (eye_box, eye_cv):
+        w.bind("<Button-1>", _toggle_preview)
+    _attach_tooltip(eye_box, _eye_tip)
 
     # Elevated text well with rounded corners (matches search shells / cards)
     doc_well = RoundedCard(
@@ -2497,41 +2857,7 @@ def run_review_window(
             )
             if not messagebox.askyesno("Confirm clear text", msg, parent=root):
                 return
-        # Optional: teach keep-clear + user-added into a user template pack
-        if teach_var.get():
-            tid = (teach_id_var.get() or "").strip()
-            if not tid:
-                messagebox.showwarning(
-                    "Teach template",
-                    "Check “Teach…” and enter a user template id, or uncheck Teach.",
-                    parent=root,
-                )
-                return
-            try:
-                from anonymizer.anonymize.templates import (
-                    session_to_teach_lists,
-                    teach_template,
-                )
-
-                allows, denies = session_to_teach_lists(session)
-                if not allows and not denies:
-                    messagebox.showinfo(
-                        "Teach template",
-                        "Nothing to teach (no keep-clear or newly added surfaces).",
-                        parent=root,
-                    )
-                else:
-                    path = teach_template(tid, session, create_title=tid)
-                    # Stash for CLI status line
-                    setattr(session, "taught_path", str(path))
-                    setattr(session, "taught_counts", (len(allows), len(denies)))
-            except Exception as exc:  # noqa: BLE001
-                messagebox.showerror(
-                    "Teach template",
-                    f"Could not update template:\n{exc}",
-                    parent=root,
-                )
-                return
+        # Teach is applied from Findings toolbar (not on Save output)
         result["session"] = session
         root.destroy()
 
