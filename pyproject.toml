@@ -52,11 +52,11 @@ packages = ["src/anonymizer"]
 [tool.hatch.build.targets.wheel.sources]
 "src/anonymizer" = "anonymizer"
 
-# Non-.py package data (dialog icon). Do not also force-include the same
-# path under packages/ or hatchling errors on duplicate wheel entries.
+# Non-.py package data only when not already covered by packages= above.
+# templates/builtin is under src/anonymizer and is already packed with the
+# package tree — force-including it again breaks hatchling (duplicate wheel path).
 [tool.hatch.build.targets.wheel.force-include]
 "src/anonymizer/gui/assets/Anonymizer-dialog.png" = "anonymizer/gui/assets/Anonymizer-dialog.png"
-"src/anonymizer/templates/builtin" = "anonymizer/templates/builtin"
 
 [tool.hatch.build.targets.sdist]
 include = [
