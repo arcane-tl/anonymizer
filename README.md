@@ -43,6 +43,22 @@ Release assets (from **1.2.0** onward): Mac zip, Windows Setup.exe, and Windows 
 
 ---
 
+## Screenshots
+
+Options window (Mac app) — add files, choose mode/format, templates, and review:
+
+<p align="center">
+  <img src="docs/screenshots/options-window.png" alt="Anonymizer options window with a sample contract selected" width="420" />
+</p>
+
+Document review — toggle findings, inspect the document, then save:
+
+<p align="center">
+  <img src="docs/screenshots/review-window.png" alt="Anonymizer review window showing highlighted PII in a sample service agreement" width="800" />
+</p>
+
+---
+
 ## Why Anonymizer
 
 - **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM (`--llm`)  
