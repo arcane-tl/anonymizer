@@ -323,26 +323,28 @@ def _files_list_height_px(n_files: int, *, row_h: int = 22, pad: int = 12) -> in
 
 
 def _pack_files_list(parent: "tk.Misc", files: list[Path], *, width_px: int = 420) -> "tk.Frame":
-    """Compact multi-column file names well (Mac makeFilesListWell parity)."""
+    """File names as bullets; 2 columns when multiple (Mac makeFilesListWell).
+
+    Window-colored, no border — not a sunk text well.
+    """
     n = len(files)
     cols = _files_list_column_count(n)
-    h = _files_list_height_px(n)
+    h = _files_list_height_px(n, pad=8)
     wrap = tk.Frame(
         parent,
-        bg=_BG_WELL,
-        highlightthickness=1,
-        highlightbackground=_BORDER,
-        highlightcolor=_BORDER,
+        bg=_BG_APP,
+        highlightthickness=0,
         height=h,
     )
     wrap.pack(fill=tk.X, pady=(4, 4))
     wrap.pack_propagate(False)
-    inner = tk.Frame(wrap, bg=_BG_WELL)
-    inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
+    inner = tk.Frame(wrap, bg=_BG_APP)
+    inner.pack(fill=tk.BOTH, expand=True, padx=0, pady=2)
     for c in range(cols):
         inner.columnconfigure(c, weight=1, uniform="files")
-    col_w = max(80, (width_px - 24) // cols)
+    col_w = max(80, (width_px - 12) // cols)
     names = [p.name for p in files]
+    max_name = 34 if cols == 1 else 28
     for i, name in enumerate(names):
         if cols == 1:
             r, c = i, 0
@@ -350,27 +352,27 @@ def _pack_files_list(parent: "tk.Misc", files: list[Path], *, width_px: int = 42
             r, c = i // cols, i % cols
         # Truncate long basenames for display
         display = name
-        if len(display) > 36:
+        if len(display) > max_name:
             stem, _, ext = display.rpartition(".")
             if stem and ext and len(ext) <= 5:
-                keep = 32 - len(ext)
+                keep = max_name - 2 - len(ext)
                 display = (
                     (stem[: max(8, keep)] + "…" + "." + ext)
                     if keep > 0
-                    else display[:33] + "…"
+                    else display[: max_name - 1] + "…"
                 )
             else:
-                display = display[:33] + "…"
+                display = display[: max_name - 1] + "…"
         tk.Label(
             inner,
-            text=display,
-            bg=_BG_WELL,
+            text=f"• {display}",
+            bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_SMALL,
             anchor=tk.W,
             justify=tk.LEFT,
             width=max(12, col_w // 7),
-        ).grid(row=r, column=c, sticky="ew", padx=(0, 8), pady=1)
+        ).grid(row=r, column=c, sticky="ew", padx=(0, 12), pady=1)
     return wrap
 
 
@@ -759,11 +761,14 @@ def _chip_button(
     primary: bool = False,
     width: int | None = 11,
     chrome: str | None = None,
+    fill_x: bool = False,
 ) -> "tk.Frame":
     """Rounded pill button drawn on canvas.
 
     Aqua ignores ``tk.Button`` bg/fg; canvas fills match OptionsApp chrome on
     both macOS and Windows. Supports ``.configure(state=...)`` for enable/disable.
+
+    *fill_x*: stretch the pill to the full width of the parent (launcher buttons).
     """
     chrome_bg = chrome if chrome is not None else _BG_APP
     fill_idle = _ACCENT if primary else _BG_BTN
@@ -783,22 +788,26 @@ def _chip_button(
         probe.destroy()
     # Optional min width in "character cells" (parity with old tk.Button width=)
     min_w = 0
-    if width is not None:
+    if width is not None and not fill_x:
         probe2 = tk.Label(parent, text="0" * max(1, width), font=font)
         try:
             probe2.update_idletasks()
             min_w = probe2.winfo_reqwidth() + pad_x
         finally:
             probe2.destroy()
-    bw = max(tw + pad_x * 2, min_w, 72)
-    bh = max(th + pad_y * 2, 32)
+    size = {
+        "bw": max(tw + pad_x * 2, min_w, 72),
+        "bh": max(th + pad_y * 2, 32),
+    }
 
-    wrap = tk.Frame(parent, bg=chrome_bg, width=bw, height=bh, cursor="hand2")
+    wrap = tk.Frame(
+        parent, bg=chrome_bg, width=size["bw"], height=size["bh"], cursor="hand2"
+    )
     wrap.pack_propagate(False)
     canvas = tk.Canvas(
         wrap,
-        width=bw,
-        height=bh,
+        width=size["bw"],
+        height=size["bh"],
         bg=chrome_bg,
         highlightthickness=0,
         bd=0,
@@ -811,6 +820,7 @@ def _chip_button(
     def _paint() -> None:
         enabled = state["enabled"]
         hover = state["hover"] and enabled
+        bw, bh = size["bw"], size["bh"]
         if not enabled:
             fill, fg = fill_disabled, fg_disabled
             ol = _BORDER
@@ -820,7 +830,8 @@ def _chip_button(
             fill, fg, ol = fill_idle, fg_idle, outline
         canvas.delete("all")
         _round_rect(
-            canvas, 1, 1, bw - 2, bh - 2, radius, fill=fill, outline=ol, width=1
+            canvas, 1, 1, max(bw - 2, 2), max(bh - 2, 2), radius,
+            fill=fill, outline=ol, width=1,
         )
         canvas.create_text(bw // 2, bh // 2, text=text, fill=fg, font=font)
 
@@ -846,6 +857,19 @@ def _chip_button(
 
     wrap.configure = _configure  # type: ignore[method-assign]
     wrap.config = _configure  # type: ignore[method-assign]
+
+    if fill_x:
+        def _on_configure(event) -> None:  # type: ignore[no-untyped-def]
+            # Use allocated width from pack(fill=X); ignore height noise
+            nw = int(event.width)
+            if nw < 40 or nw == size["bw"]:
+                return
+            size["bw"] = nw
+            wrap.configure(width=nw, height=size["bh"])
+            canvas.configure(width=nw, height=size["bh"])
+            _paint()
+
+        wrap.bind("<Configure>", _on_configure)
 
     _paint()
     canvas.bind("<Button-1>", _run)
@@ -929,8 +953,9 @@ class TemplatesDialog(tk.Toplevel):
         super().__init__(master)
         self.title(f"Anonymizer {__version__} — Templates")
         self.resizable(True, True)
-        self.geometry("520x520")
-        self.minsize(460, 400)
+        # Tall enough for edit view (title + two lists + footer) without clipping.
+        self.geometry("560x640")
+        self.minsize(520, 560)
         # Done → list of enabled template ids; Cancel → None
         self.result: list[str] | None = None
         self._standalone = standalone
@@ -1017,15 +1042,39 @@ class TemplatesDialog(tk.Toplevel):
     def _icon_btn(
         self,
         parent: tk.Misc,
-        glyph: str,
+        kind: str,
         command,
         *,
         tooltip: str = "",
         chrome: str | None = None,
     ) -> tk.Frame:
-        """Small square action button for list rows."""
+        """Row action: Windows Segoe MDL2 icons (Edit/Copy/Delete), else short labels."""
         bg = chrome if chrome is not None else _BG_WELL
-        size = 26
+        # MDL2 private-use glyphs (same as Windows Settings / Explorer)
+        mdl2 = {
+            "edit": "\uE70F",       # Edit
+            "duplicate": "\uE8C8",  # Copy
+            "delete": "\uE74D",     # Delete
+        }
+        labels = {"edit": "Edit", "duplicate": "Copy", "delete": "Del"}
+        glyph = mdl2.get(kind, "")
+        label = labels.get(kind, kind)
+
+        icon_family: str | None = None
+        if sys.platform == "win32":
+            try:
+                import tkinter.font as tkfont
+
+                families = set(tkfont.families(self))
+                for cand in ("Segoe MDL2 Assets", "Segoe Fluent Icons"):
+                    if cand in families:
+                        icon_family = cand
+                        break
+            except tk.TclError:
+                icon_family = None
+
+        use_icon = bool(icon_family and glyph)
+        size = 32 if use_icon else 40
         wrap = tk.Frame(parent, bg=bg, width=size, height=size, cursor="hand2")
         wrap.pack_propagate(False)
         cv = tk.Canvas(
@@ -1044,13 +1093,23 @@ class TemplatesDialog(tk.Toplevel):
             cv.delete("all")
             fill = _BG_BTN_HOVER if state["hover"] else bg
             cv.configure(bg=fill)
-            cv.create_text(
-                size // 2,
-                size // 2,
-                text=glyph,
-                fill=_TEXT_MUTED if not state["hover"] else _TEXT,
-                font=_FONT_SMALL,
-            )
+            color = _TEXT if state["hover"] else _TEXT_MUTED
+            if use_icon:
+                cv.create_text(
+                    size // 2,
+                    size // 2,
+                    text=glyph,
+                    fill=color,
+                    font=(icon_family, 15),
+                )
+            else:
+                cv.create_text(
+                    size // 2,
+                    size // 2,
+                    text=label,
+                    fill=color,
+                    font=_FONT_SMALL,
+                )
 
         def _run(_e=None) -> None:
             if command is not None:
@@ -1062,13 +1121,10 @@ class TemplatesDialog(tk.Toplevel):
         cv.bind("<Enter>", lambda _e: state.update(hover=True) or _paint())
         cv.bind("<Leave>", lambda _e: state.update(hover=False) or _paint())
         if tooltip:
-            # Lightweight tooltip via title (cross-platform; no extra windows)
             try:
                 wrap.configure(takefocus=0)
-                cv.configure()
             except tk.TclError:
                 pass
-            # Store for potential accessibility; Label hover title
             wrap._tooltip = tooltip  # type: ignore[attr-defined]
         return wrap
 
@@ -1080,6 +1136,19 @@ class TemplatesDialog(tk.Toplevel):
         self._clear_outer()
         outer = self._outer
 
+        # Footer first (side=BOTTOM) so Done/Cancel never clip off-screen
+        foot = tk.Frame(outer, bg=_BG_APP)
+        foot.pack(side=tk.BOTTOM, fill=tk.X, pady=(16, 0))
+        _chip_button(foot, "+ New", self._new_template, width=9).pack(side=tk.LEFT)
+        right = tk.Frame(foot, bg=_BG_APP)
+        right.pack(side=tk.RIGHT)
+        _chip_button(right, "Cancel", self._cancel, width=11).pack(
+            side=tk.LEFT, padx=(0, 10)
+        )
+        _chip_button(right, "Done", self._done, primary=True, width=11).pack(
+            side=tk.LEFT
+        )
+
         _pack_title_row(outer, "Templates", self._icon_refs)
         tk.Label(
             outer,
@@ -1090,7 +1159,7 @@ class TemplatesDialog(tk.Toplevel):
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
-            wraplength=460,
+            wraplength=500,
             justify=tk.LEFT,
             anchor=tk.W,
         ).pack(anchor=tk.W, pady=(0, 16))
@@ -1140,19 +1209,6 @@ class TemplatesDialog(tk.Toplevel):
 
         self._rebuild_list_rows()
 
-        # Action bar: + New left · Cancel + Done right
-        foot = tk.Frame(outer, bg=_BG_APP)
-        foot.pack(fill=tk.X, pady=(20, 0))
-        _chip_button(foot, "+ New", self._new_template, width=9).pack(side=tk.LEFT)
-        right = tk.Frame(foot, bg=_BG_APP)
-        right.pack(side=tk.RIGHT)
-        _chip_button(right, "Cancel", self._cancel, width=11).pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
-        _chip_button(right, "Done", self._done, primary=True, width=11).pack(
-            side=tk.LEFT
-        )
-
     def _rebuild_list_rows(self) -> None:
         for w in self._list_inner.winfo_children():
             w.destroy()
@@ -1192,18 +1248,21 @@ class TemplatesDialog(tk.Toplevel):
             actions.pack(side=tk.RIGHT, padx=(0, 2))
             tid = t.id
             self._icon_btn(
-                actions, "✎", lambda i=tid: self._open_edit(i), tooltip="Edit template"
+                actions,
+                "edit",
+                lambda i=tid: self._open_edit(i),
+                tooltip="Edit template",
             ).pack(side=tk.LEFT, padx=1)
             self._icon_btn(
                 actions,
-                "⧉",
+                "duplicate",
                 lambda i=tid: self._duplicate(i),
                 tooltip="Duplicate template",
             ).pack(side=tk.LEFT, padx=1)
             if not t.builtin:
                 self._icon_btn(
                     actions,
-                    "🗑",
+                    "delete",
                     lambda i=tid: self._delete(i),
                     tooltip="Delete template",
                 ).pack(side=tk.LEFT, padx=1)
@@ -1234,6 +1293,39 @@ class TemplatesDialog(tk.Toplevel):
         self._desc_editing = False
         self._clear_outer()
         outer = self._outer
+
+        # Ensure window is tall enough for footer + two list panes
+        try:
+            self.update_idletasks()
+            cur = self.geometry()  # WxH+X+Y
+            parts = cur.split("+")[0].split("x")
+            if len(parts) == 2:
+                cw, ch = int(parts[0]), int(parts[1])
+                nw, nh = max(cw, 560), max(ch, 640)
+                if nw != cw or nh != ch:
+                    # Keep current position if present
+                    pos = cur[len(parts[0]) + 1 + len(parts[1]) :]
+                    self.geometry(f"{nw}x{nh}{pos}")
+        except (tk.TclError, ValueError):
+            try:
+                self.geometry("560x640")
+            except tk.TclError:
+                pass
+
+        # Footer first so Cancel/Save/Close stay visible
+        foot = tk.Frame(outer, bg=_BG_APP)
+        foot.pack(side=tk.BOTTOM, fill=tk.X, pady=(16, 0))
+        if t.builtin:
+            _chip_button(foot, "Close", self._close_edit, width=11).pack(side=tk.RIGHT)
+        else:
+            right = tk.Frame(foot, bg=_BG_APP)
+            right.pack(side=tk.RIGHT)
+            _chip_button(right, "Cancel", self._close_edit, width=11).pack(
+                side=tk.LEFT, padx=(0, 10)
+            )
+            _chip_button(
+                right, "Save", self._save_edit, primary=True, width=11
+            ).pack(side=tk.LEFT)
 
         _pack_title_row(outer, "Templates", self._icon_refs)
 
@@ -1289,7 +1381,7 @@ class TemplatesDialog(tk.Toplevel):
             bg=_BG_APP,
             fg=_TEXT_MUTED,
             font=_FONT_SMALL,
-            wraplength=460,
+            wraplength=500,
             justify=tk.LEFT,
             anchor=tk.W,
             cursor="hand2" if not t.builtin else "arrow",
@@ -1297,7 +1389,7 @@ class TemplatesDialog(tk.Toplevel):
         self._desc_label.pack(anchor=tk.W, fill=tk.X)
         self._desc_text = tk.Text(
             self._desc_frame,
-            height=3,
+            height=2,
             font=_FONT_SMALL,
             bg=_BG_WELL,
             fg=_TEXT,
@@ -1340,7 +1432,7 @@ class TemplatesDialog(tk.Toplevel):
         ).grid(row=1, column=0, sticky="ew", pady=(2, 4))
         self.allow_txt = tk.Text(
             editors,
-            height=5,
+            height=4,
             font=_FONT_SMALL,
             bg=_BG_WELL,
             fg=_TEXT,
@@ -1377,7 +1469,7 @@ class TemplatesDialog(tk.Toplevel):
         ).grid(row=4, column=0, sticky="ew", pady=(2, 4))
         self.deny_txt = tk.Text(
             editors,
-            height=5,
+            height=4,
             font=_FONT_SMALL,
             bg=_BG_WELL,
             fg=_TEXT,
@@ -1393,26 +1485,12 @@ class TemplatesDialog(tk.Toplevel):
             selectbackground=_SELECT,
             selectforeground=_TEXT,
         )
-        self.deny_txt.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
+        self.deny_txt.grid(row=5, column=0, sticky="nsew", pady=(0, 0))
         self.deny_txt.insert("1.0", "\n".join(d.text for d in t.deny))
 
         if t.builtin:
             self.allow_txt.configure(state=tk.DISABLED)
             self.deny_txt.configure(state=tk.DISABLED)
-
-        foot = tk.Frame(outer, bg=_BG_APP)
-        foot.pack(fill=tk.X, pady=(16, 0))
-        if t.builtin:
-            _chip_button(foot, "Close", self._close_edit, width=11).pack(side=tk.RIGHT)
-        else:
-            right = tk.Frame(foot, bg=_BG_APP)
-            right.pack(side=tk.RIGHT)
-            _chip_button(right, "Cancel", self._close_edit, width=11).pack(
-                side=tk.LEFT, padx=(0, 10)
-            )
-            _chip_button(
-                right, "Save", self._save_edit, primary=True, width=11
-            ).pack(side=tk.LEFT)
 
     def _begin_title_edit(self) -> None:
         if self._edit_builtin or self._title_editing:
@@ -2223,7 +2301,9 @@ class LauncherApp(tk.Tk):
         self._icon_refs: list[tk.PhotoImage] = []
         self._icon_refs.extend(_apply_window_icons(self))
 
-        frm = tk.Frame(self, bg=_BG_APP, padx=28, pady=28)
+        # Fixed content width so title, caption, and full-width chips align
+        content_w = 420
+        frm = tk.Frame(self, bg=_BG_APP, padx=28, pady=28, width=content_w + 56)
         frm.pack(fill=tk.BOTH, expand=True)
 
         _pack_title_row(
@@ -2242,20 +2322,24 @@ class LauncherApp(tk.Tk):
             font=_FONT,
             justify=tk.LEFT,
             anchor=tk.W,
-        ).pack(anchor=tk.W, pady=(8, 20))
+            wraplength=content_w,
+        ).pack(anchor=tk.W, fill=tk.X, pady=(8, 20))
 
-        _chip_button(frm, "Choose documents…", self._pick, primary=True, width=22).pack(
-            fill=tk.X, pady=4
-        )
-        _chip_button(frm, "Quit", self.destroy, width=22).pack(fill=tk.X, pady=4)
+        _chip_button(
+            frm, "Choose documents…", self._pick, primary=True, fill_x=True
+        ).pack(fill=tk.X, pady=4)
+        _chip_button(frm, "Quit", self.destroy, fill_x=True).pack(fill=tk.X, pady=4)
 
         self.bind("<Escape>", lambda _e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.update_idletasks()
         try:
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-            w, h = max(self.winfo_reqwidth(), 360), max(self.winfo_reqheight(), 200)
-            self.geometry(f"+{max(40, (sw - w) // 2)}+{max(40, (sh - h) // 2)}")
+            w = max(self.winfo_reqwidth(), content_w + 56)
+            h = max(self.winfo_reqheight(), 240)
+            self.geometry(
+                f"{w}x{h}+{max(40, (sw - w) // 2)}+{max(40, (sh - h) // 2)}"
+            )
         except tk.TclError:
             pass
         self.deiconify()
