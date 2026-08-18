@@ -67,10 +67,15 @@ denylist:
 # Output format (choose one):
 #   md (default) — Markdown only
 #   source       — redacted original PDF or Word (same type as input;
-#                  best-effort; metadata scrubbed; images/forms/comments may
+#                  hardened best-effort: wrap/hyphen variants, form/annot scrub,
+#                  metadata wipe, residual text verify; image-only text may
 #                  remain — not a forensic wipe). Text inputs stay Markdown-only.
 #   both         — Markdown + source when input is PDF/DOCX
 # format: md
+# Exit non-zero if native redaction misses surfaces or leaves residual cleartext:
+# fail_on_native_miss: false
+# Require at least this fraction of surfaces found in the original layout (0–1):
+# native_min_match_rate: 1.0
 
 # Language for NER: auto | en | fi | sv | en,fi | en,sv | …
 # lang: auto

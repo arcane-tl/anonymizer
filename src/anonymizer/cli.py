@@ -241,6 +241,8 @@ def _build_config(
     llm_model: str | None,
     redact_style: str | None,
     output_format: str | None = None,
+    fail_on_native_miss: bool | None = None,
+    native_min_match_rate: float | None = None,
     template: str | None = None,
     quiet: bool = False,
 ) -> AnonymizerConfig:
@@ -285,6 +287,15 @@ def _build_config(
         cfg.output_format = normalize_output_format(output_format)
     else:
         cfg.output_format = normalize_output_format(cfg.output_format)
+    if fail_on_native_miss is not None:
+        cfg.fail_on_native_miss = fail_on_native_miss
+    if native_min_match_rate is not None:
+        if not 0.0 <= native_min_match_rate <= 1.0:
+            console.print(
+                "[red]Error:[/red] --native-min-match-rate must be between 0 and 1."
+            )
+            raise typer.Exit(2)
+        cfg.native_min_match_rate = native_min_match_rate
     if cfg.mode == "extract" and cfg.use_llm:
         console.print(
             "[dim]Note:[/dim] --llm is ignored in extract mode (no redaction)."
@@ -327,6 +338,8 @@ def _run_pipeline(
     reject: str | None,
     redact_style: str | None,
     output_format: str | None,
+    fail_on_native_miss: bool = False,
+    native_min_match_rate: float | None = None,
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
@@ -378,6 +391,8 @@ def _run_pipeline(
             llm_model=llm_model,
             redact_style=redact_style,
             output_format=output_format,
+            fail_on_native_miss=fail_on_native_miss or None,
+            native_min_match_rate=native_min_match_rate,
             template=template,
             quiet=quiet,
         )
@@ -513,6 +528,21 @@ def _run_pipeline(
                 f"[yellow]Warning:[/yellow] No text extracted from {input_path}"
             )
             continue
+
+        if doc.used_ocr and not quiet:
+            ocr_meta = (doc.extra or {}).get("ocr") or {}
+            low = ocr_meta.get("low_coverage_pages") or []
+            low_bit = (
+                f" Low-coverage page(s): {', '.join(str(p) for p in low[:8])}"
+                + (f" (+{len(low) - 8} more)." if len(low) > 8 else ".")
+                if low
+                else ""
+            )
+            console.print(
+                "[yellow]OCR risk:[/yellow] text came from OCR — detection can "
+                "miss glyphs the recognizer never saw; page images may still "
+                f"show PII after native redaction.{low_bit}"
+            )
 
         block_texts = [b.text for b in doc.blocks]
         # Findings → review needs placeholders in the working body.
@@ -689,9 +719,17 @@ def _run_pipeline(
                     native_path = default_native_output_path(input_path, out_dir)
                 progress.substep(f"Writing native {native_path.name}…")
                 if doc.used_ocr and not quiet:
+                    ocr_meta = (doc.extra or {}).get("ocr") or {}
+                    low = ocr_meta.get("low_coverage_pages") or []
+                    extra = ""
+                    if low:
+                        preview = ", ".join(str(p) for p in low[:8])
+                        more = f" (+{len(low) - 8} more)" if len(low) > 8 else ""
+                        extra = f" Low-coverage page(s): {preview}{more}."
                     console.print(
-                        "[yellow]Warning:[/yellow] source used OCR — native "
-                        "redaction is best-effort (some surfaces may miss)."
+                        "[yellow]Warning:[/yellow] source used OCR — text-layer "
+                        "native redaction cannot black out glyphs still visible "
+                        f"in the page image (residual image risk).{extra}"
                     )
                 try:
                     stats = write_native_redacted(
@@ -725,6 +763,40 @@ def _run_pipeline(
                                 f"{stats.surfaces_missed} surface(s) not found "
                                 f"in original layout: {preview}{more}"
                             )
+                        if stats.verified and stats.residuals_found and stats.residuals:
+                            preview = ", ".join(
+                                repr(s[:40]) for s in stats.residuals[:5]
+                            )
+                            more = (
+                                f" (+{stats.residuals_found - 5} more)"
+                                if stats.residuals_found > 5
+                                else ""
+                            )
+                            console.print(
+                                f"[yellow]Warning:[/yellow] "
+                                f"{stats.residuals_found} residual cleartext "
+                                f"match(es) after native redaction: "
+                                f"{preview}{more}"
+                            )
+                    gate_fail = False
+                    if cfg.fail_on_native_miss and not stats.is_clean:
+                        gate_fail = True
+                        console.print(
+                            "[red]Native redaction not clean[/red] "
+                            "(misses and/or residuals) — "
+                            "refusing due to --fail-on-native-miss."
+                        )
+                    min_rate = cfg.native_min_match_rate
+                    if min_rate is not None and stats.match_rate < min_rate:
+                        gate_fail = True
+                        console.print(
+                            "[red]Native match rate too low[/red] "
+                            f"({stats.match_rate:.0%} < {min_rate:.0%} required)."
+                        )
+                    if gate_fail:
+                        if multi:
+                            continue
+                        raise typer.Exit(1)
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -751,10 +823,16 @@ def _run_pipeline(
             ", ".join(f"{k}={v}" for k, v in sorted(result.entity_counts.items()))
             or "none"
         )
+        ocr_bit = ""
+        if doc.used_ocr:
+            low = ((doc.extra or {}).get("ocr") or {}).get("low_coverage_pages") or []
+            ocr_bit = " · OCR (image risk)"
+            if low:
+                ocr_bit += f" · {len(low)} low-OCR page(s)"
         summary = (
             f"mode={result.mode} · lang={result.language.nlp_passes} · "
             f"entities: {counts}"
-            + (" · OCR" if doc.used_ocr else "")
+            + ocr_bit
             + (f" · format={out_fmt}" if out_fmt != "md" else "")
         )
         progress.done_document(summary)
@@ -857,6 +935,25 @@ def cmd_doctor() -> None:
             rows.append(("Tesseract (OCR)", ver, True))
         except Exception:
             rows.append(("Tesseract (OCR)", tess, True))
+        # Language packs used by default OCR path (eng+fin) — advisory only
+        try:
+            lang_out = subprocess.check_output(
+                [tess, "--list-langs"], text=True, stderr=subprocess.STDOUT
+            )
+            available = {ln.strip() for ln in lang_out.splitlines()[1:] if ln.strip()}
+            missing = [lang for lang in ("eng", "fin") if lang not in available]
+            if missing:
+                rows.append(
+                    (
+                        "Tesseract langs",
+                        f"missing {', '.join(missing)} — brew install tesseract-lang",
+                        True,
+                    )
+                )
+            else:
+                rows.append(("Tesseract langs", "eng, fin ok", True))
+        except Exception:
+            rows.append(("Tesseract langs", "could not list", True))
     else:
         rows.append(
             (
@@ -1262,8 +1359,31 @@ def main(
             help=(
                 "Output: md (default Markdown only), source (redacted original PDF "
                 "or Word, same type as input), or both. Source redaction is "
-                "best-effort (text-layer search; metadata scrubbed; images/forms/"
-                "comments may remain). Text inputs stay Markdown-only."
+                "hardened best-effort (text-layer search + wrap/hyphen variants, "
+                "form/annot scrub, residual verify; image-only text may remain). "
+                "Text inputs stay Markdown-only."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = None,
+    fail_on_native_miss: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-native-miss",
+            help=(
+                "Exit with status 1 when native PDF/DOCX redaction misses surfaces "
+                "or post-verify finds residual cleartext."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = False,
+    native_min_match_rate: Annotated[
+        Optional[float],
+        typer.Option(
+            "--native-min-match-rate",
+            help=(
+                "Require native surface match rate ≥ this value (0–1). "
+                "Exit 1 when below threshold."
             ),
             rich_help_panel="Common",
         ),
@@ -1420,6 +1540,8 @@ def main(
         reject=reject,
         redact_style=redact_style,
         output_format=output_format,
+        fail_on_native_miss=fail_on_native_miss,
+        native_min_match_rate=native_min_match_rate,
         llm=llm,
         llm_provider=llm_provider,
         llm_model=llm_model,

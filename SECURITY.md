@@ -8,7 +8,16 @@ Anonymizer is a **local** document tool. By default it does not send your files 
 - Optional LLM (`--llm`) may send text to **local Ollama** or **remote xAI** only when you opt in.
 - Map files (`--map`) contain original PII — treat them like the source document (written mode `0600` when the OS supports it).
 - Config / template pack files under `~/.config/anonymizer/` may also be mode `0600`.
-- Native PDF/DOCX redaction is **best-effort**, not a forensic wipe.
+- Native PDF/DOCX redaction is **hardened best-effort**, not a forensic wipe:
+  text-layer search with soft-hyphen / wrap variants, form-widget and annotation
+  scrub, metadata wipe, plus a post-redaction text verification pass that reports
+  residual cleartext. Use `--fail-on-native-miss` / `--native-min-match-rate` to
+  refuse “clean” status when misses or residuals remain. Image-only text,
+  OCR page rasters, mid-glyph splits, and some embedded objects can still
+  survive — always spot-check high-stakes output.
+- OCR-derived text sets `used_ocr` / residual image-risk metadata: detection can
+  miss what OCR never transcribed, and native redaction cannot black out glyphs
+  that remain only in the page image.
 - Desktop GUIs (Mac droplet, Windows Tk) invoke the local CLI only; Mac Templates use `templates-io.sh` → offline Python (`templates_io`). No network from the GUI shell.
 
 ## Reporting a vulnerability

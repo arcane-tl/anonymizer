@@ -35,8 +35,9 @@ def render_markdown(
     result: AnonymizeResult,
     *,
     used_ocr: bool = False,
+    ocr_meta: dict | None = None,
 ) -> str:
-    fm = {
+    fm: dict = {
         "source": str(source),
         "anonymized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": "anonymizer",
@@ -49,6 +50,15 @@ def render_markdown(
         "entity_counts": result.entity_counts,
         "used_ocr": used_ocr,
     }
+    if used_ocr and ocr_meta:
+        fm["ocr_residual_image_risk"] = bool(
+            ocr_meta.get("residual_image_risk", True)
+        )
+        if ocr_meta.get("reason"):
+            fm["ocr_reason"] = ocr_meta["reason"]
+        low = ocr_meta.get("low_coverage_pages") or []
+        if low:
+            fm["ocr_low_coverage_pages"] = list(low)
     # sort_keys for stable output in tests
     yaml_body = yaml.safe_dump(fm, sort_keys=True, allow_unicode=True).strip()
     body_parts = [block_to_markdown(b) for b in blocks if b.text.strip()]
@@ -66,9 +76,11 @@ def render_from_extracted(
         new_blocks.append(
             TextBlock(text=text, kind=orig.kind, level=orig.level)
         )
+    ocr_meta = (doc.extra or {}).get("ocr") if doc.used_ocr else None
     return render_markdown(
         doc.source_path,
         new_blocks,
         result,
         used_ocr=doc.used_ocr,
+        ocr_meta=ocr_meta if isinstance(ocr_meta, dict) else None,
     )

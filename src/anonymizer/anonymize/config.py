@@ -205,6 +205,10 @@ class AnonymizerConfig:
     redact_style: str = "placeholder"
     # Output: md (default) | source (native PDF/DOCX) | both
     output_format: str = "md"
+    # Native PDF/DOCX: exit non-zero when search misses or post-verify residuals remain
+    fail_on_native_miss: bool = False
+    # If set (0–1), also fail when match_rate is below this value
+    native_min_match_rate: float | None = None
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -364,6 +368,15 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             from anonymizer.output.native import normalize_output_format
 
             cfg.output_format = normalize_output_format(str(data["output_format"]))
+        if "fail_on_native_miss" in data:
+            cfg.fail_on_native_miss = bool(data["fail_on_native_miss"])
+        if "native_min_match_rate" in data and data["native_min_match_rate"] is not None:
+            rate = float(data["native_min_match_rate"])
+            if not 0.0 <= rate <= 1.0:
+                raise ConfigError(
+                    f"native_min_match_rate in {path} must be between 0 and 1"
+                )
+            cfg.native_min_match_rate = rate
         # Template multi-select (ids). Explicit empty list = no packs.
         if "templates_enabled" in data and data["templates_enabled"] is not None:
             te = data["templates_enabled"]

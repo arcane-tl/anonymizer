@@ -19,7 +19,7 @@ Turn contracts, reports, and scans into shareable Markdown — on your machine, 
 - **Windows app:** **Anonymizer** via **Setup.exe** (Start Menu + Apps & features uninstall)
 - **Default:** Offline — everything stays on your computer unless you pass `--llm`
 
-> **Not a legal guarantee.** Detection is probabilistic. Native PDF/DOCX output is **best-effort** (text-layer search; images/forms/comments may remain). Always spot-check high-stakes output.
+> **Not a legal guarantee.** Detection is probabilistic. Native PDF/DOCX output is **hardened best-effort** (text-layer search + wrap/hyphen variants, form/annotation scrub, metadata wipe, residual verification). Image-only text and some embeds can still remain — always spot-check high-stakes output.
 
 ---
 
@@ -238,7 +238,7 @@ Aliases: `text` → extract · `normal` / `pii` → standard · `scrub` / `full`
 - **No telemetry** in this application  
 - **`--map`** writes placeholder → original JSON (**contains PII**; mode `0600` when possible)  
 - Install-time network: Homebrew / Setup download / spaCy models / optional LLM  
-- **Native PDF/DOCX** is best-effort layout redaction, not a forensic wipe
+- **Native PDF/DOCX** is hardened best-effort (variants + form/annot scrub + residual verify), not a forensic wipe
 
 ---
 
