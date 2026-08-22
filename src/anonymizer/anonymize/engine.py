@@ -847,6 +847,47 @@ _FI_STREET_STEM_RE = re.compile(
     r"silta|laituri|kallio|niemi|saari|kylä|kierto)$"
 )
 
+# ALL-CAPS Western/Finnish given+family name stacks (eIDAS / FTN signature pages)
+_ALL_CAPS_NAME_TOKEN = re.compile(r"^[A-ZÅÄÖ]{2,}(?:-[A-ZÅÄÖ]+)?$")
+_SIGNATURE_CUE_RE = re.compile(
+    r"(?i)\b(ftn|identification|signers?|signature|allekirjoit|name\s+date|"
+    r"credit\s+leasing|pades|eidas)\b"
+)
+
+
+def _looks_like_all_caps_person_name(surface: str) -> bool:
+    toks = [t for t in surface.split() if t.strip(".,;:'\"")]
+    if not (2 <= len(toks) <= 4):
+        return False
+    if _has_legal_form(surface):
+        return False
+    return all(_ALL_CAPS_NAME_TOKEN.fullmatch(t) for t in toks)
+
+
+def _retag_all_caps_org_names_to_person(
+    text: str, results: list[RecognizerResult]
+) -> list[RecognizerResult]:
+    """Prefer PERSON for ALL-CAPS multi-token name stacks mis-tagged as ORG."""
+    out: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type != "ORG":
+            out.append(r)
+            continue
+        surface = text[r.start : r.end]
+        if not _looks_like_all_caps_person_name(surface):
+            out.append(r)
+            continue
+        # BEST-CARAVAN OY / legal forms already excluded by _looks_like_all_caps_person_name
+        out.append(
+            RecognizerResult(
+                entity_type="PERSON",
+                start=r.start,
+                end=r.end,
+                score=max(r.score, 0.8),
+            )
+        )
+    return out
+
 
 def _street_name_stems(text: str, results: list[RecognizerResult]) -> set[str]:
     """Street name tokens from STREET hits (text before the house number)."""
@@ -943,6 +984,20 @@ def _filter_entity_false_positives(
                 surface, lex
             ):
                 continue
+            # Inflected insurer / role mash ("LähiTapiolaan, Myyjään")
+            if re.search(
+                r"(?i)\b(myyjä\w*|asiakas\w*|lähitapiola\w*)\b",
+                surface,
+            ) and (
+                "," in surface
+                or re.search(r"(?i)lähitapiola\w+", surface)
+            ):
+                # Keep real people like "Myyjäinen" rare; require insurer or dual role
+                if re.search(r"(?i)lähitapiola", surface) or (
+                    re.search(r"(?i)myyjä", surface)
+                    and re.search(r"(?i)asiakas|lähi", surface)
+                ):
+                    continue
             toks = [t for t in surface.split() if t.strip(".,;:'\"")]
             if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
                 continue
@@ -1073,6 +1128,37 @@ def apply_stable_placeholders(
     return out, entity_map, hits
 
 
+def _surface_search_forms(original: str) -> list[str]:
+    """Exact + NBSP variants of a mapped cleartext surface."""
+    forms: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        if s and s not in seen:
+            seen.add(s)
+            forms.append(s)
+
+    add(original)
+    if "\u00a0" in original:
+        add(original.replace("\u00a0", " "))
+    if " " in original:
+        add(original.replace(" ", "\u00a0"))
+    return forms
+
+
+def _flexible_token_pattern(original: str) -> re.Pattern[str] | None:
+    """Regex allowing flexible whitespace/newlines between tokens of *original*."""
+    tokens = [t for t in re.split(r"\s+", original.strip()) if t]
+    if len(tokens) < 2:
+        return None
+    if any(len(t) < 2 for t in tokens):
+        return None
+    parts = [re.escape(t) for t in tokens]
+    # Spaces, NBSP, or one/two newlines between name tokens (signature wraps)
+    gap = r"(?:[ \t\u00a0]+|\n\n?)"
+    return re.compile(gap.join(parts))
+
+
 def apply_known_surfaces(
     text: str,
     entity_map: EntityMap,
@@ -1085,6 +1171,11 @@ def apply_known_surfaces(
     signature pages still contain the same surface. After span projection,
     sweep known ``entity_map.reverse`` originals (longest first) so placeholders
     stay stable across the whole document.
+
+    Also handles:
+    - NBSP↔space variants (postal+city lines)
+    - Multi-token surfaces split across newlines (``CHRISTIAN\\nWALLDEN``)
+    - Orphan ALL-CAPS last-name lines matching a mapped multi-token surface
     """
     from anonymizer.anonymize.config import normalize_redact_style
 
@@ -1098,10 +1189,63 @@ def apply_known_surfaces(
     )
     out = text
     for placeholder, original in items:
-        if not original or original not in out:
+        if not original:
             continue
         replacement = "" if style == "remove" else placeholder
-        out = out.replace(original, replacement)
+        for form in _surface_search_forms(original):
+            if form in out:
+                out = out.replace(form, replacement)
+        flex = _flexible_token_pattern(original)
+        if flex is not None and flex.search(out):
+            out = flex.sub(replacement, out)
+
+    # Orphan surname line: sole ALL-CAPS token equals last token of a mapped name
+    orphan_lines = re.compile(
+        r"(?m)^([A-ZÅÄÖ]{3,}(?:-[A-ZÅÄÖ]+)?)\s*$",
+    )
+    last_token_map: dict[str, str] = {}
+    for placeholder, original in items:
+        toks = [t for t in re.split(r"\s+", original.strip()) if t]
+        if len(toks) < 2:
+            continue
+        last = toks[-1]
+        if not re.fullmatch(r"[A-ZÅÄÖ]{3,}(?:-[A-ZÅÄÖ]+)?", last):
+            continue
+        # Prefer longer originals if two share a last token
+        if last not in last_token_map or len(original) > len(
+            entity_map.reverse.get(last_token_map[last], "")
+        ):
+            last_token_map[last] = placeholder
+
+    if last_token_map:
+
+        def _orphan_sub(m: re.Match[str]) -> str:
+            tok = m.group(1)
+            ph = last_token_map.get(tok)
+            if not ph:
+                return m.group(0)
+            return "" if style == "remove" else ph
+
+        out = orphan_lines.sub(_orphan_sub, out)
+
+    # Remaining ALL-CAPS tokens from a mapped ALL-CAPS PERSON name
+    # (e.g. ``[PERSON_4] CHRISTIAN`` when WALLDEN lived in the next block).
+    for placeholder, original in items:
+        if not placeholder.startswith("[PERSON"):
+            continue
+        toks = [t for t in re.split(r"\s+", original.strip()) if t]
+        if len(toks) < 2 or not all(_ALL_CAPS_NAME_TOKEN.fullmatch(t) for t in toks):
+            continue
+        replacement = "" if style == "remove" else placeholder
+        for tok in toks:
+            if len(tok) < 3:
+                continue
+            out = re.sub(
+                rf"(?<![A-ZÅÄÖa-zåäö]){re.escape(tok)}(?![A-ZÅÄÖa-zåäö])",
+                replacement,
+                out,
+            )
+
     if style == "remove":
         out = re.sub(r"[^\S\n]{2,}", " ", out)
     return out
@@ -1214,6 +1358,7 @@ class DocumentAnonymizer:
 
         _p("Merging entities…")
         merged = _merge_results(all_results, reg)
+        merged = _retag_all_caps_org_names_to_person(text, merged)
         merged = _filter_field_labels(text, merged)
         merged = _filter_entity_false_positives(text, merged, lex)
         merged = _drop_noisy_surfaces(text, merged)

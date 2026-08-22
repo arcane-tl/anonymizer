@@ -72,3 +72,56 @@ def test_known_surfaces_applied_on_later_blocks():
     ).anonymize_blocks(blocks, lang_flag="en")
     joined = "\n".join(out_blocks)
     assert "TOMI TAPANI LINDROOS" not in joined
+
+
+def test_multiline_signer_name_known_surfaces():
+    """``CHRISTIAN\\nWALLDEN`` must redact when map has ``CHRISTIAN WALLDEN``."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "CHRISTOFER VEIKKO")
+    em.get_or_assign("PERSON", "CHRISTIAN WALLDEN")
+    text = "CHRISTOFER VEIKKO CHRISTIAN\nWALLDEN\nTOMI TAPANI LINDROOS"
+    em.get_or_assign("PERSON", "TOMI TAPANI LINDROOS")
+    out = apply_known_surfaces(text, em, style="placeholder")
+    assert "CHRISTOFER" not in out
+    assert "CHRISTIAN" not in out
+    assert "WALLDEN" not in out
+    assert "TOMI TAPANI LINDROOS" not in out
+
+
+def test_split_block_middle_name_token():
+    """Name tokens split across blocks must not leave a middle given name."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "CHRISTOFER VEIKKO")
+    em.get_or_assign("PERSON", "CHRISTIAN WALLDEN")
+    # Simulate after first block already replaced the leading tokens
+    block_a = "[PERSON_1] CHRISTIAN"
+    block_b = "WALLDEN"
+    out_a = apply_known_surfaces(block_a, em, style="placeholder")
+    out_b = apply_known_surfaces(block_b, em, style="placeholder")
+    assert "CHRISTIAN" not in out_a
+    assert "WALLDEN" not in out_b
+
+
+def test_postinumero_city_line_fully_redacted():
+    blocks = [
+        "Nimi:\nAlice Example",
+        "Osoite:\nTestikatu 1",
+        "Postinumero ja Toimipaikka:\n02330 ESPOO",
+        "Postinumero ja Toimipaikka:\n05840 HYVINKÄÄ",
+    ]
+    out_blocks, result = DocumentAnonymizer(
+        AnonymizerConfig(lang="fi", mode="strict")
+    ).anonymize_blocks(blocks, lang_flag="fi")
+    joined = "\n".join(out_blocks)
+    assert "ESPOO" not in joined
+    assert "HYVINKÄÄ" not in joined
+    assert "02330" not in joined
+    assert "05840" not in joined
+    assert any(k.startswith("[CITY") for k in result.mapping)
+    assert any(k.startswith("[POSTAL") for k in result.mapping)
