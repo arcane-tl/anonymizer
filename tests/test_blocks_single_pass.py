@@ -47,3 +47,28 @@ def test_shared_placeholders_across_blocks():
     if "[PERSON_1]" in out_blocks[0]:
         assert "[PERSON_1]" in out_blocks[1]
     assert result.language.nlp_passes == ["en"]
+
+
+def test_known_surfaces_applied_on_later_blocks():
+    """Signer name found once must still redact on later signature pages."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "TOMI TAPANI LINDROOS")
+    later = "Identification\n\nTOMI TAPANI LINDROOS\n2025-05-30"
+    out = apply_known_surfaces(later, em, style="placeholder")
+    assert "TOMI TAPANI LINDROOS" not in out
+    assert "[PERSON_1]" in out
+
+    # End-to-end: first block teaches the map; trailing block has no NER hit
+    blocks = [
+        "Signer: TOMI TAPANI LINDROOS signed today.",
+        "Boilerplate with no name.",
+        "TOMI TAPANI LINDROOS",
+    ]
+    out_blocks, _result = DocumentAnonymizer(
+        AnonymizerConfig(lang="en", mode="strict")
+    ).anonymize_blocks(blocks, lang_flag="en")
+    joined = "\n".join(out_blocks)
+    assert "TOMI TAPANI LINDROOS" not in joined

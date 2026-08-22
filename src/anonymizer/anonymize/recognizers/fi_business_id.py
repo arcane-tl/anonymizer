@@ -11,7 +11,17 @@ from presidio_analyzer.nlp_engine import NlpArtifacts
 # 1234567-8  (7 digits, hyphen, check digit)
 _YTUNNUS_RE = re.compile(r"\b(\d{7})-(\d)\b")
 
+# Labels that justify accepting a checksum-invalid Y-tunnus (demo/OCR docs).
+_YTUNNUS_LABEL_RE = re.compile(
+    r"(?i)\b(?:"
+    r"y[\s\-]?tunnus|ytunnus|business\s*id|company\s*id|"
+    r"fo[\s\-]?nummer|org(?:anisation)?(?:s|\.)?\s*nr\.?|"
+    r"enterprise\s*id"
+    r")\b",
+)
+
 _WEIGHTS = [7, 9, 10, 5, 8, 4, 2]
+_LABEL_LOOKBACK = 48
 
 
 def is_valid_y_tunnus(number7: str, check: str) -> bool:
@@ -28,8 +38,19 @@ def is_valid_y_tunnus(number7: str, check: str) -> bool:
     return int(check) == expected
 
 
+def _has_y_tunnus_label(text: str, start: int) -> bool:
+    window = text[max(0, start - _LABEL_LOOKBACK) : start]
+    return _YTUNNUS_LABEL_RE.search(window) is not None
+
+
 class FiBusinessIdRecognizer(EntityRecognizer):
-    """Detect Finnish Y-tunnus with checksum validation."""
+    """Detect Finnish Y-tunnus with checksum validation.
+
+    Checksum-valid hits score 0.9. Checksum-invalid hits are kept at 0.7 only
+    when a nearby label (``Y-tunnus``, ``Business ID``, …) anchors the span —
+    so synthetic/demo IDs in contracts still redact without opening every
+    ``NNNNNNN-N`` order number.
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -53,20 +74,22 @@ class FiBusinessIdRecognizer(EntityRecognizer):
         results: list[RecognizerResult] = []
         for m in _YTUNNUS_RE.finditer(text):
             num, chk = m.group(1), m.group(2)
-            if not is_valid_y_tunnus(num, chk):
+            valid = is_valid_y_tunnus(num, chk)
+            if not valid and not _has_y_tunnus_label(text, m.start()):
                 continue
+            score = 0.9 if valid else 0.7
             results.append(
                 RecognizerResult(
                     entity_type="FI_BUSINESS_ID",
                     start=m.start(),
                     end=m.end(),
-                    score=0.9,
+                    score=score,
                     analysis_explanation=AnalysisExplanation(
                         recognizer=self.name,
-                        original_score=0.9,
-                        pattern_name="fi_y_tunnus",
+                        original_score=score,
+                        pattern_name="fi_y_tunnus" if valid else "fi_y_tunnus_labeled",
                         pattern=str(_YTUNNUS_RE.pattern),
-                        validation_result=True,
+                        validation_result=valid,
                     ),
                 )
             )

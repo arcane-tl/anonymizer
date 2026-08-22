@@ -840,6 +840,35 @@ def _boilerplate_neighbourhood(
     return False
 
 
+# Finnish street-name endings — single-token PERSON with these suffixes is a stem FP
+_FI_STREET_STEM_RE = re.compile(
+    r"(?i)^[\wÅÄÖåäö\-]+(?:katu|tie|kuja|polku|väylä|raitti|tori|aukio|"
+    r"puistikko|ranta|mäki|rinne|bulevardi|esplanadi|puisto|kaari|penger|"
+    r"silta|laituri|kallio|niemi|saari|kylä|kierto)$"
+)
+
+
+def _street_name_stems(text: str, results: list[RecognizerResult]) -> set[str]:
+    """Street name tokens from STREET hits (text before the house number)."""
+    stems: set[str] = set()
+    for r in results:
+        if r.entity_type != "STREET":
+            continue
+        surface = text[r.start : r.end].strip()
+        # "Digipolku 1 A 2" → Digipolku; "Hämeentie 18" → Hämeentie
+        m = re.match(
+            r"^([\wÅÄÖåäö\-]+(?:\s+[\wÅÄÖåäö\-]+)?)"
+            r"(?=\s+\d)",
+            surface,
+            flags=re.UNICODE,
+        )
+        if m:
+            stems.add(m.group(1).casefold())
+        else:
+            stems.add(surface.casefold())
+    return stems
+
+
 def _filter_entity_false_positives(
     text: str,
     results: list[RecognizerResult],
@@ -851,6 +880,7 @@ def _filter_entity_false_positives(
     stem hits get the same discipline as spaCy-time gates.
     """
     lex = lexicon or builtin_lexicon()
+    street_stems = _street_name_stems(text, results)
     kept: list[RecognizerResult] = []
     for r in results:
         surface = text[r.start : r.end]
@@ -861,11 +891,29 @@ def _filter_entity_false_positives(
                 continue
             if _is_all_caps_section_header(surface):
                 continue
+            # English signing/eIDAS chrome
+            if re.search(
+                r"(?i)^(front\s+page|the\s+electronic\s+signatures|"
+                r"eu-compliant\s+pades|advanced\s+electronic\s+signatures)$",
+                surface.strip(),
+            ):
+                continue
+            # Job titles mis-tagged as ORG
+            if re.search(
+                r"(?i)^(senior\s+consultant|managing\s+director|"
+                r"toimitusjohtaja|myyntipäällikkö)$",
+                surface.strip(),
+            ):
+                continue
             if not _has_legal_form(surface) and re.search(
                 r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot|"
-                r"yleiset\s+sopimusehdot|vastuunrajoitus|salassapito)\b",
+                r"yleiset\s+sopimusehdot|vastuunrajoitus|salassapito|"
+                r"myyjäliike)\b",
                 surface,
             ):
+                continue
+            # "Jos Asiakas" / "Lisäksi Asiakas" boilerplate
+            if re.search(r"(?i)^(jos|lisäksi)\s+asiakas\b", surface.strip()):
                 continue
             # Multi-token ORG with no legal form and only domain noise tokens
             if not _has_legal_form(surface):
@@ -899,6 +947,11 @@ def _filter_entity_false_positives(
             if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
                 continue
             if surface == surface.casefold():
+                continue
+            # Street stem mis-tagged as PERSON ("Digipolku", "Konsulttikatu")
+            if surface.casefold() in street_stems or _FI_STREET_STEM_RE.match(
+                surface.strip()
+            ):
                 continue
             # Single-token Title Case role / legalish label ("Broker", "Publisher")
             if len(toks) == 1:
@@ -1018,6 +1071,40 @@ def apply_stable_placeholders(
         # Collapse runs of spaces/tabs left by deletions (keep newlines).
         out = re.sub(r"[^\S\n]{2,}", " ", out)
     return out, entity_map, hits
+
+
+def apply_known_surfaces(
+    text: str,
+    entity_map: EntityMap,
+    *,
+    style: str = "placeholder",
+) -> str:
+    """Replace any remaining mapped cleartext using the document-wide map.
+
+    NER often tags only the first occurrence of a repeated signer name; later
+    signature pages still contain the same surface. After span projection,
+    sweep known ``entity_map.reverse`` originals (longest first) so placeholders
+    stay stable across the whole document.
+    """
+    from anonymizer.anonymize.config import normalize_redact_style
+
+    style = normalize_redact_style(style)
+    if not text or not entity_map.reverse:
+        return text
+    # Longest cleartext first so multi-word names beat substrings
+    items = sorted(
+        entity_map.reverse.items(),
+        key=lambda kv: (-len(kv[1]), kv[0]),
+    )
+    out = text
+    for placeholder, original in items:
+        if not original or original not in out:
+            continue
+        replacement = "" if style == "remove" else placeholder
+        out = out.replace(original, replacement)
+    if style == "remove":
+        out = re.sub(r"[^\S\n]{2,}", " ", out)
+    return out
 
 
 class DocumentAnonymizer:
@@ -1260,6 +1347,8 @@ class DocumentAnonymizer:
             anon, entity_map, hits = apply_stable_placeholders(
                 block, local, entity_map=entity_map, style=style
             )
+            # Repeat known surfaces (e.g. signer name on later signature pages)
+            anon = apply_known_surfaces(anon, entity_map, style=style)
             out_blocks.append(anon)
             for h in hits:
                 all_hits.append(h)
@@ -1268,6 +1357,12 @@ class DocumentAnonymizer:
                     continue
                 seen_keys.add(key)
                 type_counts[h.entity_type] = type_counts.get(h.entity_type, 0) + 1
+
+        # Final sweep: map may have grown during earlier blocks
+        out_blocks = [
+            apply_known_surfaces(b, entity_map, style=style) if b.strip() else b
+            for b in out_blocks
+        ]
 
         summary = AnonymizeResult(
             anonymized_text="\n\n".join(out_blocks),
