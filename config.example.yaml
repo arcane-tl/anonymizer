@@ -76,6 +76,8 @@ denylist:
 # fail_on_native_miss: false
 # Require at least this fraction of surfaces found in the original layout (0–1):
 # native_min_match_rate: 1.0
+# Black-box letterhead/logo images in PDF header/footer bands (shareable PDFs):
+# redact_letterhead_images: false
 
 # Language for NER: auto | en | fi | sv | en,fi | en,sv | …
 # lang: auto

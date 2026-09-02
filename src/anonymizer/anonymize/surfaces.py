@@ -48,12 +48,44 @@ def _strip_invisible(text: str) -> str:
     return out
 
 
+def _email_wrap_variants(text: str) -> list[str]:
+    """PDF line-break forms of email addresses (TLD / domain / @ splits)."""
+    if "@" not in text or "." not in text:
+        return []
+    out: list[str] = []
+    # user@\nexample.com
+    at = text.find("@")
+    if at > 0:
+        out.append(text[: at + 1] + "\n" + text[at + 1 :])
+    # user@exam\nple.com — split once in the domain label before the last dot
+    local, _, domain = text.partition("@")
+    if domain and "." in domain:
+        host, dot, tld = domain.rpartition(".")
+        if host and tld:
+            # Mid-host wrap: exam\nple.com
+            if len(host) >= 4:
+                mid = max(2, len(host) // 2)
+                out.append(f"{local}@{host[:mid]}\n{host[mid:]}{dot}{tld}")
+            # TLD wrap: bestcaravan.f\ni  (common PDF soft-wrap)
+            if len(tld) >= 2:
+                out.append(f"{local}@{host}{dot}{tld[0]}\n{tld[1:]}")
+                out.append(f"{local}@{host}{dot}{tld[:-1]}\n{tld[-1]}")
+            # Truncated visible form (search still blacks the visible fragment)
+            if len(tld) >= 2:
+                out.append(f"{local}@{host}{dot}{tld[0]}")
+    # local\n@domain
+    if local and len(local) >= 3:
+        out.append(f"{local}\n@{domain}")
+    return out
+
+
 def surface_search_variants(text: str) -> list[str]:
     """Variants worth searching in PDF/DOCX layout.
 
     Covers NBSP↔space, soft-hyphen / zero-width stripping, hyphenated line
-    breaks (``Foo-\\nBar``), soft-wrap newlines at spaces, and dehyphenated
-    compounds (``FooBar`` from ``Foo-Bar``).
+    breaks (``Foo-\\nBar``), soft-wrap newlines at spaces, dehyphenated
+    compounds (``FooBar`` from ``Foo-Bar``), and email PDF wraps
+    (``user@domain.f\\ni``).
     """
     variants: list[str] = []
     seen: set[str] = set()
@@ -92,6 +124,12 @@ def surface_search_variants(text: str) -> list[str]:
         add(base.replace("-", ""))
         add(base.replace("-", "\u00ad"))
 
+    for v in _email_wrap_variants(stripped):
+        add(v)
+    if collapsed != stripped:
+        for v in _email_wrap_variants(collapsed):
+            add(v)
+
     return variants
 
 
@@ -99,15 +137,22 @@ def surface_appears_in_text(haystack: str, clear: str) -> bool:
     """True if *clear* (or a search variant) remains in extracted *haystack*."""
     if not clear or not haystack:
         return False
-    for variant in surface_search_variants(clear):
-        if variant in haystack:
-            return True
-    # Whitespace-normalized fallback (covers NBSP / multi-space / newlines)
-    norm_h = " ".join(haystack.split())
-    if not norm_h:
-        return False
-    for variant in surface_search_variants(clear):
-        norm_v = " ".join(variant.split())
-        if norm_v and norm_v in norm_h:
-            return True
+    # Also check repair-joined haystack so PDF ``.f\\ni`` residuals match ``.fi``
+    try:
+        from anonymizer.extract.text_repair import repair_text_artifacts
+
+        corpora = (haystack, repair_text_artifacts(haystack))
+    except Exception:  # noqa: BLE001
+        corpora = (haystack,)
+    for corpus in corpora:
+        for variant in surface_search_variants(clear):
+            if variant in corpus:
+                return True
+        norm_h = " ".join(corpus.split())
+        if not norm_h:
+            continue
+        for variant in surface_search_variants(clear):
+            norm_v = " ".join(variant.split())
+            if norm_v and norm_v in norm_h:
+                return True
     return False

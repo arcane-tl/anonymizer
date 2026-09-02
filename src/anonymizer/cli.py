@@ -243,6 +243,7 @@ def _build_config(
     output_format: str | None = None,
     fail_on_native_miss: bool | None = None,
     native_min_match_rate: float | None = None,
+    redact_letterhead_images: bool | None = None,
     template: str | None = None,
     quiet: bool = False,
 ) -> AnonymizerConfig:
@@ -296,6 +297,8 @@ def _build_config(
             )
             raise typer.Exit(2)
         cfg.native_min_match_rate = native_min_match_rate
+    if redact_letterhead_images is not None:
+        cfg.redact_letterhead_images = redact_letterhead_images
     if cfg.mode == "extract" and cfg.use_llm:
         console.print(
             "[dim]Note:[/dim] --llm is ignored in extract mode (no redaction)."
@@ -340,6 +343,7 @@ def _run_pipeline(
     output_format: str | None,
     fail_on_native_miss: bool = False,
     native_min_match_rate: float | None = None,
+    redact_letterhead_images: bool = False,
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
@@ -393,6 +397,7 @@ def _run_pipeline(
             output_format=output_format,
             fail_on_native_miss=fail_on_native_miss or None,
             native_min_match_rate=native_min_match_rate,
+            redact_letterhead_images=redact_letterhead_images or None,
             template=template,
             quiet=quiet,
         )
@@ -586,6 +591,37 @@ def _run_pipeline(
                 if multi
                 else input_path.name
             )
+            review_risk = None
+            if review_surface == "window" or (review_surface or "cli") == "window":
+                from anonymizer.anonymize.review import ReviewRisk
+
+                img_count = 0
+                img_pages: list[int] = []
+                if input_path.suffix.lower() == ".pdf":
+                    try:
+                        import pymupdf as fitz
+
+                        _pdf = fitz.open(input_path)
+                        try:
+                            for _pi, _page in enumerate(_pdf):
+                                n_img = len(_page.get_images(full=True) or [])
+                                if n_img:
+                                    img_count += n_img
+                                    img_pages.append(_pi + 1)
+                        finally:
+                            _pdf.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                ocr_meta = (doc.extra or {}).get("ocr") or {}
+                low = tuple(ocr_meta.get("low_coverage_pages") or [])
+                review_risk = ReviewRisk(
+                    used_ocr=bool(doc.used_ocr),
+                    low_coverage_pages=low,
+                    image_count=img_count,
+                    image_pages=tuple(img_pages),
+                    writing_native=bool(write_native and native_suffix(input_path)),
+                    residual_image_risk=bool(doc.used_ocr or img_count),
+                )
             try:
                 session = interactive_review(
                     result.mapping,
@@ -595,6 +631,7 @@ def _run_pipeline(
                     surface=review_surface or "cli",
                     pre_keep_clear=pre_keep,
                     learn_to=learn_to,
+                    risk=review_risk,
                 )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 130
@@ -737,6 +774,7 @@ def _run_pipeline(
                         native_path,
                         native_mapping,
                         redact_style=final_redact_style,
+                        redact_letterhead_images=cfg.redact_letterhead_images,
                     )
                 except Exception as exc:
                     console.print(
@@ -749,6 +787,16 @@ def _run_pipeline(
                     written_native = native_path
                     if not quiet:
                         console.print(f"[dim]{stats.summary()}[/dim]")
+                        if stats.residual_image_risk and not cfg.redact_letterhead_images:
+                            console.print(
+                                "[yellow]Shareability:[/yellow] "
+                                f"{stats.images_total} embedded image(s) remain "
+                                "(logos/letterheads). Use "
+                                "[bold]--redact-letterhead-images[/bold] to black-box "
+                                "header/footer image bands."
+                            )
+                        for line in stats.shareability_lines():
+                            console.print(f"[dim]  · {line}[/dim]")
                         if stats.surfaces_missed and stats.missed:
                             preview = ", ".join(
                                 repr(s[:40]) for s in stats.missed[:5]
@@ -1388,6 +1436,17 @@ def main(
             rich_help_panel="Common",
         ),
     ] = None,
+    redact_letterhead_images: Annotated[
+        bool,
+        typer.Option(
+            "--redact-letterhead-images",
+            help=(
+                "For PDF native output: black-box images in header/footer bands "
+                "(logos/letterheads). Recommended for shareable PDFs."
+            ),
+            rich_help_panel="Common",
+        ),
+    ] = False,
     template: Annotated[
         Optional[str],
         typer.Option(
@@ -1542,6 +1601,7 @@ def main(
         output_format=output_format,
         fail_on_native_miss=fail_on_native_miss,
         native_min_match_rate=native_min_match_rate,
+        redact_letterhead_images=redact_letterhead_images,
         llm=llm,
         llm_provider=llm_provider,
         llm_model=llm_model,

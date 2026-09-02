@@ -510,6 +510,14 @@ on processFiles(theFiles)
 	set modeArg to modeArg of choices
 	set wantReview to wantReview of choices
 	set wantOpen to wantOpen of choices
+	set wantFailNative to false
+	try
+		set wantFailNative to wantFailNative of choices
+	end try
+	set wantLetterhead to false
+	try
+		set wantLetterhead to wantLetterhead of choices
+	end try
 	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
 	set templateCSV to templateCSV of choices
@@ -538,6 +546,8 @@ on processFiles(theFiles)
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
 	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
 	if outDirPath is not "" then set extraOpts to extraOpts & " --out-dir " & quoted form of outDirPath
+	if wantFailNative and (outputFormat is "source" or outputFormat is "both") then set extraOpts to extraOpts & " --fail-on-native-miss"
+	if wantLetterhead and (outputFormat is "source" or outputFormat is "both") then set extraOpts to extraOpts & " --redact-letterhead-images"
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
@@ -1605,6 +1615,8 @@ on showOptionsPanel()
 	set lastFormatRow to 0 -- 0=md, 1=source, 2=both
 	set lastReview to true
 	set lastOpen to true
+	set lastFailNative to false
+	set lastLetterhead to false
 
 	-- Design scale (comfortable, not sparse)
 	set margin to 24
@@ -1654,7 +1666,7 @@ on showOptionsPanel()
 		-- Match Choose… / Clear button height so helper text can sit on the same midline
 		set outPathH to btnH
 
-		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapSm + checkH + gapSm + checkH + gapXl + btnH + margin
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
@@ -1764,6 +1776,30 @@ on showOptionsPanel()
 		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:openBox
 
+		set y to y - gapSm - checkH
+		set failNativeBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
+		failNativeBox's setButtonType:(current application's NSButtonTypeSwitch)
+		failNativeBox's setTitle:"Fail if native PDF/DOCX misses cleartext"
+		if lastFailNative then
+			failNativeBox's setState:(current application's NSControlStateValueOn)
+		else
+			failNativeBox's setState:(current application's NSControlStateValueOff)
+		end if
+		failNativeBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:failNativeBox
+
+		set y to y - gapSm - checkH
+		set letterheadBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
+		letterheadBox's setButtonType:(current application's NSButtonTypeSwitch)
+		letterheadBox's setTitle:"Black-box PDF letterhead/logo images"
+		if lastLetterhead then
+			letterheadBox's setState:(current application's NSControlStateValueOn)
+		else
+			letterheadBox's setState:(current application's NSControlStateValueOff)
+		end if
+		letterheadBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:letterheadBox
+
 		-- Action bar: Templates… left · Cancel + Start right
 		set y to margin
 		set listsBtn to makeDialogButton("Templates…", margin, y, btnW, btnH, "clickOptionsLists:")
@@ -1804,6 +1840,12 @@ on showOptionsPanel()
 		set lastOpen to false
 		if (openBox's state() as integer) is 1 then set lastOpen to true
 		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
+		set lastFailNative to false
+		if (failNativeBox's state() as integer) is 1 then set lastFailNative to true
+		if (failNativeBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastFailNative to true
+		set lastLetterhead to false
+		if (letterheadBox's state() as integer) is 1 then set lastLetterhead to true
+		if (letterheadBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastLetterhead to true
 
 		-- Drop floating level so Tk Templates can stack above this panel.
 		-- Keep panel ordered front (visible underneath) for Templates…;
@@ -1824,11 +1866,13 @@ on showOptionsPanel()
 			set outputFormat to item (lastFormatRow + 1) of formatArgs
 			set wantReview to lastReview
 			set wantOpen to lastOpen
+			set wantFailNative to lastFailNative
+			set wantLetterhead to lastLetterhead
 			if modeArg is "extract" then
 				set wantReview to false
 				set outputFormat to "md"
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
 		else if response is 4 then
 			-- File list / out-dir changed — rebuild panel
 			try

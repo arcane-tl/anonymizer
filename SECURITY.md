@@ -18,6 +18,9 @@ Anonymizer is a **local** document tool. By default it does not send your files 
 - OCR-derived text sets `used_ocr` / residual image-risk metadata: detection can
   miss what OCR never transcribed, and native redaction cannot black out glyphs
   that remain only in the page image.
+- PDF letterhead/logo images: use `--redact-letterhead-images` (or GUI toggle) to
+  black-box header/footer image bands. Remaining mid-page images may still show
+  brands; text-layer search alone is not a forensic image wipe.
 - Desktop GUIs (Mac droplet, Windows Tk) invoke the local CLI only; Mac Templates use `templates-io.sh` → offline Python (`templates_io`). No network from the GUI shell.
 
 ## Reporting a vulnerability

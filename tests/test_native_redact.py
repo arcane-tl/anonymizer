@@ -59,6 +59,13 @@ def test_surface_variants_soft_wrap_newline() -> None:
     assert "Alice\nWonderland" in v
 
 
+def test_surface_variants_email_tld_wrap() -> None:
+    v = surface_search_variants("user.name@example.fi")
+    assert "user.name@example.f\ni" in v
+    assert "user.name@example.f" in v
+    assert "user.name@\nexample.fi" in v
+
+
 def test_surface_appears_in_text_normalized() -> None:
     assert surface_appears_in_text("Hello Alice\nWonderland here", "Alice Wonderland")
     assert surface_appears_in_text("ETA-\nmaat Oyj", "ETA-maat")
@@ -157,6 +164,53 @@ def test_pdf_redact_hyphenated_linebreak(tmp_path: Path) -> None:
     after.close()
     assert "ETA-" not in text
     assert "maat" not in text
+
+
+def test_pdf_redact_split_email_layout(tmp_path: Path) -> None:
+    """Repaired ``.fi`` email must still hit PDF ``.f\\ni`` layout."""
+    import pymupdf as fitz
+
+    src = tmp_path / "email.pdf"
+    dest = tmp_path / "email.out.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Contact: alice@example.f")
+    page.insert_text((72, 86), "i for details.")
+    doc.save(src)
+    doc.close()
+
+    surfaces = [RedactSurface(clear="alice@example.fi", placeholder="[EMAIL_1]")]
+    stats = redact_pdf(src, surfaces, dest)
+    assert stats.surfaces_found == 1
+    assert stats.residuals_found == 0
+    after = fitz.open(dest)
+    text = after[0].get_text()
+    after.close()
+    assert "alice@example" not in text.casefold()
+
+
+def test_pdf_letterhead_image_stats(tmp_path: Path) -> None:
+    import pymupdf as fitz
+
+    src = tmp_path / "logo.pdf"
+    dest = tmp_path / "logo.out.pdf"
+    # Build a tiny PNG and embed it as a header logo
+    png = tmp_path / "logo.png"
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 48, 24), 1)
+    pix.set_rect(pix.irect, (255, 0, 0, 255))
+    pix.save(str(png))
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 200), "Body Alice Wonderland")
+    page.insert_image(fitz.Rect(72, 20, 160, 50), filename=str(png))
+    doc.save(src)
+    doc.close()
+
+    surfaces = [RedactSurface(clear="Alice Wonderland", placeholder="[PERSON_1]")]
+    stats = redact_pdf(src, surfaces, dest, redact_letterhead_images=True)
+    assert stats.images_total >= 1
+    assert stats.letterhead_redacted or stats.images_redacted >= 1
+    assert stats.surfaces_found == 1
 
 
 def test_pdf_scrub_forms_and_annots(tmp_path: Path) -> None:

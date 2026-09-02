@@ -1441,11 +1441,14 @@ def run_review_window(
     on_allowlist: Callable[[str], None] | None = None,
     on_denylist: Callable[[str, str], None] | None = None,
     learn_to: str | None = None,
+    risk: object | None = None,
 ) -> ReviewSession | None:
     """Open the review UI. Returns session on Save, ``None`` on Cancel.
 
     *learn_to*: optional user template id pre-selected for “Teach into…” on Save
     (also read from env ``ANONYMIZER_LEARN_TO`` if not passed).
+    *risk*: optional :class:`~anonymizer.anonymize.review.ReviewRisk` for a
+    shareability / OCR / image residual banner under the title.
     """
     if tk is None:
         raise RuntimeError("tkinter is not available")
@@ -1658,6 +1661,39 @@ def run_review_window(
     tk.Label(
         header, text=title, bg=_BG_APP, fg=_TEXT, font=_FONT_BOLD, anchor=tk.W
     ).pack(side=tk.LEFT)
+
+    # Shareability / OCR / embedded-image residual risk banner
+    risk_lines: list[str] = []
+    banner_fn = getattr(risk, "banner_lines", None)
+    if callable(banner_fn):
+        try:
+            risk_lines = list(banner_fn() or [])
+        except Exception:  # noqa: BLE001
+            risk_lines = []
+    if risk_lines:
+        risk_shell = tk.Frame(outer, bg=_BG_APP)
+        risk_shell.pack(side=tk.TOP, fill=tk.X, pady=(0, _GAP))
+        risk_body = tk.Frame(risk_shell, bg=_HL_REDACT_BG, padx=12, pady=8)
+        risk_body.pack(fill=tk.X)
+        tk.Label(
+            risk_body,
+            text="Shareability risk",
+            bg=_HL_REDACT_BG,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+        for line in risk_lines:
+            tk.Label(
+                risk_body,
+                text=line,
+                bg=_HL_REDACT_BG,
+                fg=_TEXT,
+                font=_FONT_SMALL,
+                anchor=tk.W,
+                justify=tk.LEFT,
+                wraplength=max(720, w - 80),
+            ).pack(fill=tk.X, pady=(2, 0))
 
     # Main split: drag sash to resize Findings | Document
     paned = tk.PanedWindow(

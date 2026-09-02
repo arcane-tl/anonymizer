@@ -79,6 +79,7 @@ def write_native_redacted(
     mapping: dict[str, str],
     *,
     redact_style: str = "placeholder",
+    redact_letterhead_images: bool = False,
 ) -> NativeRedactStats | None:
     """Write redacted original-format file. Returns None if type unsupported."""
     source = Path(source)
@@ -88,7 +89,12 @@ def write_native_redacted(
         return None
     surfaces: list[RedactSurface] = surfaces_from_mapping(mapping)
     if suf == ".pdf":
-        return redact_pdf(source, surfaces, dest)
+        return redact_pdf(
+            source,
+            surfaces,
+            dest,
+            redact_letterhead_images=redact_letterhead_images,
+        )
     if suf == ".docx":
         style = "remove" if redact_style == "remove" else "placeholder"
         return redact_docx(source, surfaces, dest, style=style)

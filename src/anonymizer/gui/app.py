@@ -1959,6 +1959,8 @@ class OptionsApp(tk.Tk):
         self.style_var = tk.StringVar(value="placeholder")
         self.format_var = tk.StringVar(value="md")
         self.review_var = tk.BooleanVar(value=True)
+        self.fail_native_var = tk.BooleanVar(value=False)
+        self.letterhead_var = tk.BooleanVar(value=False)
         self.open_var = tk.BooleanVar(value=True)
 
         pad = 24
@@ -2088,6 +2090,18 @@ class OptionsApp(tk.Tk):
             root,
             "Open result when finished",
             variable=self.open_var,
+            pady=(2, 2),
+        )
+        _dark_check(
+            root,
+            "Fail if native PDF/DOCX misses cleartext (shareable gate)",
+            variable=self.fail_native_var,
+            pady=(10, 2),
+        )
+        _dark_check(
+            root,
+            "Black-box PDF letterhead/logo images (header/footer)",
+            variable=self.letterhead_var,
             pady=(2, 2),
         )
 
@@ -2394,6 +2408,10 @@ class OptionsApp(tk.Tk):
             )
         if out_dir is not None:
             common_flags.extend(["--out-dir", str(out_dir)])
+        if out_fmt in {"source", "both"} and self.fail_native_var.get():
+            common_flags.append("--fail-on-native-miss")
+        if out_fmt in {"source", "both"} and self.letterhead_var.get():
+            common_flags.append("--redact-letterhead-images")
         _log(
             f"_run_start mode={mode} style={style} fmt={out_fmt} "
             f"review={want_review} out_dir={out_dir!r} "

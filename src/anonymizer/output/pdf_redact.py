@@ -23,7 +23,6 @@ def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
     ann_count = 0
     widget_count = 0
     for page in doc:
-        # Widgets first — field values often hold PII outside the body text layer.
         try:
             widgets = list(page.widgets() or [])
         except Exception:  # noqa: BLE001
@@ -47,7 +46,11 @@ def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
         for annot in annots:
             try:
                 type_info = annot.type
-                tname = type_info[1] if isinstance(type_info, tuple) and len(type_info) > 1 else ""
+                tname = (
+                    type_info[1]
+                    if isinstance(type_info, tuple) and len(type_info) > 1
+                    else ""
+                )
                 if tname == "Redact":
                     continue
                 page.delete_annot(annot)
@@ -87,6 +90,82 @@ def _scrub_metadata(doc) -> None:
         pass
 
 
+def _inventory_images(doc) -> tuple[int, list[int]]:
+    """Return ``(total_images, 1-based page numbers that contain images)``."""
+    total = 0
+    pages: list[int] = []
+    for i, page in enumerate(doc):
+        try:
+            imgs = page.get_images(full=True) or []
+        except Exception:  # noqa: BLE001
+            imgs = []
+        n = len(imgs)
+        if n:
+            total += n
+            pages.append(i + 1)
+    return total, pages
+
+
+def _page_image_rects(page) -> list:
+    """Bounding boxes for images placed on *page*."""
+    rects = []
+    try:
+        infos = page.get_images(full=True) or []
+    except Exception:  # noqa: BLE001
+        return rects
+    for info in infos:
+        xref = info[0]
+        try:
+            found = page.get_image_rects(xref) or []
+        except Exception:  # noqa: BLE001
+            continue
+        rects.extend(found)
+    return rects
+
+
+def _redact_letterhead_images(
+    doc,
+    *,
+    fill: tuple[float, float, float],
+    top_frac: float = 0.28,
+    bottom_frac: float = 0.12,
+) -> int:
+    """Black-box images in header/footer bands (esp. page 1 letterhead logos).
+
+    Returns number of image rects marked for redaction. Caller must
+    ``apply_redactions``.
+    """
+    n = 0
+    page_count = doc.page_count
+    for page_index, page in enumerate(doc):
+        page_h = float(page.rect.height) or 1.0
+        top_y = page_h * top_frac
+        bottom_y = page_h * (1.0 - bottom_frac)
+        # First and last pages: aggressive; middle pages: top band only if large
+        for rect in _page_image_rects(page):
+            try:
+                y0, y1 = float(rect.y0), float(rect.y1)
+            except Exception:  # noqa: BLE001
+                continue
+            in_top = y1 <= top_y or y0 <= page_h * 0.08
+            in_bottom = y0 >= bottom_y
+            cover = False
+            if page_index == 0 and (in_top or in_bottom):
+                cover = True
+            elif page_index == page_count - 1 and page_count > 1 and in_bottom:
+                cover = True
+            elif in_top and (y1 - y0) >= page_h * 0.04:
+                cover = True
+            if not cover:
+                continue
+            try:
+                page.add_redact_annot(rect, fill=fill)
+                n += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("letterhead redact failed: %s", exc)
+    return n
+
+
 def _verify_residuals(doc, surfaces: list[RedactSurface]) -> list[str]:
     """Re-extract page text and return clears that still appear."""
     chunks: list[str] = []
@@ -113,6 +192,7 @@ def redact_pdf(
     dest: Path,
     *,
     fill: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    redact_letterhead_images: bool = False,
 ) -> NativeRedactStats:
     """Copy *source* to *dest* with black-box redaction over each surface.
 
@@ -122,21 +202,29 @@ def redact_pdf(
     After redaction: scrub form widgets and annotations, wipe metadata, then
     re-extract text to populate residual stats. Soft-wrapped mid-glyph splits
     and image-only text may still miss — check ``stats.residuals`` / ``is_clean``.
+
+    When *redact_letterhead_images* is True, images in header/footer bands
+    (especially page 1) are blacked out as well.
     """
     import pymupdf as fitz
 
     source = Path(source)
     dest = Path(dest)
     stats = NativeRedactStats(format="pdf", surfaces_total=len(surfaces))
-    if not surfaces:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(source.read_bytes())
-        stats.output_path = str(dest)
-        stats.verified = True
-        return stats
 
     doc = fitz.open(source)
     try:
+        img_total, img_pages = _inventory_images(doc)
+        stats.images_total = img_total
+        stats.image_pages = img_pages
+
+        if not surfaces and not redact_letterhead_images:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(source.read_bytes())
+            stats.output_path = str(dest)
+            stats.verified = True
+            return stats
+
         found_surfaces: set[str] = set()
         for page in doc:
             for surface in surfaces:
@@ -145,7 +233,9 @@ def redact_pdf(
                     try:
                         rects = page.search_for(variant)
                     except Exception as exc:  # noqa: BLE001 — layout quirks
-                        logger.debug("search_for failed for %r: %s", variant[:40], exc)
+                        logger.debug(
+                            "search_for failed for %r: %s", variant[:40], exc
+                        )
                         continue
                     for rect in rects:
                         page.add_redact_annot(rect, fill=fill)
@@ -153,6 +243,14 @@ def redact_pdf(
                         stats.hit_count += 1
                 if page_hits:
                     found_surfaces.add(surface.clear)
+
+        letterhead_n = 0
+        if redact_letterhead_images:
+            letterhead_n = _redact_letterhead_images(doc, fill=fill)
+            stats.letterhead_redacted = letterhead_n > 0
+            stats.images_redacted = letterhead_n
+
+        for page in doc:
             page.apply_redactions()
 
         for surface in surfaces:
@@ -167,7 +265,13 @@ def redact_pdf(
         stats.widgets_scrubbed = widget_n
         _scrub_metadata(doc)
 
-        residuals = _verify_residuals(doc, surfaces)
+        # Re-count images after letterhead wipe (best-effort)
+        if redact_letterhead_images:
+            left, left_pages = _inventory_images(doc)
+            stats.images_total = max(stats.images_total, left + letterhead_n)
+            stats.image_pages = left_pages
+
+        residuals = _verify_residuals(doc, surfaces) if surfaces else []
         stats.verified = True
         stats.residuals_found = len(residuals)
         stats.residuals = residuals

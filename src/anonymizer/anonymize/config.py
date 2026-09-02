@@ -209,6 +209,8 @@ class AnonymizerConfig:
     fail_on_native_miss: bool = False
     # If set (0–1), also fail when match_rate is below this value
     native_min_match_rate: float | None = None
+    # Black-box letterhead/logo images on PDF page header/footer bands
+    redact_letterhead_images: bool = False
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -377,6 +379,8 @@ def load_config(path: Path | None) -> AnonymizerConfig:
                     f"native_min_match_rate in {path} must be between 0 and 1"
                 )
             cfg.native_min_match_rate = rate
+        if "redact_letterhead_images" in data:
+            cfg.redact_letterhead_images = bool(data["redact_letterhead_images"])
         # Template multi-select (ids). Explicit empty list = no packs.
         if "templates_enabled" in data and data["templates_enabled"] is not None:
             te = data["templates_enabled"]
