@@ -127,35 +127,59 @@ def _redact_letterhead_images(
     doc,
     *,
     fill: tuple[float, float, float],
-    top_frac: float = 0.28,
-    bottom_frac: float = 0.12,
+    top_frac: float = 0.30,
+    bottom_frac: float = 0.32,
 ) -> int:
-    """Black-box images in header/footer bands (esp. page 1 letterhead logos).
+    """Black-box images in header/footer bands and repeating page chrome logos.
+
+    Covers:
+    - Top/bottom page bands (letterhead / footer marks) on every page
+    - Images whose xref appears on most pages (running logo chrome)
 
     Returns number of image rects marked for redaction. Caller must
     ``apply_redactions``.
     """
+    page_count = max(int(doc.page_count), 1)
+    # xref → pages it appears on (1-based) — running logos hit many pages
+    xref_pages: dict[int, set[int]] = {}
+    page_rects: list[list] = []
+    for page_index, page in enumerate(doc):
+        rects_here = []
+        try:
+            infos = page.get_images(full=True) or []
+        except Exception:  # noqa: BLE001
+            infos = []
+        for info in infos:
+            xref = info[0]
+            try:
+                found = page.get_image_rects(xref) or []
+            except Exception:  # noqa: BLE001
+                found = []
+            if found:
+                xref_pages.setdefault(xref, set()).add(page_index + 1)
+                for rect in found:
+                    rects_here.append((xref, rect))
+        page_rects.append(rects_here)
+
+    running = {
+        xref
+        for xref, pages in xref_pages.items()
+        if len(pages) >= max(2, (page_count + 1) // 2)
+    }
+
     n = 0
-    page_count = doc.page_count
     for page_index, page in enumerate(doc):
         page_h = float(page.rect.height) or 1.0
         top_y = page_h * top_frac
         bottom_y = page_h * (1.0 - bottom_frac)
-        # First and last pages: aggressive; middle pages: top band only if large
-        for rect in _page_image_rects(page):
+        for xref, rect in page_rects[page_index]:
             try:
                 y0, y1 = float(rect.y0), float(rect.y1)
             except Exception:  # noqa: BLE001
                 continue
-            in_top = y1 <= top_y or y0 <= page_h * 0.08
+            in_top = y1 <= top_y or y0 <= page_h * 0.10
             in_bottom = y0 >= bottom_y
-            cover = False
-            if page_index == 0 and (in_top or in_bottom):
-                cover = True
-            elif page_index == page_count - 1 and page_count > 1 and in_bottom:
-                cover = True
-            elif in_top and (y1 - y0) >= page_h * 0.04:
-                cover = True
+            cover = bool(in_top or in_bottom or xref in running)
             if not cover:
                 continue
             try:
@@ -264,12 +288,6 @@ def redact_pdf(
         stats.annotations_scrubbed = ann_n
         stats.widgets_scrubbed = widget_n
         _scrub_metadata(doc)
-
-        # Re-count images after letterhead wipe (best-effort)
-        if redact_letterhead_images:
-            left, left_pages = _inventory_images(doc)
-            stats.images_total = max(stats.images_total, left + letterhead_n)
-            stats.image_pages = left_pages
 
         residuals = _verify_residuals(doc, surfaces) if surfaces else []
         stats.verified = True

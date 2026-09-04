@@ -66,6 +66,18 @@ def test_surface_variants_email_tld_wrap() -> None:
     assert "user.name@\nexample.fi" in v
 
 
+def test_job_title_and_tool_fp_filter() -> None:
+    from anonymizer.anonymize.engine import _looks_like_job_title_or_tool
+
+    assert _looks_like_job_title_or_tool("Team Lead")
+    assert _looks_like_job_title_or_tool("Senior consultant")
+    assert _looks_like_job_title_or_tool("Consulting Managerille")
+    assert _looks_like_job_title_or_tool("Salesforce")
+    assert _looks_like_job_title_or_tool("Jira EPIC ID")
+    assert not _looks_like_job_title_or_tool("Elisa Oyj")
+    assert not _looks_like_job_title_or_tool("Best Caravan Oy")
+
+
 def test_surface_appears_in_text_normalized() -> None:
     assert surface_appears_in_text("Hello Alice\nWonderland here", "Alice Wonderland")
     assert surface_appears_in_text("ETA-\nmaat Oyj", "ETA-maat")

@@ -939,12 +939,11 @@ def _filter_entity_false_positives(
                 surface.strip(),
             ):
                 continue
-            # Job titles mis-tagged as ORG
-            if re.search(
-                r"(?i)^(senior\s+consultant|managing\s+director|"
-                r"toimitusjohtaja|myyntipäällikkö)$",
-                surface.strip(),
-            ):
+            # Word TOC / field errors
+            if re.search(r"(?i)error!\s*bookmark\s+not\s+defined", surface):
+                continue
+            # Job titles / consulting roles / SaaS tool labels (not companies)
+            if _looks_like_job_title_or_tool(surface) and not _has_legal_form(surface):
                 continue
             if not _has_legal_form(surface) and re.search(
                 r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot|"
@@ -955,6 +954,12 @@ def _filter_entity_false_positives(
                 continue
             # "Jos Asiakas" / "Lisäksi Asiakas" boilerplate
             if re.search(r"(?i)^(jos|lisäksi)\s+asiakas\b", surface.strip()):
+                continue
+            # Handbook title fragments without legal form
+            if re.search(
+                r"(?i)^(ktk\s+konsultoinnin|konsultoinnin\s+käsikirja)\b",
+                surface.strip(),
+            ):
                 continue
             # Multi-token ORG with no legal form and only domain noise tokens
             if not _has_legal_form(surface):
@@ -983,6 +988,8 @@ def _filter_entity_false_positives(
             if is_contract_role_surface(surface, lex) or is_legal_phrase_surface(
                 surface, lex
             ):
+                continue
+            if _looks_like_job_title_or_tool(surface):
                 continue
             # Inflected insurer / role mash ("LähiTapiolaan, Myyjään")
             if re.search(
@@ -1018,18 +1025,166 @@ def _filter_entity_false_positives(
                     lex.legalish_tokens | lex.formish_tokens | lex.doc_title_tails
                 ):
                     continue
+                # Bare seniority / ticket labels
+                if low in {
+                    "junior",
+                    "senior",
+                    "lead",
+                    "principal",
+                    "epic",
+                    "id",
+                }:
+                    continue
+            if re.fullmatch(r"(?i)epic\s*id", surface.strip()):
+                continue
             if (
                 len(toks) <= 3
                 and tokens_all_domain_noise(toks, lex)
                 and _boilerplate_neighbourhood(text, r.start, r.end, lex)
             ):
                 continue
+        if r.entity_type == "STREET" and not re.search(r"\d", surface):
+            # Morphology-only false streets (Jira-seuranta, Jälkiseuranta)
+            continue
         if r.entity_type in {"LOCATION", "CITY"} and _looks_like_false_location(
             surface, lex
         ):
             continue
+        # Soft-hyphen / mid-word wrap LOCATION garbage (työhyvinvoin-nista, ta-solla)
+        if r.entity_type == "LOCATION" and (
+            "\u00ad" in surface
+            or re.search(r"[A-Za-zÅÄÖåäö]{2}-[a-zåäö]{2,}", surface)
+            or re.fullmatch(r"[A-Z]{2,4}", surface.strip())  # SDM, QA-ish tags
+        ):
+            continue
         kept.append(r)
     return kept
+
+
+def _looks_like_job_title_or_tool(surface: str) -> bool:
+    """True for consulting role titles and common SaaS/tool labels (not legal-form ORGs)."""
+    s = surface.strip().strip(".,;:–-")
+    if not s:
+        return False
+    low = s.casefold()
+    # Productivity / ticket tools (not customer PII)
+    if low in {
+        "teams",
+        "team",
+        "salesforce",
+        "salesforcen",
+        "sharepoint",
+        "jira",
+        "excel",
+        "retro",
+        "retainer",
+        "presales",
+        "pre-sales",
+        "sales",
+        "secman",
+        "lead",
+        "leadin",
+        "liidin",
+        "leadiä",
+        "team lead",
+        "team leadin",
+        "team leadit",
+    }:
+        return True
+    if re.fullmatch(r"(?i)jira(\s+)?(epic\s+)?id", s):
+        return True
+    # Consulting / delivery role titles (EN + FI), optional Finnish case endings
+    if re.search(
+        r"(?i)^(?:"
+        r"(?:junior|senior|lead|principal|presales|pre[\s\-]?sales)\s+)?"
+        r"(?:consultant|consultants|consulting(?:\s+lead|\s+manager)?|"
+        r"team\s+leads?|principal(?:\s+consulting)?(?:\s+lead)?|"
+        r"service\s+area\s+owners?|vastuukonsultti|"
+        r"presales\s+consultant|delivery\s+consulting|"
+        r"consulting\s+manager(?:ille|lla|lta|n)?|consultin'?s?\s+manager(?:ille|lla|lta|n)?|"
+        r"dfir\s+lead|offensive\s+lead|ot\s+lead|"
+        r"qa\s+principal\s+lead|managing\s+director|"
+        r"toimitusjohtaja|myyntipäällikkö|vastuukonsultti)"
+        r"(?:lle|lla|lta|n|ä|a|in|it)?"
+        r"(?:\s*[–\-].*)?$",
+        s,
+    ):
+        return True
+    # Inflected / phrasal role fragments without a Given+Family person shape
+    if re.search(
+        r"(?i)("
+        r"team\s+lead|principalille|consulting\s+managerille|"
+        r"service\s+area\s+ownerille|vastuukonsultti|"
+        r"presales|pre[\s\-]?sales|resursointi\s+principal|"
+        r"ilmoitus\s+principalille|rooli\s+henkilö|"
+        r"lead\s+vastaa|lead\s+service|ot\s+lead|"
+        r"pre[\s\-]?sales\s+consultant|vastuukonsultti\s+\w+|"
+        r"laskutuslupa\s+vastuukonsultti|nimi\s+työkalu\s+lisähuomio"
+        r")",
+        s,
+    ):
+        return True
+    # Role phrase (+ optional single given name) without legal form → not an ORG
+    if re.search(
+        r"(?i)\b(lead|manager|owner|konsultti|principal|consultant|vastuukonsultti)\b",
+        s,
+    ) and not _has_legal_form(s):
+        role_toks = {
+            "lead",
+            "manager",
+            "owner",
+            "consultant",
+            "consulting",
+            "principal",
+            "sales",
+            "qa",
+            "ot",
+            "dfir",
+            "service",
+            "area",
+            "team",
+            "vastuu",
+            "konsultti",
+            "vastuukonsultti",
+            "presales",
+            "pre-sales",
+            "junior",
+            "senior",
+            "rooli",
+            "henkilö",
+            "lisätiedot",
+            "ilmoitus",
+            "resursointi",
+            "vastaa",
+            "viestii",
+            "laskutuslupa",
+            "palvelun",
+            "kyberturvakeskuksen",
+            "kuukausipalaveri",
+            "konsulttisäkin",
+            "työkalu",
+            "lisähuomio",
+            "nimi",
+            "connectivity",
+        }
+
+        def _stem(tok: str) -> str:
+            t = tok.casefold()
+            for suf in ("ille", "illa", "ilta", "lle", "lla", "lta", "ssa", "sta", "n"):
+                if t.endswith(suf) and len(t) > len(suf) + 2:
+                    return t[: -len(suf)]
+            return t
+
+        name_like = [
+            t
+            for t in re.findall(r"\b[A-ZÅÄÖ][A-Za-zÅÄÖåäö\-]{2,}\b", s)
+            if _stem(t) not in role_toks
+            and t.casefold() not in role_toks
+            and not any(_stem(t).startswith(r) for r in role_toks if len(r) > 4)
+        ]
+        if len(name_like) <= 1:
+            return True
+    return False
 
 
 def _block_ranges(blocks: list[str], sep: str = "\n\n") -> list[tuple[int, int]]:
