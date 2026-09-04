@@ -15,6 +15,50 @@ from anonymizer.output.native_stats import NativeRedactStats
 logger = logging.getLogger(__name__)
 
 
+def _iter_uri_links(doc) -> list[tuple[object, dict, str]]:
+    """Yield ``(page, link_dict, uri)`` for http(s)/mailto links."""
+    out: list[tuple[object, dict, str]] = []
+    for page in doc:
+        try:
+            links = page.get_links() or []
+        except Exception:  # noqa: BLE001
+            continue
+        for link in links:
+            uri = (link.get("uri") or link.get("url") or "").strip()
+            if not uri:
+                continue
+            if not uri.lower().startswith(("http://", "https://", "mailto:")):
+                continue
+            out.append((page, link, uri))
+    return out
+
+
+def _scrub_uri_links(doc, *, fill: tuple[float, float, float]) -> int:
+    """Black-box link hotspots and delete URI annotations (corporate hosts in href).
+
+    Returns number of link rects marked for redaction.
+    """
+    n = 0
+    for page, link, _uri in _iter_uri_links(doc):
+        rect = link.get("from")
+        if rect is not None:
+            try:
+                page.add_redact_annot(rect, fill=fill)
+                n += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("link rect redact failed: %s", exc)
+        try:
+            page.delete_link(link)
+        except Exception:  # noqa: BLE001
+            try:
+                # Fallback: blank the URI so the href no longer leaks
+                link["uri"] = ""
+                page.update_link(link)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("link delete/update failed: %s", exc)
+    return n
+
+
 def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
     """Remove form widgets and non-redact annotations (comments, free text, …).
 
@@ -249,9 +293,21 @@ def redact_pdf(
             stats.verified = True
             return stats
 
+        # Also search/redact URIs that live only in PDF link annotations
+        link_uris = sorted(
+            {uri for _page, _link, uri in _iter_uri_links(doc)},
+            key=lambda u: (-len(u), u),
+        )
+        extra_clears = [
+            RedactSurface(clear=uri, placeholder=f"[URL_LINK_{i}]")
+            for i, uri in enumerate(link_uris, start=1)
+            if not any(uri == s.clear or uri.rstrip("/") == s.clear.rstrip("/") for s in surfaces)
+        ]
+        all_surfaces = list(surfaces) + extra_clears
+
         found_surfaces: set[str] = set()
         for page in doc:
-            for surface in surfaces:
+            for surface in all_surfaces:
                 page_hits = 0
                 for variant in surface_search_variants(surface.clear):
                     try:
@@ -267,6 +323,13 @@ def redact_pdf(
                         stats.hit_count += 1
                 if page_hits:
                     found_surfaces.add(surface.clear)
+                    # Also count mapping surfaces that match without trailing slash
+                    for s in surfaces:
+                        if s.clear.rstrip("/") == surface.clear.rstrip("/"):
+                            found_surfaces.add(s.clear)
+
+        link_n = _scrub_uri_links(doc, fill=fill)
+        stats.hit_count += link_n
 
         letterhead_n = 0
         if redact_letterhead_images:
@@ -277,12 +340,22 @@ def redact_pdf(
         for page in doc:
             page.apply_redactions()
 
+        link_norm = {u.rstrip("/").casefold() for u in link_uris}
         for surface in surfaces:
-            if surface.clear in found_surfaces:
+            clear = surface.clear
+            if clear in found_surfaces:
                 stats.surfaces_found += 1
-            else:
-                stats.surfaces_missed += 1
-                stats.missed.append(surface.clear)
+                continue
+            # URI was wiped via link annotation even if text-layer search missed
+            cnorm = clear.rstrip("/").casefold()
+            if cnorm in link_norm or any(
+                cnorm in u.rstrip("/").casefold() or u.rstrip("/").casefold() in cnorm
+                for u in link_uris
+            ):
+                stats.surfaces_found += 1
+                continue
+            stats.surfaces_missed += 1
+            stats.missed.append(clear)
 
         ann_n, widget_n = _scrub_annotations_and_forms(doc)
         stats.annotations_scrubbed = ann_n

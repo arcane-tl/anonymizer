@@ -178,6 +178,42 @@ def test_pdf_redact_hyphenated_linebreak(tmp_path: Path) -> None:
     assert "maat" not in text
 
 
+def test_pdf_redact_wrapped_url_and_link_uri(tmp_path: Path) -> None:
+    """Wrapped visible URL + URI annotation with corporate host must both go."""
+    import pymupdf as fitz
+
+    src = tmp_path / "url.pdf"
+    dest = tmp_path / "url.out.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "See https://acme-corp.example.com/sites/intranet_en-path/Continuous-")
+    page.insert_text((72, 86), "improvement.aspx for details.")
+    uri = "https://acme-corp.example.com/sites/intranet_en-path/Continuous-improvement.aspx"
+    page.insert_link(
+        {
+            "kind": fitz.LINK_URI,
+            "from": fitz.Rect(72, 70, 500, 100),
+            "uri": uri,
+        }
+    )
+    doc.save(src)
+    doc.close()
+
+    from anonymizer.anonymize.surfaces import surface_search_variants
+
+    assert any("-\n" in v for v in surface_search_variants(uri))
+
+    surfaces = [RedactSurface(clear=uri, placeholder="[URL_1]")]
+    stats = redact_pdf(src, surfaces, dest)
+    assert stats.surfaces_found == 1
+    after = fitz.open(dest)
+    text = after[0].get_text()
+    links = after[0].get_links() or []
+    after.close()
+    assert "acme-corp.example.com" not in text.casefold()
+    assert not any((ln.get("uri") or "").startswith("http") for ln in links)
+
+
 def test_pdf_redact_split_email_layout(tmp_path: Path) -> None:
     """Repaired ``.fi`` email must still hit PDF ``.f\\ni`` layout."""
     import pymupdf as fitz

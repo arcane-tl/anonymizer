@@ -144,6 +144,20 @@ def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
                                 text=para, kind=BlockKind.PARAGRAPH, page=page_i
                             )
                         )
+            # Hyperlink URIs (often only in annotations; display text may omit host)
+            try:
+                for link in page.get_links() or []:
+                    uri = (link.get("uri") or link.get("url") or "").strip()
+                    if not uri or not uri.lower().startswith(
+                        ("http://", "https://", "mailto:")
+                    ):
+                        continue
+                    total_chars += len(uri)
+                    blocks.append(
+                        TextBlock(text=uri, kind=BlockKind.PARAGRAPH, page=page_i)
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         return blocks, doc.page_count, total_chars
     finally:
         doc.close()

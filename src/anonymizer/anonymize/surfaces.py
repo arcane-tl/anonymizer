@@ -130,7 +130,32 @@ def surface_search_variants(text: str) -> list[str]:
         for v in _email_wrap_variants(collapsed):
             add(v)
 
+    for v in _url_wrap_variants(stripped):
+        add(v)
+
     return variants
+
+
+def _url_wrap_variants(text: str) -> list[str]:
+    """PDF soft-wrap forms of http(s) URLs (hyphen+newline mid-path)."""
+    low = text.casefold()
+    if not (low.startswith("http://") or low.startswith("https://") or low.startswith("www.")):
+        return []
+    out: list[str] = []
+    # Trailing punctuation often glued in PDF extract
+    for trimmed in (text, text.rstrip(".,;:!?)\"'")):
+        if trimmed and trimmed != text:
+            out.append(trimmed)
+    # Soft hyphen wraps in long paths: Continuous-\nimprovement.aspx
+    if "-" in text:
+        out.append(text.replace("-", "-\n"))
+        # Also split before a late path segment
+        for sep in ("/", "-", "_"):
+            idx = text.rfind(sep, 0, max(len(text) - 8, 1))
+            if idx > 20:
+                out.append(text[:idx] + "\n" + text[idx:])
+                out.append(text[: idx + 1] + "\n" + text[idx + 1 :])
+    return out
 
 
 def surface_appears_in_text(haystack: str, clear: str) -> bool:
