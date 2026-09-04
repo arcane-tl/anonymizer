@@ -896,7 +896,7 @@ def _street_name_stems(text: str, results: list[RecognizerResult]) -> set[str]:
         if r.entity_type != "STREET":
             continue
         surface = text[r.start : r.end].strip()
-        # "Digipolku 1 A 2" → Digipolku; "Hämeentie 18" → Hämeentie
+        # "Examplepolku 1 A 2" → Examplepolku; "Testitie 18" → Testitie
         m = re.match(
             r"^([\wÅÄÖåäö\-]+(?:\s+[\wÅÄÖåäö\-]+)?)"
             r"(?=\s+\d)",
@@ -955,12 +955,6 @@ def _filter_entity_false_positives(
             # "Jos Asiakas" / "Lisäksi Asiakas" boilerplate
             if re.search(r"(?i)^(jos|lisäksi)\s+asiakas\b", surface.strip()):
                 continue
-            # Handbook title fragments without legal form
-            if re.search(
-                r"(?i)^(ktk\s+konsultoinnin|konsultoinnin\s+käsikirja)\b",
-                surface.strip(),
-            ):
-                continue
             # Multi-token ORG with no legal form and only domain noise tokens
             if not _has_legal_form(surface):
                 toks = [t for t in surface.split() if t.strip(".,;:'\"")]
@@ -1010,7 +1004,7 @@ def _filter_entity_false_positives(
                 continue
             if surface == surface.casefold():
                 continue
-            # Street stem mis-tagged as PERSON ("Digipolku", "Konsulttikatu")
+            # Street stem mis-tagged as PERSON ("Examplepolku", "Testikatu")
             if surface.casefold() in street_stems or _FI_STREET_STEM_RE.match(
                 surface.strip()
             ):
@@ -1118,8 +1112,7 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
         r"presales|pre[\s\-]?sales|resursointi\s+principal|"
         r"ilmoitus\s+principalille|rooli\s+henkilö|"
         r"lead\s+vastaa|lead\s+service|ot\s+lead|"
-        r"pre[\s\-]?sales\s+consultant|vastuukonsultti\s+\w+|"
-        r"laskutuslupa\s+vastuukonsultti|nimi\s+työkalu\s+lisähuomio"
+        r"pre[\s\-]?sales\s+consultant|vastuukonsultti\s+\w+"
         r")",
         s,
     ):
@@ -1157,15 +1150,10 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
             "resursointi",
             "vastaa",
             "viestii",
-            "laskutuslupa",
             "palvelun",
-            "kyberturvakeskuksen",
-            "kuukausipalaveri",
-            "konsulttisäkin",
             "työkalu",
             "lisähuomio",
             "nimi",
-            "connectivity",
         }
 
         def _stem(tok: str) -> str:
@@ -1329,7 +1317,7 @@ def apply_known_surfaces(
 
     Also handles:
     - NBSP↔space variants (postal+city lines)
-    - Multi-token surfaces split across newlines (``CHRISTIAN\\nWALLDEN``)
+    - Multi-token surfaces split across newlines (``FIRST\\nLAST``)
     - Orphan ALL-CAPS last-name lines matching a mapped multi-token surface
     """
     from anonymizer.anonymize.config import normalize_redact_style
@@ -1384,7 +1372,7 @@ def apply_known_surfaces(
         out = orphan_lines.sub(_orphan_sub, out)
 
     # Remaining ALL-CAPS tokens from a mapped ALL-CAPS PERSON name
-    # (e.g. ``[PERSON_4] CHRISTIAN`` when WALLDEN lived in the next block).
+    # (e.g. ``[PERSON_4] MIDDLE`` when LAST lived in the next block).
     for placeholder, original in items:
         if not placeholder.startswith("[PERSON"):
             continue

@@ -8,7 +8,7 @@ from typing import List, Optional
 from presidio_analyzer import AnalysisExplanation, EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
 
-# Surname, Given (common on FI forms: Lindroos, Tomi)
+# Surname, Given (common on FI forms: Virtanen, Maija)
 _LAST_FIRST = re.compile(
     r"(?<![A-Za-zÅÄÖåäö])"
     r"([A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-']{1,40})"

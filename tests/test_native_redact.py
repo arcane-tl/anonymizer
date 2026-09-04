@@ -74,7 +74,7 @@ def test_job_title_and_tool_fp_filter() -> None:
     assert _looks_like_job_title_or_tool("Consulting Managerille")
     assert _looks_like_job_title_or_tool("Salesforce")
     assert _looks_like_job_title_or_tool("Jira EPIC ID")
-    assert not _looks_like_job_title_or_tool("Elisa Oyj")
+    assert not _looks_like_job_title_or_tool("Nordic Widgets Oy")
     assert not _looks_like_job_title_or_tool("Best Caravan Oy")
 
 

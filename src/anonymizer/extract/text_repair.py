@@ -49,7 +49,7 @@ def repair_text_artifacts(text: str) -> str:
 
 
 def is_real_web_url(surface: str) -> bool:
-    """True for real web links — not bare name.xx FPs (christofer.sj)."""
+    """True for real web links — not bare name.xx FPs (firstname.xx)."""
     s = surface.strip().rstrip(".,;:!?)]}'\"")
     if not s:
         return False

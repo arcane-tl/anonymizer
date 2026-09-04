@@ -66,7 +66,7 @@ def _email_wrap_variants(text: str) -> list[str]:
             if len(host) >= 4:
                 mid = max(2, len(host) // 2)
                 out.append(f"{local}@{host[:mid]}\n{host[mid:]}{dot}{tld}")
-            # TLD wrap: bestcaravan.f\ni  (common PDF soft-wrap)
+            # TLD wrap: example.f\ni  (common PDF soft-wrap)
             if len(tld) >= 2:
                 out.append(f"{local}@{host}{dot}{tld[0]}\n{tld[1:]}")
                 out.append(f"{local}@{host}{dot}{tld[:-1]}\n{tld[-1]}")
