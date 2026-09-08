@@ -23,9 +23,12 @@ cask "anonymizer-app" do
   # Homebrew 6+ disabled `depends_on macos: :catalina` (no replacement).
   app "Anonymizer.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-cr", "#{appdir}/Anonymizer.app"]
+  # Clear quarantine attrs if Gatekeeper marks the notarized zip oddly.
+  # Use install-steps DSL (Homebrew 6 deprecates Ruby `postflight` blocks).
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-cr", "/Applications/Anonymizer.app"],
+        writable_paths: ["/Applications/Anonymizer.app"]
   end
 
   zap trash: [
