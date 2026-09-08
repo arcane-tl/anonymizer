@@ -20,7 +20,7 @@ cask "anonymizer-app" do
   homepage "https://github.com/arcane-tl/anonymizer"
 
   depends_on formula: "anonymizer"
-  depends_on macos: :catalina
+  # Homebrew 6+ disabled `depends_on macos: :catalina` (no replacement).
   app "Anonymizer.app"
 
   postflight do

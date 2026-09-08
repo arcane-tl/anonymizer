@@ -38,6 +38,7 @@ Tap: [arcane-tl/homebrew-anonymizer](https://github.com/arcane-tl/homebrew-anony
 | App “damaged” | `brew reinstall --cask anonymizer-app` or `xattr -cr /Applications/Anonymizer.app` |
 | `--review-window` / app Review: needs tkinter | Formula depends on `python-tk@3.12` (1.3.1+). `brew reinstall anonymizer` |
 | Old “Failed changing dylib ID” (lingua) | Fixed in 1.3.1+ via `preserve_rpath`. `brew update && brew upgrade anonymizer` |
+| `depends_on macos: :catalina` is disabled | Homebrew 6 removed that symbol. Fixed in tap (cask no longer declares it). `brew update && brew upgrade anonymizer anonymizer-app` |
 
 ## CLI only
 
@@ -87,13 +88,12 @@ open -a Anonymizer
 ## Developer: sync monorepo → tap
 
 ```bash
-cp packaging/homebrew/anonymizer.rb \
-  "$(brew --repository arcane-tl/anonymizer)/Formula/anonymizer.rb"
-mkdir -p "$(brew --repository arcane-tl/anonymizer)/Casks"
-cp packaging/homebrew/Casks/anonymizer-app.rb \
-  "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer-app.rb"
-# remove obsolete same-name cask if present:
-rm -f "$(brew --repository arcane-tl/anonymizer)/Casks/anonymizer.rb"
+TAP="$(brew --repository arcane-tl/anonymizer)"
+mkdir -p "$TAP/Formula" "$TAP/Casks"
+cp packaging/homebrew/anonymizer.rb "$TAP/Formula/anonymizer.rb"
+cp packaging/homebrew/Casks/anonymizer-app.rb "$TAP/Casks/anonymizer-app.rb"
+# Homebrew loads Formula/ and Casks/ only — never leave a root anonymizer.rb
+rm -f "$TAP/anonymizer.rb" "$TAP/Casks/anonymizer.rb"
 ```
 
 Release helper:
