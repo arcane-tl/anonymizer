@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anonymizer"
-version = "1.4.0"
+version = "1.4.5"
 description = "Local CLI to anonymize PDF/DOCX/text documents to Markdown (EN + FI)"
 readme = "README.md"
 license = "MIT"
@@ -25,7 +25,7 @@ dependencies = [
   "presidio-anonymizer>=2.2.355",
   "spacy>=3.7.0",
   "python-docx>=1.1.0",
-  "pymupdf>=1.24.0",
+  "pymupdf>=1.28.0",
   "typer>=0.12.0",
   "rich>=13.0.0",
   "questionary>=2.0.0",

@@ -57,8 +57,9 @@ Opens straight into the **options** panel (same product logic as Mac):
 
 - No files yet → **+** under Files (add from several folders). **−** removes.
 - Drag-drop / argv paths pre-fill the list.
-- **Output folder** defaults to *same folder as source file (default)*; **Choose…** sets CLI `--out-dir`.
-- **Templates…**, mode / style / format, Review (document window), Open when finished — same layout idea as Mac.
+- **Mode**, **Save as** (Markdown / Source / PDF text), **Output folder**, **Templates…**
+- **Review** and **Open result** always on the main panel; **More options** holds style + native gates
+- End-to-end scenarios: **[Use cases in the main README](../../README.md#use-cases)**
 
 ### GUI won’t open / no log file
 
@@ -109,12 +110,12 @@ Use a **new** PowerShell window after install.
 
 Options (same as Mac):
 
-- Mode pop-up: Strict / Standard / Extract  
-- Output style pop-up: stable placeholders or delete redacted data  
-- Output format pop-up: Markdown / Source filetype / Both  
-- **Templates…** — allow/deny packs (enable for run, edit user packs)  
-- Review findings before saving (default on) — **Teach into** pack is on the review window  
-- Open result when finished  
+- **Mode** — Strict / Standard / Extract  
+- **Save as** — Markdown / Source filetype (PDF, DOCX, or MD) / PDF text (indented ticks)  
+- **Output folder** — default same folder as source, or Choose…  
+- **Templates…** — allow/deny packs; teach from the **review window**  
+- **Review findings** / **Open result** — always visible (Review default on)  
+- **More options** — Output style, fail-on-native-miss, letterhead wipe  
 
 ## Helper (advanced)
 
@@ -194,7 +195,7 @@ Install target (Setup): `%LOCALAPPDATA%\Anonymizer` (per-user, no admin). Option
 .\dist\windows-stage\bin\anonymize.cmd --version
 .\dist\windows-stage\bin\anonymize.cmd doctor
 .\dist\windows-stage\bin\anonymize.cmd --mode standard tests\fixtures\sample_en.pdf `
-  -o $env:TEMP\smoke.md --format both
+  -o $env:TEMP\smoke.md --format md,source
 
 # GUI (needs runtime\ next to Anonymizer.exe)
 Start-Process .\dist\windows-stage\Anonymizer.exe

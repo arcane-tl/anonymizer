@@ -41,6 +41,8 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   --review              Document review window before saving
   --redact-style STYLE  placeholder | remove (default: placeholder)
   --format FMT          md | source | both (default: md)
+  --fail-on-native-miss Exit 1 when native PDF/DOCX misses or residuals remain
+  --redact-letterhead-images  Black-box PDF header/footer logo images
   --config PATH         YAML config file
   --template IDS        Template packs for this run (comma-separated)
   --learn-to ID         Teach review decisions into user template
@@ -218,6 +220,8 @@ build_merged_config() {
 REVIEW=0
 REDACT_STYLE=""
 OUTPUT_FORMAT=""
+FAIL_ON_NATIVE_MISS=0
+REDACT_LETTERHEAD=0
 CONFIG_PATH=""
 ALLOW_FROM=""
 DENY_FROM=""
@@ -245,6 +249,14 @@ while [[ $# -gt 0 ]]; do
     --format)
       OUTPUT_FORMAT="${2:-}"
       shift 2
+      ;;
+    --fail-on-native-miss)
+      FAIL_ON_NATIVE_MISS=1
+      shift
+      ;;
+    --redact-letterhead-images)
+      REDACT_LETTERHEAD=1
+      shift
       ;;
     --config)
       CONFIG_PATH="${2:-}"
@@ -360,6 +372,12 @@ if [[ -n "$CONFIG_PATH" || -n "$ALLOW_FROM" || -n "$DENY_FROM" || -n "$REDACT_ST
 fi
 if [[ -n "$OUTPUT_FORMAT" ]]; then
   EXTRA_ARGS+=(--format "$OUTPUT_FORMAT")
+fi
+if [[ "$FAIL_ON_NATIVE_MISS" -eq 1 ]]; then
+  EXTRA_ARGS+=(--fail-on-native-miss)
+fi
+if [[ "$REDACT_LETTERHEAD" -eq 1 ]]; then
+  EXTRA_ARGS+=(--redact-letterhead-images)
 fi
 if [[ -n "$TEMPLATE_IDS" ]]; then
   EXTRA_ARGS+=(--template "$TEMPLATE_IDS")

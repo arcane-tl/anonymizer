@@ -840,6 +840,76 @@ def _boilerplate_neighbourhood(
     return False
 
 
+# Finnish street-name endings — single-token PERSON with these suffixes is a stem FP
+_FI_STREET_STEM_RE = re.compile(
+    r"(?i)^[\wÅÄÖåäö\-]+(?:katu|tie|kuja|polku|väylä|raitti|tori|aukio|"
+    r"puistikko|ranta|mäki|rinne|bulevardi|esplanadi|puisto|kaari|penger|"
+    r"silta|laituri|kallio|niemi|saari|kylä|kierto)$"
+)
+
+# ALL-CAPS Western/Finnish given+family name stacks (eIDAS / FTN signature pages)
+_ALL_CAPS_NAME_TOKEN = re.compile(r"^[A-ZÅÄÖ]{2,}(?:-[A-ZÅÄÖ]+)?$")
+_SIGNATURE_CUE_RE = re.compile(
+    r"(?i)\b(ftn|identification|signers?|signature|allekirjoit|name\s+date|"
+    r"credit\s+leasing|pades|eidas)\b"
+)
+
+
+def _looks_like_all_caps_person_name(surface: str) -> bool:
+    toks = [t for t in surface.split() if t.strip(".,;:'\"")]
+    if not (2 <= len(toks) <= 4):
+        return False
+    if _has_legal_form(surface):
+        return False
+    return all(_ALL_CAPS_NAME_TOKEN.fullmatch(t) for t in toks)
+
+
+def _retag_all_caps_org_names_to_person(
+    text: str, results: list[RecognizerResult]
+) -> list[RecognizerResult]:
+    """Prefer PERSON for ALL-CAPS multi-token name stacks mis-tagged as ORG."""
+    out: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type != "ORG":
+            out.append(r)
+            continue
+        surface = text[r.start : r.end]
+        if not _looks_like_all_caps_person_name(surface):
+            out.append(r)
+            continue
+        # BEST-CARAVAN OY / legal forms already excluded by _looks_like_all_caps_person_name
+        out.append(
+            RecognizerResult(
+                entity_type="PERSON",
+                start=r.start,
+                end=r.end,
+                score=max(r.score, 0.8),
+            )
+        )
+    return out
+
+
+def _street_name_stems(text: str, results: list[RecognizerResult]) -> set[str]:
+    """Street name tokens from STREET hits (text before the house number)."""
+    stems: set[str] = set()
+    for r in results:
+        if r.entity_type != "STREET":
+            continue
+        surface = text[r.start : r.end].strip()
+        # "Examplepolku 1 A 2" → Examplepolku; "Testitie 18" → Testitie
+        m = re.match(
+            r"^([\wÅÄÖåäö\-]+(?:\s+[\wÅÄÖåäö\-]+)?)"
+            r"(?=\s+\d)",
+            surface,
+            flags=re.UNICODE,
+        )
+        if m:
+            stems.add(m.group(1).casefold())
+        else:
+            stems.add(surface.casefold())
+    return stems
+
+
 def _filter_entity_false_positives(
     text: str,
     results: list[RecognizerResult],
@@ -851,6 +921,7 @@ def _filter_entity_false_positives(
     stem hits get the same discipline as spaCy-time gates.
     """
     lex = lexicon or builtin_lexicon()
+    street_stems = _street_name_stems(text, results)
     kept: list[RecognizerResult] = []
     for r in results:
         surface = text[r.start : r.end]
@@ -861,11 +932,28 @@ def _filter_entity_false_positives(
                 continue
             if _is_all_caps_section_header(surface):
                 continue
+            # English signing/eIDAS chrome
+            if re.search(
+                r"(?i)^(front\s+page|the\s+electronic\s+signatures|"
+                r"eu-compliant\s+pades|advanced\s+electronic\s+signatures)$",
+                surface.strip(),
+            ):
+                continue
+            # Word TOC / field errors
+            if re.search(r"(?i)error!\s*bookmark\s+not\s+defined", surface):
+                continue
+            # Job titles / consulting roles / SaaS tool labels (not companies)
+            if _looks_like_job_title_or_tool(surface) and not _has_legal_form(surface):
+                continue
             if not _has_legal_form(surface) and re.search(
                 r"(?i)\b(leasingkohde|sopimusehdot|peruutusehdot|yleiset\s+ehdot|"
-                r"yleiset\s+sopimusehdot|vastuunrajoitus|salassapito)\b",
+                r"yleiset\s+sopimusehdot|vastuunrajoitus|salassapito|"
+                r"myyjäliike)\b",
                 surface,
             ):
+                continue
+            # "Jos Asiakas" / "Lisäksi Asiakas" boilerplate
+            if re.search(r"(?i)^(jos|lisäksi)\s+asiakas\b", surface.strip()):
                 continue
             # Multi-token ORG with no legal form and only domain noise tokens
             if not _has_legal_form(surface):
@@ -895,10 +983,31 @@ def _filter_entity_false_positives(
                 surface, lex
             ):
                 continue
+            if _looks_like_job_title_or_tool(surface):
+                continue
+            # Inflected insurer / role mash ("LähiTapiolaan, Myyjään")
+            if re.search(
+                r"(?i)\b(myyjä\w*|asiakas\w*|lähitapiola\w*)\b",
+                surface,
+            ) and (
+                "," in surface
+                or re.search(r"(?i)lähitapiola\w+", surface)
+            ):
+                # Keep real people like "Myyjäinen" rare; require insurer or dual role
+                if re.search(r"(?i)lähitapiola", surface) or (
+                    re.search(r"(?i)myyjä", surface)
+                    and re.search(r"(?i)asiakas|lähi", surface)
+                ):
+                    continue
             toks = [t for t in surface.split() if t.strip(".,;:'\"")]
             if len(toks) >= 2 and tokens_all_domain_noise(toks, lex):
                 continue
             if surface == surface.casefold():
+                continue
+            # Street stem mis-tagged as PERSON ("Examplepolku", "Testikatu")
+            if surface.casefold() in street_stems or _FI_STREET_STEM_RE.match(
+                surface.strip()
+            ):
                 continue
             # Single-token Title Case role / legalish label ("Broker", "Publisher")
             if len(toks) == 1:
@@ -910,18 +1019,160 @@ def _filter_entity_false_positives(
                     lex.legalish_tokens | lex.formish_tokens | lex.doc_title_tails
                 ):
                     continue
+                # Bare seniority / ticket labels
+                if low in {
+                    "junior",
+                    "senior",
+                    "lead",
+                    "principal",
+                    "epic",
+                    "id",
+                }:
+                    continue
+            if re.fullmatch(r"(?i)epic\s*id", surface.strip()):
+                continue
             if (
                 len(toks) <= 3
                 and tokens_all_domain_noise(toks, lex)
                 and _boilerplate_neighbourhood(text, r.start, r.end, lex)
             ):
                 continue
+        if r.entity_type == "STREET" and not re.search(r"\d", surface):
+            # Morphology-only false streets (Jira-seuranta, Jälkiseuranta)
+            continue
         if r.entity_type in {"LOCATION", "CITY"} and _looks_like_false_location(
             surface, lex
         ):
             continue
+        # Soft-hyphen / mid-word wrap LOCATION garbage (työhyvinvoin-nista, ta-solla)
+        if r.entity_type == "LOCATION" and (
+            "\u00ad" in surface
+            or re.search(r"[A-Za-zÅÄÖåäö]{2}-[a-zåäö]{2,}", surface)
+            or re.fullmatch(r"[A-Z]{2,4}", surface.strip())  # SDM, QA-ish tags
+        ):
+            continue
         kept.append(r)
     return kept
+
+
+def _looks_like_job_title_or_tool(surface: str) -> bool:
+    """True for consulting role titles and common SaaS/tool labels (not legal-form ORGs)."""
+    s = surface.strip().strip(".,;:–-")
+    if not s:
+        return False
+    low = s.casefold()
+    # Productivity / ticket tools (not customer PII)
+    if low in {
+        "teams",
+        "team",
+        "salesforce",
+        "salesforcen",
+        "sharepoint",
+        "jira",
+        "excel",
+        "retro",
+        "retainer",
+        "presales",
+        "pre-sales",
+        "sales",
+        "secman",
+        "lead",
+        "leadin",
+        "liidin",
+        "leadiä",
+        "team lead",
+        "team leadin",
+        "team leadit",
+    }:
+        return True
+    if re.fullmatch(r"(?i)jira(\s+)?(epic\s+)?id", s):
+        return True
+    # Consulting / delivery role titles (EN + FI), optional Finnish case endings
+    if re.search(
+        r"(?i)^(?:"
+        r"(?:junior|senior|lead|principal|presales|pre[\s\-]?sales)\s+)?"
+        r"(?:consultant|consultants|consulting(?:\s+lead|\s+manager)?|"
+        r"team\s+leads?|principal(?:\s+consulting)?(?:\s+lead)?|"
+        r"service\s+area\s+owners?|vastuukonsultti|"
+        r"presales\s+consultant|delivery\s+consulting|"
+        r"consulting\s+manager(?:ille|lla|lta|n)?|consultin'?s?\s+manager(?:ille|lla|lta|n)?|"
+        r"dfir\s+lead|offensive\s+lead|ot\s+lead|"
+        r"qa\s+principal\s+lead|managing\s+director|"
+        r"toimitusjohtaja|myyntipäällikkö|vastuukonsultti)"
+        r"(?:lle|lla|lta|n|ä|a|in|it)?"
+        r"(?:\s*[–\-].*)?$",
+        s,
+    ):
+        return True
+    # Inflected / phrasal role fragments without a Given+Family person shape
+    if re.search(
+        r"(?i)("
+        r"team\s+lead|principalille|consulting\s+managerille|"
+        r"service\s+area\s+ownerille|vastuukonsultti|"
+        r"presales|pre[\s\-]?sales|resursointi\s+principal|"
+        r"ilmoitus\s+principalille|rooli\s+henkilö|"
+        r"lead\s+vastaa|lead\s+service|ot\s+lead|"
+        r"pre[\s\-]?sales\s+consultant|vastuukonsultti\s+\w+"
+        r")",
+        s,
+    ):
+        return True
+    # Role phrase (+ optional single given name) without legal form → not an ORG
+    if re.search(
+        r"(?i)\b(lead|manager|owner|konsultti|principal|consultant|vastuukonsultti)\b",
+        s,
+    ) and not _has_legal_form(s):
+        role_toks = {
+            "lead",
+            "manager",
+            "owner",
+            "consultant",
+            "consulting",
+            "principal",
+            "sales",
+            "qa",
+            "ot",
+            "dfir",
+            "service",
+            "area",
+            "team",
+            "vastuu",
+            "konsultti",
+            "vastuukonsultti",
+            "presales",
+            "pre-sales",
+            "junior",
+            "senior",
+            "rooli",
+            "henkilö",
+            "lisätiedot",
+            "ilmoitus",
+            "resursointi",
+            "vastaa",
+            "viestii",
+            "palvelun",
+            "työkalu",
+            "lisähuomio",
+            "nimi",
+        }
+
+        def _stem(tok: str) -> str:
+            t = tok.casefold()
+            for suf in ("ille", "illa", "ilta", "lle", "lla", "lta", "ssa", "sta", "n"):
+                if t.endswith(suf) and len(t) > len(suf) + 2:
+                    return t[: -len(suf)]
+            return t
+
+        name_like = [
+            t
+            for t in re.findall(r"\b[A-ZÅÄÖ][A-Za-zÅÄÖåäö\-]{2,}\b", s)
+            if _stem(t) not in role_toks
+            and t.casefold() not in role_toks
+            and not any(_stem(t).startswith(r) for r in role_toks if len(r) > 4)
+        ]
+        if len(name_like) <= 1:
+            return True
+    return False
 
 
 def _block_ranges(blocks: list[str], sep: str = "\n\n") -> list[tuple[int, int]]:
@@ -1018,6 +1269,129 @@ def apply_stable_placeholders(
         # Collapse runs of spaces/tabs left by deletions (keep newlines).
         out = re.sub(r"[^\S\n]{2,}", " ", out)
     return out, entity_map, hits
+
+
+def _surface_search_forms(original: str) -> list[str]:
+    """Exact + NBSP variants of a mapped cleartext surface."""
+    forms: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        if s and s not in seen:
+            seen.add(s)
+            forms.append(s)
+
+    add(original)
+    if "\u00a0" in original:
+        add(original.replace("\u00a0", " "))
+    if " " in original:
+        add(original.replace(" ", "\u00a0"))
+    return forms
+
+
+def _flexible_token_pattern(original: str) -> re.Pattern[str] | None:
+    """Regex allowing flexible whitespace/newlines between tokens of *original*."""
+    tokens = [t for t in re.split(r"\s+", original.strip()) if t]
+    if len(tokens) < 2:
+        return None
+    if any(len(t) < 2 for t in tokens):
+        return None
+    parts = [re.escape(t) for t in tokens]
+    # Spaces, NBSP, or one/two newlines between name tokens (signature wraps)
+    gap = r"(?:[ \t\u00a0]+|\n\n?)"
+    return re.compile(gap.join(parts))
+
+
+def apply_known_surfaces(
+    text: str,
+    entity_map: EntityMap,
+    *,
+    style: str = "placeholder",
+) -> str:
+    """Replace any remaining mapped cleartext using the document-wide map.
+
+    NER often tags only the first occurrence of a repeated signer name; later
+    signature pages still contain the same surface. After span projection,
+    sweep known ``entity_map.reverse`` originals (longest first) so placeholders
+    stay stable across the whole document.
+
+    Also handles:
+    - NBSP↔space variants (postal+city lines)
+    - Multi-token surfaces split across newlines (``FIRST\\nLAST``)
+    - Orphan ALL-CAPS last-name lines matching a mapped multi-token surface
+    """
+    from anonymizer.anonymize.config import normalize_redact_style
+
+    style = normalize_redact_style(style)
+    if not text or not entity_map.reverse:
+        return text
+    # Longest cleartext first so multi-word names beat substrings
+    items = sorted(
+        entity_map.reverse.items(),
+        key=lambda kv: (-len(kv[1]), kv[0]),
+    )
+    out = text
+    for placeholder, original in items:
+        if not original:
+            continue
+        replacement = "" if style == "remove" else placeholder
+        for form in _surface_search_forms(original):
+            if form in out:
+                out = out.replace(form, replacement)
+        flex = _flexible_token_pattern(original)
+        if flex is not None and flex.search(out):
+            out = flex.sub(replacement, out)
+
+    # Orphan surname line: sole ALL-CAPS token equals last token of a mapped name
+    orphan_lines = re.compile(
+        r"(?m)^([A-ZÅÄÖ]{3,}(?:-[A-ZÅÄÖ]+)?)\s*$",
+    )
+    last_token_map: dict[str, str] = {}
+    for placeholder, original in items:
+        toks = [t for t in re.split(r"\s+", original.strip()) if t]
+        if len(toks) < 2:
+            continue
+        last = toks[-1]
+        if not re.fullmatch(r"[A-ZÅÄÖ]{3,}(?:-[A-ZÅÄÖ]+)?", last):
+            continue
+        # Prefer longer originals if two share a last token
+        if last not in last_token_map or len(original) > len(
+            entity_map.reverse.get(last_token_map[last], "")
+        ):
+            last_token_map[last] = placeholder
+
+    if last_token_map:
+
+        def _orphan_sub(m: re.Match[str]) -> str:
+            tok = m.group(1)
+            ph = last_token_map.get(tok)
+            if not ph:
+                return m.group(0)
+            return "" if style == "remove" else ph
+
+        out = orphan_lines.sub(_orphan_sub, out)
+
+    # Remaining ALL-CAPS tokens from a mapped ALL-CAPS PERSON name
+    # (e.g. ``[PERSON_4] MIDDLE`` when LAST lived in the next block).
+    for placeholder, original in items:
+        if not placeholder.startswith("[PERSON"):
+            continue
+        toks = [t for t in re.split(r"\s+", original.strip()) if t]
+        if len(toks) < 2 or not all(_ALL_CAPS_NAME_TOKEN.fullmatch(t) for t in toks):
+            continue
+        replacement = "" if style == "remove" else placeholder
+        for tok in toks:
+            if len(tok) < 3:
+                continue
+            out = re.sub(
+                rf"(?<![A-ZÅÄÖa-zåäö]){re.escape(tok)}(?![A-ZÅÄÖa-zåäö])",
+                replacement,
+                out,
+            )
+
+    if style == "remove":
+        out = re.sub(r"[^\S\n]{2,}", " ", out)
+    return out
 
 
 class DocumentAnonymizer:
@@ -1127,6 +1501,7 @@ class DocumentAnonymizer:
 
         _p("Merging entities…")
         merged = _merge_results(all_results, reg)
+        merged = _retag_all_caps_org_names_to_person(text, merged)
         merged = _filter_field_labels(text, merged)
         merged = _filter_entity_false_positives(text, merged, lex)
         merged = _drop_noisy_surfaces(text, merged)
@@ -1260,6 +1635,8 @@ class DocumentAnonymizer:
             anon, entity_map, hits = apply_stable_placeholders(
                 block, local, entity_map=entity_map, style=style
             )
+            # Repeat known surfaces (e.g. signer name on later signature pages)
+            anon = apply_known_surfaces(anon, entity_map, style=style)
             out_blocks.append(anon)
             for h in hits:
                 all_hits.append(h)
@@ -1268,6 +1645,12 @@ class DocumentAnonymizer:
                     continue
                 seen_keys.add(key)
                 type_counts[h.entity_type] = type_counts.get(h.entity_type, 0) + 1
+
+        # Final sweep: map may have grown during earlier blocks
+        out_blocks = [
+            apply_known_surfaces(b, entity_map, style=style) if b.strip() else b
+            for b in out_blocks
+        ]
 
         summary = AnonymizeResult(
             anonymized_text="\n\n".join(out_blocks),

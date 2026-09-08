@@ -17,11 +17,12 @@ property styleTitles : {¬
 	"Replace redacted data with stable placeholders", ¬
 	"Delete redacted data"}
 property styleArgs : {"placeholder", "remove"}
-property formatTitles : {¬
-	"Markdown", ¬
-	"Source filetype", ¬
-	"Both (Markdown & source filetype)"}
-property formatArgs : {"md", "source", "both"}
+-- Save as: plain tick boxes (md / source / pdf).
+property optionsOutMd : true
+property optionsOutSource : false
+property optionsOutPdf : false
+-- More options disclosure (style / fail-native / letterhead)
+property optionsMoreOpen : false
 -- Modal result for custom options panel buttons (0=cancel, 1=start, 2=lists)
 property optionsModalCode : 0
 -- "options" | "templates" | "editPack" — which panel owns windowShouldClose_ / stopModal
@@ -74,6 +75,7 @@ end clickOptionsCancel_
 
 on clickOptionsAddFiles_(sender)
 	-- Multi-select open; merge into optionsFilePaths; rebuild panel (code 4)
+	set unsupportedNotice to ""
 	try
 		set theFiles to choose file with prompt "Add documents" with multiple selections allowed
 		set added to normalizeFileList(theFiles)
@@ -84,11 +86,16 @@ on clickOptionsAddFiles_(sender)
 				if not pathListContains(optionsFilePaths, pp) then
 					set end of optionsFilePaths to pp
 				end if
+			else if unsupportedNotice is "" then
+				set unsupportedNotice to unsupportedTypeMessage(pp)
 			end if
 		end repeat
 	on error number errNum
 		if errNum is -128 then return -- user cancelled
 	end try
+	if unsupportedNotice is not "" then
+		showUnsupportedTypeNotice(unsupportedNotice)
+	end if
 	set optionsModalCode to 4
 	current application's NSApp's stopModal()
 end clickOptionsAddFiles_
@@ -142,6 +149,36 @@ on clickOptionsClearOutDir_(sender)
 	set optionsModalCode to 4
 	current application's NSApp's stopModal()
 end clickOptionsClearOutDir_
+
+on clickOptionsToggleMore_(sender)
+	set optionsMoreOpen to not optionsMoreOpen
+	set optionsModalCode to 4
+	current application's NSApp's stopModal()
+end clickOptionsToggleMore_
+
+on joinWithDelimiter(lst, delim)
+	-- Explicit join; always reset delimiters to {""} (ASObjC-safe).
+	if (count of lst) is 0 then return ""
+	set AppleScript's text item delimiters to delim
+	set s to lst as text
+	set AppleScript's text item delimiters to {""}
+	return s
+end joinWithDelimiter
+
+on splitByComma(s)
+	set AppleScript's text item delimiters to ","
+	set parts to text items of s
+	set AppleScript's text item delimiters to {""}
+	return parts
+end splitByComma
+
+on switchStateOn(btnRef)
+	try
+		if (btnRef's state() as integer) is 1 then return true
+		if (btnRef's state() as integer) is (current application's NSControlStateValueOn as integer) then return true
+	end try
+	return false
+end switchStateOn
 
 on clickTemplatesDone_(sender)
 	set templatesModalCode to 1
@@ -465,6 +502,68 @@ on isSupportedDocumentPath(pp)
 	return false
 end isSupportedDocumentPath
 
+on supportedTypesReadmeURL()
+	return "https://github.com/arcane-tl/anonymizer#supported-file-types"
+end supportedTypesReadmeURL
+
+on unsupportedTypeMessage(pp)
+	-- Keep in sync with anonymizer.util.files.unsupported_type_notice (body, no URL —
+	-- Open guide… button opens the README so the link is actually clickable).
+	set low to do shell script "printf '%s' " & quoted form of pp & " | tr '[:upper:]' '[:lower:]'"
+	set bn to basenameFromPath(pp)
+	set hint to ""
+	set label to "(no extension)"
+	if low ends with ".gdoc" then
+		set label to ".gdoc"
+		set hint to "That looks like a Google Docs shortcut (not the document itself)." & return & "In Google Docs: File → Download → Microsoft Word (.docx) or PDF Document."
+	else if low ends with ".pages" then
+		set label to ".pages"
+		set hint to "That looks like a Mac Pages document." & return & "In Pages: File → Export To → Word or PDF."
+	else if low ends with ".doc" then
+		set label to ".doc"
+		set hint to "Save or export as Word (.docx) or PDF first."
+	else if low ends with ".odt" then
+		set label to ".odt"
+		set hint to "Save or export as Word (.docx) or PDF first."
+	else if low ends with ".rtf" then
+		set label to ".rtf"
+		set hint to "Save or export as Word (.docx) or PDF first."
+	else
+		try
+			set label to do shell script "bn=$(basename " & quoted form of low & "); case \"$bn\" in *.*) printf '.%s' \"${bn##*.}\" ;; *) printf '' ;; esac"
+			if label is "" then set label to "(no extension)"
+		end try
+	end if
+	set body to bn & "  ·  " & label
+	if hint is not "" then set body to body & return & return & hint
+	set body to body & return & return & "Convert it to PDF, Word (.docx), or plain text / Markdown, then try again."
+	set body to body & return & return & "Supported extensions: .docx, .markdown, .md, .pdf, .text, .txt"
+	return body
+end unsupportedTypeMessage
+
+on showUnsupportedTypeNotice(bodyText)
+	-- NSAlert with Open guide… (opens README in browser — display dialog URLs aren't clickable).
+	try
+		set theAlert to current application's NSAlert's alloc()'s init()
+		applyAlertChrome(theAlert)
+		theAlert's setMessageText:"Unsupported file type"
+		theAlert's setInformativeText:bodyText
+		theAlert's addButtonWithTitle:"OK"
+		theAlert's addButtonWithTitle:"Open guide…"
+		set response to theAlert's runModal()
+		-- Second button = Open guide…
+		if response is (current application's NSAlertSecondButtonReturn) then
+			open location supportedTypesReadmeURL()
+		end if
+		return
+	end try
+	-- Fallback if AppKit alert fails
+	try
+		set btn to button returned of (display dialog bodyText buttons {"Open guide…", "OK"} default button "OK" with icon note with title "Unsupported file type")
+		if btn is "Open guide…" then open location supportedTypesReadmeURL()
+	end try
+end showUnsupportedTypeNotice
+
 on pathListContains(lst, pp)
 	repeat with itemPath in lst
 		if (itemPath as text) is pp then return true
@@ -491,6 +590,7 @@ on processFiles(theFiles)
 	-- Build mutable session path list (full POSIX paths)
 	set optionsFilePaths to {}
 	set optionsOutDir to ""
+	set unsupportedNotice to ""
 	set nIn to count of theFiles
 	repeat with i from 1 to nIn
 		set fRef to item i of theFiles
@@ -500,8 +600,13 @@ on processFiles(theFiles)
 			if not pathListContains(optionsFilePaths, pp) then
 				set end of optionsFilePaths to pp
 			end if
+		else if unsupportedNotice is "" then
+			set unsupportedNotice to unsupportedTypeMessage(pp)
 		end if
 	end repeat
+	if unsupportedNotice is not "" then
+		showUnsupportedTypeNotice(unsupportedNotice)
+	end if
 
 	-- One window: files (+/−), mode, style, format, out folder, templates, review/open
 	set choices to showOptionsPanel()
@@ -510,6 +615,14 @@ on processFiles(theFiles)
 	set modeArg to modeArg of choices
 	set wantReview to wantReview of choices
 	set wantOpen to wantOpen of choices
+	set wantFailNative to false
+	try
+		set wantFailNative to wantFailNative of choices
+	end try
+	set wantLetterhead to false
+	try
+		set wantLetterhead to wantLetterhead of choices
+	end try
 	set outputFormat to outputFormat of choices
 	set redactStyle to redactStyle of choices
 	set templateCSV to templateCSV of choices
@@ -522,8 +635,15 @@ on processFiles(theFiles)
 	end if
 	if modeArg is "extract" then
 		set wantReview to false
-		-- Extract has no native redaction
-		set outputFormat to "md"
+		-- Extract: drop source from format list if present
+		set fmtItems to splitByComma(outputFormat)
+		set kept to {}
+		repeat with itm in fmtItems
+			set t to itm as text
+			if t is not "source" and t is not "" then set end of kept to t
+		end repeat
+		if (count of kept) is 0 then set end of kept to "md"
+		set outputFormat to joinWithDelimiter(kept, ",")
 	end if
 
 	set helper to resourcePath("run-anonymize.sh")
@@ -538,6 +658,14 @@ on processFiles(theFiles)
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
 	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
 	if outDirPath is not "" then set extraOpts to extraOpts & " --out-dir " & quoted form of outDirPath
+	-- Native-only gates when source is among selected formats
+	set hasSource to false
+	if outputFormat is "source" then set hasSource to true
+	if outputFormat starts with "source," then set hasSource to true
+	if outputFormat ends with ",source" then set hasSource to true
+	if outputFormat contains ",source," then set hasSource to true
+	if wantFailNative and hasSource then set extraOpts to extraOpts & " --fail-on-native-miss"
+	if wantLetterhead and hasSource then set extraOpts to extraOpts & " --redact-letterhead-images"
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
@@ -1602,9 +1730,11 @@ on showOptionsPanel()
 
 	set lastModeRow to 0
 	set lastStyleRow to 0
-	set lastFormatRow to 0 -- 0=md, 1=source, 2=both
+	-- optionsOutMd / Source / Pdf are script properties (persist across rebuilds)
 	set lastReview to true
 	set lastOpen to true
+	set lastFailNative to false
+	set lastLetterhead to false
 
 	-- Design scale (comfortable, not sparse)
 	set margin to 24
@@ -1654,7 +1784,14 @@ on showOptionsPanel()
 		-- Match Choose… / Clear button height so helper text can sit on the same midline
 		set outPathH to btnH
 
-		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + styleLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + popupH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapXl + btnH + margin
+		-- Main: Mode + Save as + folder + templates + Review + Open + More options
+		-- Expanded More options adds: style label/popup + fail + letterhead
+		set moreRowH to checkH
+		set moreBlockH to 0
+		if optionsMoreOpen then
+			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH
+		end if
+		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
@@ -1700,19 +1837,49 @@ on showOptionsPanel()
 		set modePopup to makeOptionsPopup(modeTitles, lastModeRow, margin, y, innerW, popupH)
 		content's addSubview:modePopup
 
-		set y to y - gapLg - styleLabelH
-		content's addSubview:(makeLabel("Output style", margin, y, innerW, styleLabelH))
-
-		set y to y - gapXs - popupH
-		set stylePopup to makeOptionsPopup(styleTitles, lastStyleRow, margin, y, innerW, popupH)
-		content's addSubview:stylePopup
-
 		set y to y - gapLg - formatLabelH
-		content's addSubview:(makeLabel("Output format", margin, y, innerW, formatLabelH))
+		content's addSubview:(makeLabel("Save as", margin, y, innerW, formatLabelH))
 
-		set y to y - gapXs - popupH
-		set formatPopup to makeOptionsPopup(formatTitles, lastFormatRow, margin, y, innerW, popupH)
-		content's addSubview:formatPopup
+		-- Indent tick boxes under the section title
+		set saveAsIndent to 16
+		set saveAsX to margin + saveAsIndent
+		set saveAsW to innerW - saveAsIndent
+
+		set y to y - gapXs - checkH
+		set outMdBox to current application's NSButton's alloc()'s initWithFrame:{{saveAsX, y}, {saveAsW, checkH}}
+		outMdBox's setButtonType:(current application's NSButtonTypeSwitch)
+		outMdBox's setTitle:"Markdown"
+		if optionsOutMd then
+			outMdBox's setState:(current application's NSControlStateValueOn)
+		else
+			outMdBox's setState:(current application's NSControlStateValueOff)
+		end if
+		outMdBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:outMdBox
+
+		set y to y - gapSm - checkH
+		set outSourceBox to current application's NSButton's alloc()'s initWithFrame:{{saveAsX, y}, {saveAsW, checkH}}
+		outSourceBox's setButtonType:(current application's NSButtonTypeSwitch)
+		outSourceBox's setTitle:"Source filetype (PDF, DOCX, or MD)"
+		if optionsOutSource then
+			outSourceBox's setState:(current application's NSControlStateValueOn)
+		else
+			outSourceBox's setState:(current application's NSControlStateValueOff)
+		end if
+		outSourceBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:outSourceBox
+
+		set y to y - gapSm - checkH
+		set outPdfBox to current application's NSButton's alloc()'s initWithFrame:{{saveAsX, y}, {saveAsW, checkH}}
+		outPdfBox's setButtonType:(current application's NSButtonTypeSwitch)
+		outPdfBox's setTitle:"PDF text"
+		if optionsOutPdf then
+			outPdfBox's setState:(current application's NSControlStateValueOn)
+		else
+			outPdfBox's setState:(current application's NSControlStateValueOff)
+		end if
+		outPdfBox's setFont:(current application's NSFont's systemFontOfSize:13)
+		content's addSubview:outPdfBox
 
 		set y to y - gapLg - outLabelH
 		content's addSubview:(makeLabel("Output folder", margin, y, innerW, outLabelH))
@@ -1764,6 +1931,54 @@ on showOptionsPanel()
 		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:openBox
 
+		-- More options disclosure (style + native shareability)
+		set y to y - gapSm - moreRowH
+		set moreTitle to "▶  More options"
+		if optionsMoreOpen then set moreTitle to "▼  More options"
+		set moreBtn to makeDialogButton(moreTitle, margin, y - 2, 160, moreRowH + 4, "clickOptionsToggleMore:")
+		try
+			moreBtn's setBordered:false
+		end try
+		content's addSubview:moreBtn
+
+		set stylePopup to missing value
+		set failNativeBox to missing value
+		set letterheadBox to missing value
+		if optionsMoreOpen then
+			set moreIndent to 16
+			set moreX to margin + moreIndent
+			set moreW to innerW - moreIndent
+			set y to y - gapSm - styleLabelH
+			content's addSubview:(makeLabel("Output style", moreX, y, moreW, styleLabelH))
+			set y to y - gapXs - popupH
+			set stylePopup to makeOptionsPopup(styleTitles, lastStyleRow, moreX, y, moreW, popupH)
+			content's addSubview:stylePopup
+
+			set y to y - gapSm - checkH
+			set failNativeBox to current application's NSButton's alloc()'s initWithFrame:{{moreX, y}, {moreW, checkH}}
+			failNativeBox's setButtonType:(current application's NSButtonTypeSwitch)
+			failNativeBox's setTitle:"Fail if native PDF/DOCX misses cleartext"
+			if lastFailNative then
+				failNativeBox's setState:(current application's NSControlStateValueOn)
+			else
+				failNativeBox's setState:(current application's NSControlStateValueOff)
+			end if
+			failNativeBox's setFont:(current application's NSFont's systemFontOfSize:13)
+			content's addSubview:failNativeBox
+
+			set y to y - gapSm - checkH
+			set letterheadBox to current application's NSButton's alloc()'s initWithFrame:{{moreX, y}, {moreW, checkH}}
+			letterheadBox's setButtonType:(current application's NSButtonTypeSwitch)
+			letterheadBox's setTitle:"Black-box PDF letterhead/logo images"
+			if lastLetterhead then
+				letterheadBox's setState:(current application's NSControlStateValueOn)
+			else
+				letterheadBox's setState:(current application's NSControlStateValueOff)
+			end if
+			letterheadBox's setFont:(current application's NSFont's systemFontOfSize:13)
+			content's addSubview:letterheadBox
+		end if
+
 		-- Action bar: Templates… left · Cancel + Start right
 		set y to margin
 		set listsBtn to makeDialogButton("Templates…", margin, y, btnW, btnH, "clickOptionsLists:")
@@ -1792,18 +2007,25 @@ on showOptionsPanel()
 		set lastModeRow to modePopup's indexOfSelectedItem() as integer
 		if lastModeRow < 0 then set lastModeRow to 0
 		if lastModeRow > 2 then set lastModeRow to 0
-		set lastStyleRow to stylePopup's indexOfSelectedItem() as integer
-		if lastStyleRow < 0 then set lastStyleRow to 0
-		if lastStyleRow > 1 then set lastStyleRow to 0
-		set lastFormatRow to formatPopup's indexOfSelectedItem() as integer
-		if lastFormatRow < 0 then set lastFormatRow to 0
-		if lastFormatRow > 2 then set lastFormatRow to 0
-		set lastReview to false
-		if (reviewBox's state() as integer) is 1 then set lastReview to true
-		if (reviewBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastReview to true
-		set lastOpen to false
-		if (openBox's state() as integer) is 1 then set lastOpen to true
-		if (openBox's state() as integer) is (current application's NSControlStateValueOn as integer) then set lastOpen to true
+		set lastReview to switchStateOn(reviewBox)
+		set lastOpen to switchStateOn(openBox)
+		set optionsOutMd to switchStateOn(outMdBox)
+		set optionsOutSource to switchStateOn(outSourceBox)
+		set optionsOutPdf to switchStateOn(outPdfBox)
+		-- Style / fail / letterhead: read if this panel had them (before toggle flips optionsMoreOpen)
+		try
+			if stylePopup is not missing value then
+				set lastStyleRow to stylePopup's indexOfSelectedItem() as integer
+				if lastStyleRow < 0 then set lastStyleRow to 0
+				if lastStyleRow > 1 then set lastStyleRow to 0
+			end if
+		end try
+		try
+			if failNativeBox is not missing value then set lastFailNative to switchStateOn(failNativeBox)
+		end try
+		try
+			if letterheadBox is not missing value then set lastLetterhead to switchStateOn(letterheadBox)
+		end try
 
 		-- Drop floating level so Tk Templates can stack above this panel.
 		-- Keep panel ordered front (visible underneath) for Templates…;
@@ -1821,14 +2043,24 @@ on showOptionsPanel()
 			end try
 			set modeArg to item (lastModeRow + 1) of modeArgs
 			set redactStyle to item (lastStyleRow + 1) of styleArgs
-			set outputFormat to item (lastFormatRow + 1) of formatArgs
+			-- Build --format from Save as ticks (already persisted above)
+			set fmtParts to {}
+			if optionsOutMd then set end of fmtParts to "md"
+			if modeArg is not "extract" and optionsOutSource then set end of fmtParts to "source"
+			if optionsOutPdf then set end of fmtParts to "pdf"
+			if (count of fmtParts) is 0 then
+				set end of fmtParts to "md"
+				set optionsOutMd to true
+			end if
+			set outputFormat to joinWithDelimiter(fmtParts, ",")
 			set wantReview to lastReview
 			set wantOpen to lastOpen
+			set wantFailNative to lastFailNative
+			set wantLetterhead to lastLetterhead
 			if modeArg is "extract" then
 				set wantReview to false
-				set outputFormat to "md"
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
 		else if response is 4 then
 			-- File list / out-dir changed — rebuild panel
 			try

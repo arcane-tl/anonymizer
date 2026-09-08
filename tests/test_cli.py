@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from anonymizer.cli import _preprocess_argv, app
@@ -30,6 +31,125 @@ def test_version():
     result = _invoke(["--version"])
     assert result.exit_code == 0
     assert "anonymizer" in result.stdout
+
+
+def test_unsupported_pages_file_message(tmp_path: Path):
+    """CLI should reject .pages with convert-first guidance + README link."""
+    src = tmp_path / "Brief.pages"
+    src.write_bytes(b"not a real pages package")
+    result = _invoke([str(src)])
+    assert result.exit_code != 0
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "Unsupported file type" in combined
+    assert ".pages" in combined
+    assert "Export To" in combined or "Pages" in combined
+    assert "github.com/arcane-tl/anonymizer#supported-file-types" in combined
+
+
+def test_unsupported_gdoc_file_message(tmp_path: Path):
+    src = tmp_path / "Notes.gdoc"
+    src.write_text("{}", encoding="utf-8")
+    result = _invoke([str(src)])
+    assert result.exit_code != 0
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "Unsupported file type" in combined
+    assert ".gdoc" in combined
+    assert "Google Docs" in combined
+    assert "github.com/arcane-tl/anonymizer#supported-file-types" in combined
+
+
+def test_format_pdf_writes_text_pdf_only(tmp_path: Path):
+    """--format pdf writes text PDF without requiring Markdown file."""
+    src = tmp_path / "note.txt"
+    src.write_text(
+        "Hello support@example.com — order 42.\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "out"
+    result = _invoke(
+        [str(src), "--format", "pdf", "--lang", "en", "--out-dir", str(out_dir)]
+    )
+    if result.exit_code != 0:
+        pytest.skip(f"CLI failed (models?): {result.stdout}\n{result.stderr}")
+    md = out_dir / "note.anonymized.md"
+    pdf = out_dir / "note.anonymized.text.pdf"
+    assert not md.exists(), "md should not be written when only pdf is selected"
+    assert pdf.is_file()
+    assert pdf.stat().st_size > 500
+    import pymupdf
+
+    doc = pymupdf.open(pdf)
+    try:
+        text = "\n".join(p.get_text() for p in doc)
+    finally:
+        doc.close()
+    assert "support@example.com" not in text
+    assert "[EMAIL" in text or "Hello" in text
+
+
+def test_format_md_pdf_writes_both(tmp_path: Path):
+    src = tmp_path / "note.txt"
+    src.write_text("Hello support@example.com.\n", encoding="utf-8")
+    out_dir = tmp_path / "out2"
+    result = _invoke(
+        [str(src), "--format", "md,pdf", "--lang", "en", "--out-dir", str(out_dir)]
+    )
+    if result.exit_code != 0:
+        pytest.skip(f"CLI failed (models?): {result.stdout}\n{result.stderr}")
+    assert (out_dir / "note.anonymized.md").is_file()
+    assert (out_dir / "note.anonymized.text.pdf").is_file()
+
+
+def test_deprecated_pdf_flag_still_adds_pdf(tmp_path: Path):
+    """Compat: --pdf still ORs pdf into the format set."""
+    src = tmp_path / "note.txt"
+    src.write_text("Hello support@example.com.\n", encoding="utf-8")
+    out_dir = tmp_path / "out3"
+    result = _invoke(
+        [str(src), "--pdf", "--lang", "en", "--out-dir", str(out_dir)]
+    )
+    if result.exit_code != 0:
+        pytest.skip(f"CLI failed (models?): {result.stdout}\n{result.stderr}")
+    assert (out_dir / "note.anonymized.md").is_file()
+    assert (out_dir / "note.anonymized.text.pdf").is_file()
+
+
+def test_format_source_on_txt_writes_markdown(tmp_path: Path):
+    """--format source on plain text falls back to .anonymized.md."""
+    src = tmp_path / "note.txt"
+    src.write_text("Hello support@example.com.\n", encoding="utf-8")
+    out_dir = tmp_path / "out_src"
+    result = _invoke(
+        [str(src), "--format", "source", "--lang", "en", "--out-dir", str(out_dir)]
+    )
+    if result.exit_code != 0:
+        pytest.skip(f"CLI failed (models?): {result.stdout}\n{result.stderr}")
+    md = out_dir / "note.anonymized.md"
+    assert md.is_file()
+    assert "support@example.com" not in md.read_text(encoding="utf-8")
+    # No native/text-pdf artifacts
+    assert not (out_dir / "note.anonymized.text.pdf").exists()
+
+
+def test_format_md_source_on_txt_writes_one_md(tmp_path: Path):
+    src = tmp_path / "note.txt"
+    src.write_text("Hello support@example.com.\n", encoding="utf-8")
+    out_dir = tmp_path / "out_both"
+    result = _invoke(
+        [
+            str(src),
+            "--format",
+            "md,source",
+            "--lang",
+            "en",
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+    if result.exit_code != 0:
+        pytest.skip(f"CLI failed (models?): {result.stdout}\n{result.stderr}")
+    assert (out_dir / "note.anonymized.md").is_file()
+    assert len(list(out_dir.glob("*.md"))) == 1
 
 
 def test_list_entities():

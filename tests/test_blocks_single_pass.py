@@ -47,3 +47,81 @@ def test_shared_placeholders_across_blocks():
     if "[PERSON_1]" in out_blocks[0]:
         assert "[PERSON_1]" in out_blocks[1]
     assert result.language.nlp_passes == ["en"]
+
+
+def test_known_surfaces_applied_on_later_blocks():
+    """Signer name found once must still redact on later signature pages."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "JOHN MICHAEL SMITH")
+    later = "Identification\n\nJOHN MICHAEL SMITH\n2025-05-30"
+    out = apply_known_surfaces(later, em, style="placeholder")
+    assert "JOHN MICHAEL SMITH" not in out
+    assert "[PERSON_1]" in out
+
+    # End-to-end: first block teaches the map; trailing block has no NER hit
+    blocks = [
+        "Signer: JOHN MICHAEL SMITH signed today.",
+        "Boilerplate with no name.",
+        "JOHN MICHAEL SMITH",
+    ]
+    out_blocks, _result = DocumentAnonymizer(
+        AnonymizerConfig(lang="en", mode="strict")
+    ).anonymize_blocks(blocks, lang_flag="en")
+    joined = "\n".join(out_blocks)
+    assert "JOHN MICHAEL SMITH" not in joined
+
+
+def test_multiline_signer_name_known_surfaces():
+    """``MIKAEL\\nKORHONEN`` must redact when map has ``MIKAEL KORHONEN``."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "ANTTI PEKKA")
+    em.get_or_assign("PERSON", "MIKAEL KORHONEN")
+    text = "ANTTI PEKKA MIKAEL\nKORHONEN\nJOHN MICHAEL SMITH"
+    em.get_or_assign("PERSON", "JOHN MICHAEL SMITH")
+    out = apply_known_surfaces(text, em, style="placeholder")
+    assert "ANTTI" not in out
+    assert "MIKAEL" not in out
+    assert "KORHONEN" not in out
+    assert "JOHN MICHAEL SMITH" not in out
+
+
+def test_split_block_middle_name_token():
+    """Name tokens split across blocks must not leave a middle given name."""
+    from anonymizer.anonymize.engine import apply_known_surfaces
+    from anonymizer.anonymize.mapping import EntityMap
+
+    em = EntityMap()
+    em.get_or_assign("PERSON", "ANTTI PEKKA")
+    em.get_or_assign("PERSON", "MIKAEL KORHONEN")
+    # Simulate after first block already replaced the leading tokens
+    block_a = "[PERSON_1] MIKAEL"
+    block_b = "KORHONEN"
+    out_a = apply_known_surfaces(block_a, em, style="placeholder")
+    out_b = apply_known_surfaces(block_b, em, style="placeholder")
+    assert "MIKAEL" not in out_a
+    assert "KORHONEN" not in out_b
+
+
+def test_postinumero_city_line_fully_redacted():
+    blocks = [
+        "Nimi:\nAlice Example",
+        "Osoite:\nTestikatu 1",
+        "Postinumero ja Toimipaikka:\n02330 ESPOO",
+        "Postinumero ja Toimipaikka:\n05840 HYVINKÄÄ",
+    ]
+    out_blocks, result = DocumentAnonymizer(
+        AnonymizerConfig(lang="fi", mode="strict")
+    ).anonymize_blocks(blocks, lang_flag="fi")
+    joined = "\n".join(out_blocks)
+    assert "ESPOO" not in joined
+    assert "HYVINKÄÄ" not in joined
+    assert "02330" not in joined
+    assert "05840" not in joined
+    assert any(k.startswith("[CITY") for k in result.mapping)
+    assert any(k.startswith("[POSTAL") for k in result.mapping)

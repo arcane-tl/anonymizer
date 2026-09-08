@@ -43,12 +43,12 @@ def test_repair_broken_email_tld():
 def test_is_real_web_url():
     assert is_real_web_url("https://example.com/x")
     assert is_real_web_url("www.example.fi")
-    assert not is_real_web_url("christofer.sj")
-    assert not is_real_web_url("bestcaravan.fi")
+    assert not is_real_web_url("firstname.xx")
+    assert not is_real_web_url("vendorname.fi")
 
 
 def test_split_email_fully_redacted_not_partial_url():
-    """PDF-style split must become one EMAIL, never christofer.sj as URL."""
+    """PDF-style split must become one EMAIL, never firstname.xx as URL."""
     text = "Sähköpostiosoite:\nada.lovelace@example.f\ni"
     cfg = AnonymizerConfig(mode="strict", lang="en")
     cfg.apply_mode()

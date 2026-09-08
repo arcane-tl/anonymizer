@@ -24,6 +24,24 @@ def test_find_formats():
     hits = find_fi_vats(text)
     assert len(hits) >= 1
     assert all("07375462" in h[2].replace(" ", "").replace("-", "").upper() for h in hits)
+    assert all(h[3] is True for h in hits)  # checksum valid
+
+
+def test_labeled_invalid_vat_accepted():
+    """Demo ALV next to a label should redact even with bad checksum."""
+    text = "ALV-tunnus: FI12345678"
+    hits = find_fi_vats(text)
+    assert len(hits) == 1
+    assert hits[0][3] is False
+    results = FiVatRecognizer().analyze(text, entities=["FI_VAT"])
+    assert len(results) == 1
+    assert results[0].score == 0.7
+
+
+def test_unlabeled_invalid_vat_rejected():
+    text = "Order ref FI12345678 shipped"
+    assert find_fi_vats(text) == []
+    assert FiVatRecognizer().analyze(text, entities=["FI_VAT"]) == []
 
 
 def test_user_example_format():

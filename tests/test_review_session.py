@@ -121,13 +121,13 @@ def test_session_apply_remove_style():
 def test_format_finding_row():
     f = ReviewFinding(
         placeholder="[PERSON_1]",
-        original="Tomi Lindroos",
+        original="Maija Virtanen",
         entity_type="PERSON",
         enabled=True,
         source="auto",
         occurrence_count=1,
     )
-    assert format_finding_row(f) == "[x] Tomi Lindroos  (Person · [PERSON_1])"
+    assert format_finding_row(f) == "[x] Maija Virtanen  (Person · [PERSON_1])"
 
     f2 = ReviewFinding(
         placeholder="[ORG_1]",
@@ -153,8 +153,8 @@ def test_ellipsize_text():
 
 
 def test_resolve_surface_in_blocks():
-    blocks = ["Hello Tomi Lindroos here."]
-    assert resolve_surface_in_blocks(blocks, "  Tomi Lindroos  ") == "Tomi Lindroos"
+    blocks = ["Hello Maija Virtanen here."]
+    assert resolve_surface_in_blocks(blocks, "  Maija Virtanen  ") == "Maija Virtanen"
     assert resolve_surface_in_blocks(blocks, "not present") is None
 
 

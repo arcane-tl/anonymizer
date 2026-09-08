@@ -645,6 +645,51 @@ def resolve_review_surface(
     return "cli"
 
 
+@dataclass(frozen=True)
+class ReviewRisk:
+    """Shareability / residual-risk hints shown in the review window banner."""
+
+    used_ocr: bool = False
+    low_coverage_pages: tuple[int, ...] = ()
+    image_count: int = 0
+    image_pages: tuple[int, ...] = ()
+    writing_native: bool = False
+    residual_image_risk: bool = False
+
+    def banner_lines(self) -> list[str]:
+        lines: list[str] = []
+        if self.used_ocr:
+            low = ""
+            if self.low_coverage_pages:
+                preview = ", ".join(str(p) for p in self.low_coverage_pages[:6])
+                more = (
+                    f" (+{len(self.low_coverage_pages) - 6})"
+                    if len(self.low_coverage_pages) > 6
+                    else ""
+                )
+                low = f" Low-OCR pages: {preview}{more}."
+            lines.append(
+                "OCR-derived text — detection can miss glyphs; page images may "
+                f"still show PII after native redaction.{low}"
+            )
+        if self.writing_native and (self.residual_image_risk or self.image_count):
+            pages = ""
+            if self.image_pages:
+                preview = ", ".join(str(p) for p in self.image_pages[:8])
+                more = (
+                    f" (+{len(self.image_pages) - 8})"
+                    if len(self.image_pages) > 8
+                    else ""
+                )
+                pages = f" Pages with images: {preview}{more}."
+            lines.append(
+                f"{self.image_count} embedded image(s) — logos/letterheads are "
+                f"not removed by text search unless letterhead redaction is on."
+                f"{pages}"
+            )
+        return lines
+
+
 def interactive_review(
     mapping: dict[str, str],
     *,
@@ -655,6 +700,7 @@ def interactive_review(
     surface: str | None = None,
     pre_keep_clear: Iterable[str] | None = None,
     learn_to: str | None = None,
+    risk: ReviewRisk | None = None,
 ) -> ReviewSession:
     """Interactive review: terminal checklist or document window.
 
@@ -718,7 +764,10 @@ def interactive_review(
                 "(toggle false positives, select text to add redactions)…[/dim]"
             )
             finished = run_review_window(
-                session, file_label=file_label, learn_to=learn_to
+                session,
+                file_label=file_label,
+                learn_to=learn_to,
+                risk=risk,
             )
         except SystemExit:
             raise

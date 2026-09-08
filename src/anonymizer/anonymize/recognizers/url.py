@@ -10,7 +10,7 @@ from presidio_analyzer.nlp_engine import NlpArtifacts
 
 # http(s)://..., bare www...., and multi-label hosts (a.b.fi)
 # Avoid trailing punctuation commonly stuck to links.
-# Do NOT match two-label name.xx (christofer.sj) — email FP source.
+# Do NOT match two-label name.xx (firstname.xx) — email FP source.
 _URL_RE = re.compile(
     r"(?i)"
     r"(?<![\w@])"

@@ -144,6 +144,20 @@ def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
                                 text=para, kind=BlockKind.PARAGRAPH, page=page_i
                             )
                         )
+            # Hyperlink URIs (often only in annotations; display text may omit host)
+            try:
+                for link in page.get_links() or []:
+                    uri = (link.get("uri") or link.get("url") or "").strip()
+                    if not uri or not uri.lower().startswith(
+                        ("http://", "https://", "mailto:")
+                    ):
+                        continue
+                    total_chars += len(uri)
+                    blocks.append(
+                        TextBlock(text=uri, kind=BlockKind.PARAGRAPH, page=page_i)
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         return blocks, doc.page_count, total_chars
     finally:
         doc.close()
@@ -153,6 +167,44 @@ def is_thin_text(page_count: int, total_chars: int) -> bool:
     if page_count <= 0:
         return True
     return (total_chars / page_count) < THIN_TEXT_CHARS_PER_PAGE
+
+
+def _ocr_coverage_report(
+    blocks: list,
+    page_count: int | None,
+    *,
+    reason: str,
+    langs: str,
+) -> dict:
+    """Per-page OCR coverage heuristic (char counts; not Tesseract confidences).
+
+    Pages at/under the thin-text threshold are flagged as low coverage. When OCR
+    was used, residual image risk is always true: glyphs may still be visible in
+    the page raster even when the text layer was redacted.
+    """
+    page_chars: dict[int, int] = {}
+    for block in blocks:
+        page = getattr(block, "page", None)
+        if page is None:
+            continue
+        page_chars[int(page)] = page_chars.get(int(page), 0) + len(block.text or "")
+    n_pages = int(page_count or 0)
+    low_pages = [
+        p
+        for p in range(1, n_pages + 1)
+        if page_chars.get(p, 0) < THIN_TEXT_CHARS_PER_PAGE
+    ]
+    total = sum(page_chars.values())
+    avg = (total / n_pages) if n_pages else 0.0
+    return {
+        "used": True,
+        "reason": reason,
+        "langs": langs,
+        "page_chars": page_chars,
+        "low_coverage_pages": low_pages,
+        "avg_chars_per_page": round(avg, 1),
+        "residual_image_risk": True,
+    }
 
 
 def extract_pdf(
@@ -173,6 +225,7 @@ def extract_pdf(
     _p("Reading PDF text layer…")
     blocks, page_count, total_chars = _extract_with_pymupdf(path)
     used_ocr = False
+    ocr_extra: dict = {}
 
     need_ocr = force_ocr or (not no_ocr and is_thin_text(page_count, total_chars))
     if need_ocr and not no_ocr:
@@ -186,6 +239,16 @@ def extract_pdf(
             _p("Re-extracting text from OCR result…")
             blocks, page_count, total_chars = _extract_with_pymupdf(ocr_path)
             used_ocr = True
+            ocr_extra = _ocr_coverage_report(
+                blocks, page_count, reason=reason, langs=tess_lang
+            )
+            low = ocr_extra.get("low_coverage_pages") or []
+            if low:
+                _p(
+                    f"OCR coverage: {len(low)} low-coverage page(s) "
+                    f"(chars/{THIN_TEXT_CHARS_PER_PAGE} threshold) — "
+                    "residual image risk"
+                )
         except RuntimeError as exc:
             if force_ocr:
                 raise
@@ -204,9 +267,13 @@ def extract_pdf(
         f"PDF ready: {len(blocks)} blocks, {page_count} page(s)"
         + (" · OCR" if used_ocr else "")
     )
+    extra: dict = {}
+    if ocr_extra:
+        extra["ocr"] = ocr_extra
     return ExtractedDoc(
         source_path=str(path),
         blocks=blocks,
         used_ocr=used_ocr,
         page_count=page_count,
+        extra=extra,
     )

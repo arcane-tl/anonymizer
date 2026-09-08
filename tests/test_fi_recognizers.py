@@ -50,3 +50,20 @@ def test_business_id_recognizer():
     results = rec.analyze(text, entities=["FI_BUSINESS_ID"])
     assert len(results) == 1
     assert text[results[0].start : results[0].end] == "0737546-2"
+
+
+def test_labeled_invalid_y_tunnus_accepted():
+    rec = FiBusinessIdRecognizer()
+    rec.load()
+    text = "Y-tunnus: 1234567-8"
+    results = rec.analyze(text, entities=["FI_BUSINESS_ID"])
+    assert len(results) == 1
+    assert results[0].score == 0.7
+    assert text[results[0].start : results[0].end] == "1234567-8"
+
+
+def test_unlabeled_invalid_y_tunnus_rejected():
+    rec = FiBusinessIdRecognizer()
+    rec.load()
+    text = "Tilausnumero 1234567-8 toimitetaan."
+    assert rec.analyze(text, entities=["FI_BUSINESS_ID"]) == []

@@ -2,13 +2,95 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from anonymizer.extract import SUPPORTED_EXTENSIONS
 
+# Stable README anchor (GitHub slug for "## Supported file types")
+SUPPORTED_TYPES_README_URL = (
+    "https://github.com/arcane-tl/anonymizer#supported-file-types"
+)
+
+# Human-friendly list for dialogs (extensions stay in format_supported_extensions).
+SUPPORTED_TYPES_HUMAN = "PDF, Word (.docx), or plain text / Markdown"
+
 
 def format_supported_extensions() -> str:
     return ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
+
+@dataclass(frozen=True)
+class UnsupportedTypeNotice:
+    """Structured notice for unsupported inputs (CLI + GUI dialogs)."""
+
+    title: str
+    file_line: str
+    hint: str
+    action: str
+    supported_line: str
+    url: str = SUPPORTED_TYPES_README_URL
+
+    def body(self, *, include_url: bool = True) -> str:
+        """Multi-line body suitable for dialogs and terminal output."""
+        parts = [self.file_line]
+        if self.hint:
+            parts.extend(["", self.hint])
+        parts.extend(["", self.action, "", self.supported_line])
+        if include_url:
+            # URL alone on the last line → terminals often auto-link it.
+            parts.extend(["", self.url])
+        return "\n".join(parts)
+
+    def as_text(self) -> str:
+        return f"{self.title}\n\n{self.body(include_url=True)}"
+
+
+def unsupported_type_notice(
+    suffix: str | None, *, path_hint: str | None = None
+) -> UnsupportedTypeNotice:
+    """Build a readable convert-first notice for an unsupported extension."""
+    ext = (suffix or "").strip().lower()
+    if ext and not ext.startswith("."):
+        ext = f".{ext}"
+    label = ext if ext else "(no extension)"
+
+    if path_hint:
+        file_line = f"{path_hint}  ·  {label}"
+    else:
+        file_line = label
+
+    if ext == ".gdoc":
+        hint = (
+            "That looks like a Google Docs shortcut (not the document itself).\n"
+            "In Google Docs: File → Download → Microsoft Word (.docx) or PDF Document."
+        )
+    elif ext == ".pages":
+        hint = (
+            "That looks like a Mac Pages document.\n"
+            "In Pages: File → Export To → Word or PDF."
+        )
+    elif ext in {".doc", ".odt", ".rtf"}:
+        hint = "Save or export as Word (.docx) or PDF first."
+    else:
+        hint = ""
+
+    return UnsupportedTypeNotice(
+        title="Unsupported file type",
+        file_line=file_line,
+        hint=hint,
+        action=f"Convert it to {SUPPORTED_TYPES_HUMAN}, then try again.",
+        supported_line=f"Supported extensions: {format_supported_extensions()}",
+        url=SUPPORTED_TYPES_README_URL,
+    )
+
+
+def unsupported_type_message(suffix: str | None, *, path_hint: str | None = None) -> str:
+    """User-facing notice when a file type cannot be anonymized yet.
+
+    Multi-line text with the README URL on its own line (clickable in many terminals).
+    """
+    return unsupported_type_notice(suffix, path_hint=path_hint).as_text()
 
 
 def expand_user_path(path: Path) -> Path:
@@ -26,8 +108,7 @@ def collect_inputs(path: Path) -> list[Path]:
     if path.is_file():
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise ValueError(
-                f"Unsupported file type: {path.suffix or '(none)'}. "
-                f"Supported: {format_supported_extensions()}"
+                unsupported_type_message(path.suffix, path_hint=path.name)
             )
         return [path]
     if path.is_dir():
@@ -104,3 +185,17 @@ def default_native_output_path(
     from anonymizer.output.native import default_native_output_path as _native_path
 
     return _native_path(expand_user_path(input_path), out_dir)
+
+
+def default_text_pdf_output_path(
+    input_path: Path,
+    out_dir: Path | None = None,
+) -> Path:
+    """``{stem}.anonymized.text.pdf`` — reflow PDF from Markdown (not native redact)."""
+    input_path = expand_user_path(input_path)
+    name = f"{input_path.stem}.anonymized.text.pdf"
+    if out_dir is not None:
+        out_dir = expand_user_path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / name
+    return input_path.with_name(name)

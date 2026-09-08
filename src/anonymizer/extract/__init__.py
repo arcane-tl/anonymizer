@@ -46,6 +46,6 @@ def extract_document(
         doc = extract_text_file(path)
         _p(f"Text ready: {len(doc.blocks)} blocks")
         return doc
-    raise ValueError(
-        f"Unsupported file type {suffix!r}. Supported: {sorted(SUPPORTED_EXTENSIONS)}"
-    )
+    from anonymizer.util.files import unsupported_type_message
+
+    raise ValueError(unsupported_type_message(suffix, path_hint=path.name))

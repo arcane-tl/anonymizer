@@ -205,6 +205,14 @@ class AnonymizerConfig:
     redact_style: str = "placeholder"
     # Output: md (default) | source (native PDF/DOCX) | both
     output_format: str = "md"
+    # Also write a reflowed PDF from anonymized Markdown ({stem}.anonymized.text.pdf)
+    write_text_pdf: bool = False
+    # Native PDF/DOCX: exit non-zero when search misses or post-verify residuals remain
+    fail_on_native_miss: bool = False
+    # If set (0–1), also fail when match_rate is below this value
+    native_min_match_rate: float | None = None
+    # Black-box letterhead/logo images on PDF page header/footer bands
+    redact_letterhead_images: bool = False
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -355,15 +363,45 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.keep_headers = bool(data["keep_headers"])
         if "redact_style" in data and data["redact_style"]:
             cfg.redact_style = normalize_redact_style(str(data["redact_style"]))
-        if "format" in data and data["format"]:
+        if "format" in data and data["format"] is not None:
             # Lazy import avoids circular import with output package at module load
-            from anonymizer.output.native import normalize_output_format
+            from anonymizer.output.native import (
+                format_output_kinds,
+                parse_output_formats,
+            )
 
-            cfg.output_format = normalize_output_format(str(data["format"]))
-        if "output_format" in data and data["output_format"]:
-            from anonymizer.output.native import normalize_output_format
+            cfg.output_format = format_output_kinds(parse_output_formats(data["format"]))
+        if "output_format" in data and data["output_format"] is not None:
+            from anonymizer.output.native import (
+                format_output_kinds,
+                parse_output_formats,
+            )
 
-            cfg.output_format = normalize_output_format(str(data["output_format"]))
+            cfg.output_format = format_output_kinds(
+                parse_output_formats(data["output_format"])
+            )
+        if "write_text_pdf" in data and data["write_text_pdf"]:
+            # Compat: OR pdf into the format set
+            from anonymizer.output.native import (
+                format_output_kinds,
+                parse_output_formats,
+            )
+
+            kinds = set(parse_output_formats(cfg.output_format))
+            kinds.add("pdf")
+            cfg.output_format = format_output_kinds(kinds)
+            cfg.write_text_pdf = True
+        if "fail_on_native_miss" in data:
+            cfg.fail_on_native_miss = bool(data["fail_on_native_miss"])
+        if "native_min_match_rate" in data and data["native_min_match_rate"] is not None:
+            rate = float(data["native_min_match_rate"])
+            if not 0.0 <= rate <= 1.0:
+                raise ConfigError(
+                    f"native_min_match_rate in {path} must be between 0 and 1"
+                )
+            cfg.native_min_match_rate = rate
+        if "redact_letterhead_images" in data:
+            cfg.redact_letterhead_images = bool(data["redact_letterhead_images"])
         # Template multi-select (ids). Explicit empty list = no packs.
         if "templates_enabled" in data and data["templates_enabled"] is not None:
             te = data["templates_enabled"]
@@ -390,9 +428,16 @@ def load_config(path: Path | None) -> AnonymizerConfig:
         cfg.entities = entities_for_mode(cfg.mode, cfg.entity_registry)
     # Normalize style even if default
     cfg.redact_style = normalize_redact_style(cfg.redact_style)
-    from anonymizer.output.native import normalize_output_format
+    from anonymizer.output.native import (
+        format_output_kinds,
+        parse_output_formats,
+    )
 
-    cfg.output_format = normalize_output_format(cfg.output_format)
+    kinds = set(parse_output_formats(cfg.output_format))
+    if cfg.write_text_pdf:
+        kinds.add("pdf")
+    cfg.output_format = format_output_kinds(kinds)
+    cfg.write_text_pdf = "pdf" in kinds
     # Append extras without replacing the base list
     if cfg.allowlist_extra:
         seen = {a.casefold() for a in cfg.allowlist}
