@@ -64,19 +64,19 @@ denylist:
 #   remove — delete the text entirely (no tags; --review not available)
 # redact_style: placeholder
 
-# Output format (choose one):
-#   md (default) — Markdown only
-#   source       — redacted original PDF or Word (same type as input;
-#                  hardened best-effort: wrap/hyphen variants, form/annot scrub,
-#                  metadata wipe, residual text verify; image-only text may
-#                  remain — not a forensic wipe). Text inputs stay Markdown-only.
-#   both         — Markdown + source when input is PDF/DOCX
+# Save as / --format (comma-separated; any combo):
+#   md     — Markdown ({stem}.anonymized.md)  [default]
+#   source — redacted original PDF/DOCX (black-box / tags); plain text → Markdown
+#            Native PDF is hardened best-effort (not a forensic wipe).
+#   pdf    — reflowed Text PDF ({stem}.anonymized.text.pdf)
+# Compat: both=md,source ; all=md,source,pdf
+# GUI: Save as ticks. More options → fail_on_native_miss / letterhead / redact_style.
 # format: md
-# Exit non-zero if native redaction misses surfaces or leaves residual cleartext:
+# format: md,pdf
+# format: md,source,pdf
+# Deprecated: write_text_pdf: true  (adds pdf to the format set)
 # fail_on_native_miss: false
-# Require at least this fraction of surfaces found in the original layout (0–1):
 # native_min_match_rate: 1.0
-# Black-box letterhead/logo images in PDF header/footer bands (shareable PDFs):
 # redact_letterhead_images: false
 
 # Language for NER: auto | en | fi | sv | en,fi | en,sv | …

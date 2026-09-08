@@ -65,13 +65,15 @@ sharp custom square and breaks size/shape next to other apps.
 2. A **single window** shows:
    - **Files** — list with **+** (Add file) / **−** (Remove file); multi-location add  
    - **Mode** pop-up — Strict / Standard / Extract  
-   - **Output style** pop-up — stable placeholders or delete redacted data  
-   - **Output format** pop-up — Markdown / Source filetype / Both  
-   - **Output folder** — default *same folder as source file (default)*, or **Choose…** a directory (`--out-dir`)  
-   - **Templates…** — native AppKit pack editor; enable packs for this run  
-   - ☑ **Review findings before saving** (default on) — teach packs from the **review window**  
-   - ☑ **Open result when finished**  
+   - **Save as** — indented ticks: Markdown / Source filetype (PDF, DOCX, or MD) / PDF text (Source on plain text → Markdown)  
+   - **Output folder** — default *same folder as source file*, or **Choose…** (`--out-dir`)  
+   - **Active templates** / **Templates…** — native AppKit pack editor; enable packs for this run  
+   - ☑ **Review findings before saving** (default on) — always visible  
+   - ☑ **Open result when finished** — always visible  
+   - **More options** — collapsed disclosure: Output style, fail-on-native-miss, letterhead wipe  
    - Action bar: **Templates…** left · **Cancel** + **Start** right  
+
+End-to-end scenarios (batch Markdown/PDF, templates, review, native shareable PDF): **[Use cases in the main README](../../README.md#use-cases)**.
 
 **Templates…** is a native panel in the droplet (not Tk). Data goes through `templates-io.sh` → `python -m anonymizer.templates_io`.  
 Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`.  

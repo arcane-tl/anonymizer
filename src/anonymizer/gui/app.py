@@ -38,7 +38,13 @@ from anonymizer.anonymize.templates import (
     save_template,
     slugify,
 )
+from anonymizer.extract import SUPPORTED_EXTENSIONS
 from anonymizer.lists_io import default_config_path
+from anonymizer.util.files import (
+    SUPPORTED_TYPES_HUMAN,
+    SUPPORTED_TYPES_README_URL,
+    unsupported_type_notice,
+)
 
 MODE_LABELS = [
     ("strict", "Strict - Remove all sensitive data (recommended)"),
@@ -49,14 +55,66 @@ STYLE_LABELS = [
     ("placeholder", "Replace redacted data with stable placeholders"),
     ("remove", "Delete redacted data"),
 ]
-# Output format (CLI --format md|source|both).
-FORMAT_LABELS = [
-    ("md", "Markdown"),
-    ("source", "Source filetype"),
-    ("both", "Both (Markdown & source filetype)"),
-]
+# Output format kinds (CLI --format md,source,pdf). Multi-select checklist in GUI.
+FORMAT_DISPLAY: dict[str, str] = {
+    "md": "Markdown",
+    "source": "Source filetype (PDF, DOCX, or MD)",
+    "pdf": "PDF text",
+}
+OUTPUT_KIND_LABELS = [(k, FORMAT_DISPLAY[k]) for k in ("md", "source", "pdf")]
+# Compat alias used by tests.
+FORMAT_LABELS = OUTPUT_KIND_LABELS
 
-SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".text", ".markdown"}
+
+def format_selection_status(order: list[str]) -> str:
+    """Numbered helper lines in selection order (1-based)."""
+    lines: list[str] = []
+    for i, key in enumerate(order, start=1):
+        label = FORMAT_DISPLAY.get(key, key)
+        lines.append(f"{i}. {label}")
+    return "\n".join(lines) if lines else "None selected"
+
+
+def toggle_format_order(order: list[str], key: str, selected: bool) -> list[str]:
+    """Update selection-order list when a checklist row is toggled."""
+    out = [k for k in order if k != key]
+    if selected:
+        out.append(key)
+    return out
+
+
+def format_kinds_from_flags(
+    *,
+    md: bool,
+    source: bool,
+    pdf: bool,
+    mode: str = "strict",
+    order: list[str] | None = None,
+) -> list[str]:
+    """Build format tokens from GUI checklist flags (prefer *order* when given)."""
+    wanted: set[str] = set()
+    if md:
+        wanted.add("md")
+    if mode != "extract" and source:
+        wanted.add("source")
+    if pdf:
+        wanted.add("pdf")
+    if order is not None:
+        kinds = [k for k in order if k in wanted]
+        for k in ("md", "source", "pdf"):
+            if k in wanted and k not in kinds:
+                kinds.append(k)
+        return kinds
+    kinds = []
+    if "md" in wanted:
+        kinds.append("md")
+    if "source" in wanted:
+        kinds.append("source")
+    if "pdf" in wanted:
+        kinds.append("pdf")
+    return kinds
+
+SUPPORTED = SUPPORTED_EXTENSIONS
 
 # Windows Tk is picky: one pattern per entry (not "a.pdf b.docx" in one string).
 _FILETYPES = [
@@ -414,6 +472,156 @@ def _filter_paths(paths: object) -> list[Path]:
         if p.is_file() and p.suffix.lower() in SUPPORTED:
             files.append(p)
     return files
+
+
+def _first_unsupported_path(paths: object) -> Path | None:
+    """First existing file whose extension is not in SUPPORTED (for user messaging)."""
+    for a in _coerce_path_args(paths):
+        p = Path(a).expanduser()
+        try:
+            p = p.resolve()
+        except OSError:
+            continue
+        if p.is_file() and p.suffix.lower() not in SUPPORTED:
+            return p
+    return None
+
+
+def _unsupported_paths_notice(paths: object) -> str:
+    """Plain-text notice (CLI-style) when selection/drop had no supported documents."""
+    bad = _first_unsupported_path(paths)
+    if bad is not None:
+        return unsupported_type_notice(bad.suffix, path_hint=bad.name).as_text()
+    return (
+        "Unsupported file type\n\n"
+        "No supported files selected.\n\n"
+        f"Convert to {SUPPORTED_TYPES_HUMAN}, then try again.\n\n"
+        f"{SUPPORTED_TYPES_README_URL}"
+    )
+
+
+def _open_supported_types_guide() -> None:
+    import webbrowser
+
+    webbrowser.open(SUPPORTED_TYPES_README_URL)
+
+
+def _show_unsupported_type_dialog(
+    paths: object, *, parent: tk.Misc | None = None
+) -> None:
+    """Readable unsupported-type dialog with a clickable README link."""
+    if tk is None:
+        _message_box("Unsupported file type", _unsupported_paths_notice(paths))
+        return
+
+    bad = _first_unsupported_path(paths)
+    if bad is not None:
+        notice = unsupported_type_notice(bad.suffix, path_hint=bad.name)
+        title = notice.title
+        body = notice.body(include_url=False)
+        url = notice.url
+    else:
+        title = "Unsupported file type"
+        body = (
+            "No supported files selected.\n\n"
+            f"Convert to {SUPPORTED_TYPES_HUMAN}, then try again."
+        )
+        url = SUPPORTED_TYPES_README_URL
+
+    # Prefer a small custom dialog so the README URL is actually clickable.
+    own_root = False
+    root: tk.Misc
+    if parent is not None:
+        root = parent
+    else:
+        root = tk.Tk()
+        root.withdraw()
+        own_root = True
+
+    try:
+        dlg = tk.Toplevel(root)
+        dlg.title(title)
+        dlg.transient(root)
+        dlg.resizable(False, False)
+        try:
+            dlg.configure(bg=_BG_APP)
+        except tk.TclError:
+            pass
+
+        hdr = tk.Label(
+            dlg,
+            text=title,
+            anchor="w",
+            justify="left",
+            font=_FONT_TITLE,
+            bg=_BG_APP,
+            fg=_TEXT,
+        )
+        hdr.pack(fill="x", padx=20, pady=(16, 0))
+
+        body_lbl = tk.Label(
+            dlg,
+            text=body,
+            anchor="w",
+            justify="left",
+            font=_FONT_SMALL,
+            bg=_BG_APP,
+            fg=_TEXT,
+            wraplength=420,
+        )
+        body_lbl.pack(fill="x", padx=20, pady=(10, 0))
+
+        link_font = (_FONT_SMALL[0], _FONT_SMALL[1], "underline")
+        link = tk.Label(
+            dlg,
+            text=url,
+            anchor="w",
+            justify="left",
+            font=link_font,
+            bg=_BG_APP,
+            fg="#6CB6FF",
+            cursor="hand2",
+            wraplength=420,
+        )
+        link.pack(fill="x", padx=20, pady=(12, 0))
+        link.bind("<Button-1>", lambda _e: _open_supported_types_guide())
+
+        btns = tk.Frame(dlg, bg=_BG_APP)
+        btns.pack(fill="x", padx=20, pady=16)
+
+        def _close() -> None:
+            dlg.destroy()
+
+        ok = tk.Button(btns, text="OK", width=10, command=_close, default="active")
+        ok.pack(side="right")
+        guide = tk.Button(
+            btns, text="Open guide…", width=12, command=_open_supported_types_guide
+        )
+        guide.pack(side="right", padx=(0, 8))
+
+        dlg.bind("<Return>", lambda _e: _close())
+        dlg.bind("<Escape>", lambda _e: _close())
+
+        dlg.update_idletasks()
+        try:
+            dlg.grab_set()
+        except tk.TclError:
+            pass
+        try:
+            dlg.focus_force()
+            ok.focus_set()
+        except tk.TclError:
+            pass
+        dlg.wait_window()
+    except Exception:  # noqa: BLE001
+        # Fall back to plain messagebox if custom dialog fails.
+        messagebox.showwarning(title, _unsupported_paths_notice(paths), parent=parent)
+    finally:
+        if own_root:
+            try:
+                root.destroy()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _merge_paths(existing: list[Path], added: list[Path]) -> list[Path]:
@@ -853,6 +1061,7 @@ def _dark_check(
     *,
     variable: "tk.BooleanVar",
     pady: tuple[int, int] | int = 2,
+    padx: tuple[int, int] | int = 0,
 ) -> "tk.Checkbutton":
     cb = tk.Checkbutton(
         parent,
@@ -869,8 +1078,87 @@ def _dark_check(
         anchor=tk.W,
         cursor="hand2",
     )
-    cb.pack(anchor=tk.W, pady=pady)
+    cb.pack(anchor=tk.W, pady=pady, padx=padx)
     return cb
+
+
+def _dark_checklist(
+    parent: "tk.Misc",
+    items: list[tuple[str, str, "tk.BooleanVar"]],
+    *,
+    pady: tuple[int, int] = (0, 2),
+    on_change: "callable | None" = None,
+) -> "tk.Frame":
+    """Multi-select list: bordered well of toggle rows (checkmark + label).
+
+    *items* is ``(key, label, BooleanVar)``. Optional *on_change(key, selected)*.
+    """
+    wrap = tk.Frame(
+        parent,
+        bg=_BG_WELL,
+        highlightthickness=1,
+        highlightbackground=_BORDER,
+        highlightcolor=_BORDER,
+        bd=0,
+    )
+    wrap.pack(fill=tk.X, pady=pady)
+
+    def _row_bg(selected: bool) -> str:
+        return _SELECT if selected else _BG_WELL
+
+    for key, label, var in items:
+        row = tk.Frame(wrap, bg=_BG_WELL, cursor="hand2")
+        row.pack(fill=tk.X, padx=1, pady=0)
+
+        mark = tk.Label(
+            row,
+            text="✓" if var.get() else " ",
+            width=2,
+            bg=_BG_WELL,
+            fg=_ACCENT,
+            font=_FONT_BOLD,
+            anchor=tk.CENTER,
+        )
+        mark.pack(side=tk.LEFT, padx=(8, 4), pady=6)
+        lab = tk.Label(
+            row,
+            text=label,
+            bg=_BG_WELL,
+            fg=_TEXT,
+            font=_FONT,
+            anchor=tk.W,
+        )
+        lab.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=6, padx=(0, 10))
+
+        def _refresh(
+            *_a: object,
+            v: "tk.BooleanVar" = var,
+            m: "tk.Label" = mark,
+            r: "tk.Frame" = row,
+            l: "tk.Label" = lab,
+        ) -> None:
+            on = bool(v.get())
+            bg = _row_bg(on)
+            m.configure(text="✓" if on else " ", bg=bg)
+            l.configure(bg=bg)
+            r.configure(bg=bg)
+
+        def _toggle(
+            _event: object | None = None,
+            v: "tk.BooleanVar" = var,
+            k: str = key,
+        ) -> None:
+            new_val = not v.get()
+            v.set(new_val)
+            if on_change is not None:
+                on_change(k, new_val)
+
+        for w in (row, mark, lab):
+            w.bind("<Button-1>", _toggle)
+        var.trace_add("write", _refresh)
+        _refresh()
+
+    return wrap
 
 
 def _round_rect(canvas: "tk.Canvas", x1: int, y1: int, x2: int, y2: int, r: int, **kwargs):
@@ -1957,7 +2245,10 @@ class OptionsApp(tk.Tk):
 
         self.mode_var = tk.StringVar(value="strict")
         self.style_var = tk.StringVar(value="placeholder")
-        self.format_var = tk.StringVar(value="md")
+        # Save as: plain tick boxes (md / source / pdf) — default Markdown on.
+        self.out_md_var = tk.BooleanVar(value=True)
+        self.out_source_var = tk.BooleanVar(value=False)
+        self.out_pdf_var = tk.BooleanVar(value=False)
         self.review_var = tk.BooleanVar(value=True)
         self.fail_native_var = tk.BooleanVar(value=False)
         self.letterhead_var = tk.BooleanVar(value=False)
@@ -2010,25 +2301,37 @@ class OptionsApp(tk.Tk):
 
         tk.Label(
             root,
-            text="Output style",
+            text="Save as",
             bg=_BG_APP,
             fg=_TEXT,
             font=_FONT_BOLD,
             anchor=tk.W,
         ).pack(anchor=tk.W, pady=(16, 4))
-        _dark_popup(root, self.style_var, STYLE_LABELS)
-
-        tk.Label(
+        # Indent under "Save as" so options read as children of the section.
+        _save_as_pad = (16, 0)
+        _dark_check(
             root,
-            text="Output format",
-            bg=_BG_APP,
-            fg=_TEXT,
-            font=_FONT_BOLD,
-            anchor=tk.W,
-        ).pack(anchor=tk.W, pady=(16, 4))
-        _dark_popup(root, self.format_var, FORMAT_LABELS)
+            FORMAT_DISPLAY["md"],
+            variable=self.out_md_var,
+            pady=(2, 2),
+            padx=_save_as_pad,
+        )
+        _dark_check(
+            root,
+            FORMAT_DISPLAY["source"],
+            variable=self.out_source_var,
+            pady=(2, 2),
+            padx=_save_as_pad,
+        )
+        _dark_check(
+            root,
+            FORMAT_DISPLAY["pdf"],
+            variable=self.out_pdf_var,
+            pady=(2, 2),
+            padx=_save_as_pad,
+        )
 
-        # Output folder (after format, before templates) — Mac parity
+        # Output folder (after Save as, before templates) — Mac parity
         tk.Label(
             root,
             text="Output folder",
@@ -2092,24 +2395,62 @@ class OptionsApp(tk.Tk):
             variable=self.open_var,
             pady=(2, 2),
         )
-        _dark_check(
+
+        # More options (collapsed): output style + native shareability gates
+        self._more_open = False
+        self._more_btn = tk.Button(
             root,
+            text="▶  More options",
+            command=self._toggle_more_options,
+            bg=_BG_APP,
+            fg=_TEXT_MUTED,
+            activebackground=_BG_APP,
+            activeforeground=_TEXT,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+            cursor="hand2",
+            padx=0,
+            pady=0,
+        )
+        self._more_btn.pack(anchor=tk.W, pady=(14, 2))
+
+        self._more_frame = tk.Frame(root, bg=_BG_APP)
+        _more_pad = (16, 0)
+        tk.Label(
+            self._more_frame,
+            text="Output style",
+            bg=_BG_APP,
+            fg=_TEXT,
+            font=_FONT_BOLD,
+            anchor=tk.W,
+        ).pack(anchor=tk.W, pady=(4, 4), padx=_more_pad)
+        style_host = tk.Frame(self._more_frame, bg=_BG_APP)
+        style_host.pack(fill=tk.X, padx=_more_pad)
+        _dark_popup(style_host, self.style_var, STYLE_LABELS)
+        _dark_check(
+            self._more_frame,
             "Fail if native PDF/DOCX misses cleartext (shareable gate)",
             variable=self.fail_native_var,
             pady=(10, 2),
+            padx=_more_pad,
         )
         _dark_check(
-            root,
+            self._more_frame,
             "Black-box PDF letterhead/logo images (header/footer)",
             variable=self.letterhead_var,
             pady=(2, 2),
+            padx=_more_pad,
         )
+        # Collapsed by default — do not pack _more_frame yet
 
         # Action bar: Templates… left · Cancel + Start right (Mac parity)
-        bar = tk.Frame(root, bg=_BG_APP)
-        bar.pack(fill=tk.X, pady=(28, 0))
-        _chip_button(bar, "Templates…", self._templates).pack(side=tk.LEFT)
-        right = tk.Frame(bar, bg=_BG_APP)
+        self._action_bar = tk.Frame(root, bg=_BG_APP)
+        self._action_bar.pack(fill=tk.X, pady=(28, 0))
+        _chip_button(self._action_bar, "Templates…", self._templates).pack(side=tk.LEFT)
+        right = tk.Frame(self._action_bar, bg=_BG_APP)
         right.pack(side=tk.RIGHT)
         _chip_button(right, "Cancel", self._on_cancel).pack(side=tk.LEFT, padx=(0, 10))
         _chip_button(right, "Start", self._start, primary=True).pack(side=tk.LEFT)
@@ -2165,6 +2506,20 @@ class OptionsApp(tk.Tk):
             return "Saves to chosen folder"
         return "Saves next to original"
 
+    def _toggle_more_options(self) -> None:
+        self._more_open = not self._more_open
+        try:
+            self._action_bar.pack_forget()
+            if self._more_open:
+                self._more_btn.configure(text="▼  More options")
+                self._more_frame.pack(fill=tk.X, after=self._more_btn)
+            else:
+                self._more_btn.configure(text="▶  More options")
+                self._more_frame.pack_forget()
+            self._action_bar.pack(fill=tk.X, pady=(28, 0))
+        except tk.TclError:
+            pass
+
     def _refresh_files_ui(self) -> None:
         n = len(self.files)
         if n == 0:
@@ -2218,14 +2573,10 @@ class OptionsApp(tk.Tk):
         )
         if not paths:
             return
-        added = _filter_paths(_coerce_path_args(paths))
+        coerced = _coerce_path_args(paths)
+        added = _filter_paths(coerced)
         if not added:
-            messagebox.showwarning(
-                "Anonymizer",
-                "No supported files selected.\n\n"
-                "Supported: PDF, DOCX, TXT, Markdown.",
-                parent=self,
-            )
+            _show_unsupported_type_dialog(coerced, parent=self)
             return
         before = len(self.files)
         self.files = _merge_paths(self.files, added)
@@ -2384,10 +2735,21 @@ class OptionsApp(tk.Tk):
 
         mode = self.mode_var.get()
         style = self.style_var.get()
-        # Extract has no native redaction; force Markdown-only.
-        out_fmt = "md" if mode == "extract" else self.format_var.get()
-        if out_fmt not in {"md", "source", "both"}:
-            out_fmt = "md"
+        kinds = format_kinds_from_flags(
+            md=self.out_md_var.get(),
+            source=self.out_source_var.get(),
+            pdf=self.out_pdf_var.get(),
+            mode=mode,
+        )
+        if not kinds:
+            messagebox.showwarning(
+                "Anonymizer",
+                "Select at least one Save as option:\n"
+                "Markdown, Source filetype, or PDF text.",
+                parent=self,
+            )
+            return
+        out_fmt = ",".join(kinds)
         want_review = self.review_var.get() and mode != "extract"
         want_open = self.open_var.get()
         out_dir = self.out_dir
@@ -2408,9 +2770,9 @@ class OptionsApp(tk.Tk):
             )
         if out_dir is not None:
             common_flags.extend(["--out-dir", str(out_dir)])
-        if out_fmt in {"source", "both"} and self.fail_native_var.get():
+        if "source" in kinds and self.fail_native_var.get():
             common_flags.append("--fail-on-native-miss")
-        if out_fmt in {"source", "both"} and self.letterhead_var.get():
+        if "source" in kinds and self.letterhead_var.get():
             common_flags.append("--redact-letterhead-images")
         _log(
             f"_run_start mode={mode} style={style} fmt={out_fmt} "
@@ -2463,7 +2825,12 @@ class OptionsApp(tk.Tk):
                     continue
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs:
-                    outs = _guess_outputs([fpath], mode, out_fmt, out_dir=out_dir)
+                    outs = _guess_outputs(
+                        [fpath],
+                        mode,
+                        out_fmt,
+                        out_dir=out_dir,
+                    )
                 outputs.extend(outs)
         finally:
             try:
@@ -2604,7 +2971,10 @@ class OptionsApp(tk.Tk):
                 outs = _parse_outputs(proc.stdout or "", proc.stderr or "")
                 if not outs and fpath is not None:
                     outs = _guess_outputs(
-                        [fpath], mode, out_fmt, out_dir=out_dir
+                        [fpath],
+                        mode,
+                        out_fmt,
+                        out_dir=out_dir,
                     )
                 outputs.extend(outs)
                 _log(f"REVIEW ok outs={len(outs)}")
@@ -2697,11 +3067,21 @@ def _guess_outputs(
     output_format: str = "md",
     *,
     out_dir: Path | None = None,
+    write_text_pdf: bool = False,
 ) -> list[str]:
     """Best-effort paths when CLI OUTPUT: lines are missing."""
-    fmt = "md" if mode == "extract" else (output_format or "md")
-    write_md = fmt in ("md", "both")
-    write_native = fmt in ("source", "both") and mode != "extract"
+    from anonymizer.output.native import parse_output_formats
+
+    kinds = set(parse_output_formats(output_format or "md"))
+    if write_text_pdf:
+        kinds.add("pdf")
+    if mode == "extract":
+        kinds.discard("source")
+        if not kinds:
+            kinds = {"md"}
+    write_md = "md" in kinds
+    write_native = "source" in kinds and mode != "extract"
+    write_pdf = "pdf" in kinds
     paths: list[str] = []
     for f in files:
         base = out_dir if out_dir is not None else f.parent
@@ -2718,6 +3098,10 @@ def _guess_outputs(
             n = base / f"{f.stem}.anonymized{f.suffix.lower()}"
             if n.is_file():
                 paths.append(str(n))
+        if write_pdf:
+            tp = base / f"{f.stem}.anonymized.text.pdf"
+            if tp.is_file():
+                paths.append(str(tp))
     return paths
 
 
@@ -2796,6 +3180,11 @@ def main(argv: list[str] | None = None) -> int:
         # Always open options: empty list unless argv / drag-drop paths.
         _log(f"main: raw args n={len(args)}")
         files = _filter_paths(args)
+        if args and not files:
+            # Drag-drop / argv had paths but none were supported — notify once.
+            notice = _unsupported_paths_notice(args)
+            _log(f"main: unsupported drop/argv: {notice[:120]}")
+            _show_unsupported_type_dialog(args)
         _log(f"main: opening OptionsApp n={len(files)} (empty ok — add with +)")
         _debug_box(f"Opening options for {len(files)} file(s)…")
         app = OptionsApp(files)

@@ -1,9 +1,10 @@
-"""Dispatch native (original-format) redacted writers."""
+"""Dispatch native (original-format) redacted writers + output format parsing."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Iterable, Literal
 
 from anonymizer.anonymize.surfaces import RedactSurface, surfaces_from_mapping
 from anonymizer.output.docx_redact import redact_docx
@@ -12,38 +13,123 @@ from anonymizer.output.pdf_redact import redact_pdf
 
 logger = logging.getLogger(__name__)
 
-VALID_OUTPUT_FORMATS: tuple[str, ...] = ("md", "source", "both")
-_FORMAT_ALIASES: dict[str, str] = {
-    "md": "md",
-    "markdown": "md",
-    "source": "source",
-    "native": "source",
-    "original": "source",
-    "both": "both",
-    "all": "both",
-    "dual": "both",
+OutputKind = Literal["md", "source", "pdf"]
+OUTPUT_KINDS: tuple[OutputKind, ...] = ("md", "source", "pdf")
+
+# Documented selectable kinds (multi via comma list).
+VALID_OUTPUT_FORMATS: tuple[str, ...] = OUTPUT_KINDS
+
+# Single token → one or more kinds.
+_TOKEN_ALIASES: dict[str, frozenset[OutputKind]] = {
+    "md": frozenset({"md"}),
+    "markdown": frozenset({"md"}),
+    "source": frozenset({"source"}),
+    "native": frozenset({"source"}),
+    "original": frozenset({"source"}),
+    "pdf": frozenset({"pdf"}),
+    "text-pdf": frozenset({"pdf"}),
+    "text_pdf": frozenset({"pdf"}),
+    # Compat / convenience combos
+    "both": frozenset({"md", "source"}),
+    "dual": frozenset({"md", "source"}),
+    "all": frozenset({"md", "source", "pdf"}),
 }
 
 
-def normalize_output_format(value: str | None) -> str:
-    """Map user format to md | source | both."""
-    if value is None or not str(value).strip():
-        return "md"
-    key = str(value).strip().lower()
-    if key not in _FORMAT_ALIASES:
+def parse_output_formats(value: str | Iterable[str] | None) -> frozenset[OutputKind]:
+    """Parse ``--format`` / config into a non-empty frozenset of output kinds.
+
+    Accepts a comma-separated string (``md,pdf``), a single alias (``both``),
+    or an iterable of tokens. Default / empty → ``{md}``.
+    """
+    if value is None:
+        return frozenset({"md"})
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return frozenset({"md"})
+        # Accept comma / semicolon / whitespace / newlines (Mac GUI once
+        # accidentally joined tokens with return instead of comma).
+        normalized = raw.replace(";", ",").replace("\r", ",").replace("\n", ",")
+        tokens = [t.strip() for t in normalized.split(",") if t.strip()]
+        if len(tokens) == 1 and any(c.isspace() for c in tokens[0]):
+            tokens = [t for t in tokens[0].split() if t.strip()]
+    else:
+        tokens = []
+        for item in value:
+            s = str(item).strip()
+            if not s:
+                continue
+            if "," in s or ";" in s or "\n" in s or "\r" in s:
+                tokens.extend(
+                    t.strip()
+                    for t in s.replace(";", ",")
+                    .replace("\r", ",")
+                    .replace("\n", ",")
+                    .split(",")
+                    if t.strip()
+                )
+            else:
+                tokens.append(s)
+        if not tokens:
+            return frozenset({"md"})
+
+    kinds: set[str] = set()
+    unknown: list[str] = []
+    for tok in tokens:
+        key = tok.strip().lower()
+        mapped = _TOKEN_ALIASES.get(key)
+        if mapped is None:
+            unknown.append(tok)
+            continue
+        kinds |= set(mapped)
+    if unknown:
         raise ValueError(
-            f"Unknown output format {value!r}. Expected one of: "
-            f"md, source, both (aliases: markdown, native, original, dual)."
+            f"Unknown output format token(s): {', '.join(repr(u) for u in unknown)}. "
+            f"Expected one or more of: md, source, pdf "
+            f"(aliases: markdown, native, original, text-pdf; "
+            f"compat: both=md+source, all=md+source+pdf)."
         )
-    return _FORMAT_ALIASES[key]
+    if not kinds:
+        return frozenset({"md"})
+    return frozenset(kinds)  # type: ignore[return-value]
 
 
-def wants_markdown(fmt: str) -> bool:
-    return fmt in ("md", "both")
+def format_output_kinds(kinds: frozenset[OutputKind] | Iterable[str]) -> str:
+    """Stable comma-joined canonical form (md, source, pdf order)."""
+    s = frozenset(str(k) for k in kinds)
+    return ",".join(k for k in OUTPUT_KINDS if k in s)
 
 
-def wants_native(fmt: str) -> bool:
-    return fmt in ("source", "both")
+def normalize_output_format(value: str | None) -> str:
+    """Normalize to a canonical comma-joined format string (default ``md``)."""
+    return format_output_kinds(parse_output_formats(value))
+
+
+def _as_kinds(fmt: str | frozenset[OutputKind] | Iterable[str]) -> frozenset[OutputKind]:
+    if isinstance(fmt, frozenset):
+        return fmt  # type: ignore[return-value]
+    if isinstance(fmt, str):
+        return parse_output_formats(fmt)
+    return parse_output_formats(list(fmt))
+
+
+def wants_markdown(fmt: str | frozenset[OutputKind] | Iterable[str]) -> bool:
+    return "md" in _as_kinds(fmt)
+
+
+def wants_native(fmt: str | frozenset[OutputKind] | Iterable[str]) -> bool:
+    return "source" in _as_kinds(fmt)
+
+
+def wants_text_pdf(fmt: str | frozenset[OutputKind] | Iterable[str]) -> bool:
+    return "pdf" in _as_kinds(fmt)
+
+
+def format_output_kinds(kinds: frozenset[OutputKind] | Iterable[str]) -> str:
+    """Stable comma-joined canonical form (md, source, pdf order)."""
+    s = frozenset(str(k) for k in kinds)
+    return ",".join(k for k in OUTPUT_KINDS if k in s)
 
 
 def native_suffix(input_path: Path) -> str | None:
@@ -54,6 +140,15 @@ def native_suffix(input_path: Path) -> str | None:
     if ext == ".docx":
         return ".docx"
     return None
+
+
+def source_as_markdown(input_path: Path) -> bool:
+    """True when ``--format source`` should write Markdown for this input.
+
+    PDF/DOCX use layout-preserving native writers. Plain text (and other
+    non-native types) fall back to ``{stem}.anonymized.md``.
+    """
+    return native_suffix(input_path) is None
 
 
 def default_native_output_path(

@@ -110,17 +110,32 @@ def test_native_stats_is_clean_and_summary() -> None:
 
 
 def test_normalize_output_format() -> None:
+    from anonymizer.output.native import format_output_kinds, parse_output_formats
+
     assert normalize_output_format(None) == "md"
     assert normalize_output_format("native") == "source"
-    assert normalize_output_format("BOTH") == "both"
+    assert normalize_output_format("BOTH") == "md,source"
+    assert normalize_output_format("md,pdf") == "md,pdf"
+    assert normalize_output_format("all") == "md,source,pdf"
+    assert parse_output_formats("both") == frozenset({"md", "source"})
+    assert parse_output_formats(["md", "pdf"]) == frozenset({"md", "pdf"})
+    assert format_output_kinds({"pdf", "md"}) == "md,pdf"
+    # Mac GUI once joined with return/newline instead of comma
+    assert parse_output_formats("source\nmd") == frozenset({"md", "source"})
+    assert parse_output_formats("source\rmd") == frozenset({"md", "source"})
     with pytest.raises(ValueError):
         normalize_output_format("excel")
 
 
 def test_wants_flags() -> None:
+    from anonymizer.output.native import wants_text_pdf
+
     assert wants_markdown("md") and not wants_native("md")
     assert wants_native("source") and not wants_markdown("source")
     assert wants_markdown("both") and wants_native("both")
+    assert not wants_text_pdf("both")
+    assert wants_text_pdf("md,pdf")
+    assert wants_text_pdf("all") and wants_native("all") and wants_markdown("all")
 
 
 def test_pdf_redact_removes_cleartext(tmp_path: Path) -> None:

@@ -2,10 +2,18 @@
 
 from pathlib import Path
 
+import pytest
+
+from anonymizer.extract import extract_document
 from anonymizer.extract.pdf import is_thin_text
 from anonymizer.extract.text import extract_text_file
 from anonymizer.models import BlockKind
-from anonymizer.util.files import collect_inputs, default_output_path
+from anonymizer.util.files import (
+    SUPPORTED_TYPES_README_URL,
+    collect_inputs,
+    default_output_path,
+    unsupported_type_message,
+)
 
 
 def test_extract_text_headings(tmp_path: Path):
@@ -35,6 +43,55 @@ def test_collect_and_output_paths(tmp_path: Path):
     assert default_output_path(md, mode="extract").name == "note.extracted.md"
     out = default_output_path(f, tmp_path / "out")
     assert out == tmp_path / "out" / "a.anonymized.md"
+
+
+def test_unsupported_type_message_pages_and_gdoc():
+    pages = unsupported_type_message(".pages", path_hint="Brief.pages")
+    assert pages.startswith("Unsupported file type")
+    assert "Brief.pages" in pages
+    assert ".pages" in pages
+    assert "Pages" in pages
+    assert "Export To" in pages
+    assert "PDF" in pages and "docx" in pages.lower()
+    # URL alone on final line so terminals can auto-link it
+    assert pages.rstrip().endswith(SUPPORTED_TYPES_README_URL)
+    assert "\n\n" in pages  # readable multi-line layout
+
+    gdoc = unsupported_type_message(".gdoc", path_hint="Notes.gdoc")
+    assert "Notes.gdoc" in gdoc
+    assert "Google Docs" in gdoc
+    assert "Download" in gdoc
+    assert gdoc.rstrip().endswith(SUPPORTED_TYPES_README_URL)
+
+    legacy = unsupported_type_message("doc")
+    assert ".doc" in legacy
+    assert "docx" in legacy.lower()
+
+
+def test_collect_inputs_rejects_pages(tmp_path: Path):
+    p = tmp_path / "Brief.pages"
+    p.write_bytes(b"not a real pages file")
+    with pytest.raises(ValueError, match="Pages|Export To|supported") as ei:
+        collect_inputs(p)
+    assert SUPPORTED_TYPES_README_URL in str(ei.value)
+
+
+def test_collect_inputs_rejects_gdoc(tmp_path: Path):
+    p = tmp_path / "Notes.gdoc"
+    p.write_text('{"url": "https://docs.google.com/document/d/x"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="Google Docs|Download|supported") as ei:
+        collect_inputs(p)
+    assert ".gdoc" in str(ei.value)
+    assert SUPPORTED_TYPES_README_URL in str(ei.value)
+
+
+def test_extract_document_rejects_unsupported(tmp_path: Path):
+    p = tmp_path / "slide.pptx"
+    p.write_bytes(b"PK")
+    with pytest.raises(ValueError, match="supported") as ei:
+        extract_document(p)
+    assert ".pptx" in str(ei.value)
+    assert SUPPORTED_TYPES_README_URL in str(ei.value)
 
 
 def test_collect_inputs_expands_tilde(tmp_path: Path, monkeypatch):

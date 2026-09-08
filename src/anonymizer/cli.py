@@ -42,21 +42,29 @@ from anonymizer.anonymize.review import (
 )
 from anonymizer.extract import extract_document
 from anonymizer.output.markdown import render_from_extracted
+from anonymizer.output.md_pdf import write_pdf_from_markdown
 from anonymizer.output.native import (
     default_native_output_path,
+    format_output_kinds,
     native_suffix,
-    normalize_output_format,
-    wants_markdown,
-    wants_native,
+    parse_output_formats,
+    source_as_markdown,
     write_native_redacted,
 )
-from anonymizer.util.files import collect_inputs, default_output_path, expand_user_path
+from anonymizer.util.files import (
+    collect_inputs,
+    default_output_path,
+    default_text_pdf_output_path,
+    expand_user_path,
+)
 from anonymizer.util.progress import RunProgress
 
 EPILOG = """
 Examples:
   anonymize contract.pdf
   anonymize contract.pdf --review
+  anonymize contract.pdf --format md,source,pdf
+  anonymize notes.txt --format pdf
   anonymize extract report.pdf -o body.md
   anonymize standard sopimus.pdf
   anonymize doctor
@@ -65,6 +73,12 @@ Modes:
   extract   text only (no redaction)
   standard  people, phones, emails, IDs, addresses (keeps companies)
   strict    full scrub — default when you just pass a file
+
+Outputs (--format, comma-separated; default md):
+  md        Markdown ({stem}.anonymized.md)
+  source    redacted original PDF/DOCX; plain text → Markdown
+  pdf       reflowed text PDF ({stem}.anonymized.text.pdf)
+  Compat: both=md,source ; all=md,source,pdf ; --pdf adds pdf
 
 Review:
   --review / -r       terminal checklist (toggle false positives)
@@ -193,6 +207,7 @@ def _report_write_success(
     out_path: Path | None,
     map_file: Path | None,
     native_path: Path | None = None,
+    text_pdf_path: Path | None = None,
     wrote_stdout: bool = False,
 ) -> None:
     """Tell the user exactly where files landed (main post-run UX).
@@ -203,6 +218,9 @@ def _report_write_success(
     out_disp = _abs_display_path(out_path) if out_path is not None else None
     map_disp = _abs_display_path(map_file) if map_file is not None else None
     native_disp = _abs_display_path(native_path) if native_path is not None else None
+    text_pdf_disp = (
+        _abs_display_path(text_pdf_path) if text_pdf_path is not None else None
+    )
 
     # overflow=ignore keeps absolute paths intact for copy-paste / tests
     print_kw = {"overflow": "ignore", "crop": False, "soft_wrap": False}
@@ -219,7 +237,14 @@ def _report_write_success(
         console.print(f"[green]{label}[/green] stdout", **print_kw)
     if native_disp is not None:
         console.print(f"[green]{label}[/green] {native_disp}", **print_kw)
-    if out_disp is None and not wrote_stdout and native_disp is None:
+    if text_pdf_disp is not None:
+        console.print(f"[green]{label}[/green] {text_pdf_disp}", **print_kw)
+    if (
+        out_disp is None
+        and not wrote_stdout
+        and native_disp is None
+        and text_pdf_disp is None
+    ):
         console.print(f"[green]{label}[/green] (no output file)", **print_kw)
     if map_disp is not None:
         console.print(
@@ -241,6 +266,7 @@ def _build_config(
     llm_model: str | None,
     redact_style: str | None,
     output_format: str | None = None,
+    write_text_pdf: bool | None = None,
     fail_on_native_miss: bool | None = None,
     native_min_match_rate: float | None = None,
     redact_letterhead_images: bool | None = None,
@@ -285,9 +311,13 @@ def _build_config(
     else:
         cfg.redact_style = normalize_redact_style(cfg.redact_style)
     if output_format is not None:
-        cfg.output_format = normalize_output_format(output_format)
+        kinds = set(parse_output_formats(output_format))
     else:
-        cfg.output_format = normalize_output_format(cfg.output_format)
+        kinds = set(parse_output_formats(cfg.output_format))
+    if write_text_pdf:
+        kinds.add("pdf")
+    cfg.output_format = format_output_kinds(kinds)
+    cfg.write_text_pdf = "pdf" in kinds
     if fail_on_native_miss is not None:
         cfg.fail_on_native_miss = fail_on_native_miss
     if native_min_match_rate is not None:
@@ -341,6 +371,7 @@ def _run_pipeline(
     reject: str | None,
     redact_style: str | None,
     output_format: str | None,
+    write_text_pdf: bool = False,
     fail_on_native_miss: bool = False,
     native_min_match_rate: float | None = None,
     redact_letterhead_images: bool = False,
@@ -395,6 +426,7 @@ def _run_pipeline(
             llm_model=llm_model,
             redact_style=redact_style,
             output_format=output_format,
+            write_text_pdf=write_text_pdf or None,
             fail_on_native_miss=fail_on_native_miss or None,
             native_min_match_rate=native_min_match_rate,
             redact_letterhead_images=redact_letterhead_images or None,
@@ -413,23 +445,23 @@ def _run_pipeline(
             "LLM layer stays off (explicit opt-in required)."
         )
 
-    out_fmt = cfg.output_format
-    write_md = wants_markdown(out_fmt)
-    write_native = wants_native(out_fmt)
-
-    if cfg.mode == "extract" and write_native and not write_md:
+    kinds = set(parse_output_formats(cfg.output_format))
+    if cfg.write_text_pdf:
+        kinds.add("pdf")
+    if not kinds:
+        kinds = {"md"}
+    out_fmt = format_output_kinds(kinds)
+    cfg.output_format = out_fmt
+    cfg.write_text_pdf = "pdf" in kinds
+    # Per-file: md / native / text-pdf (source on plain text → Markdown)
+    want_md = "md" in kinds
+    want_source = "source" in kinds
+    want_text_pdf = "pdf" in kinds
+    if cfg.mode == "extract" and want_source:
         console.print(
-            "[red]Error:[/red] --format source is not used in extract mode "
-            "(nothing to redact in the original). Use extract for Markdown only, "
-            "or a redact mode (strict/standard) for native PDF/DOCX."
+            "[dim]Note:[/dim] native PDF/DOCX redaction is skipped in extract mode; "
+            "source on plain text still writes Markdown."
         )
-        raise typer.Exit(2)
-    if cfg.mode == "extract" and write_native:
-        console.print(
-            "[dim]Note:[/dim] native PDF/DOCX output is skipped in extract mode."
-        )
-        write_native = False
-        out_fmt = "md"
 
     if offline and cfg.use_llm:
         from anonymizer.anonymize.llm import is_loopback_url
@@ -509,6 +541,21 @@ def _run_pipeline(
 
     for i, input_path in enumerate(inputs, start=1):
         progress.start_document(input_path, index=i, total=len(inputs))
+        # Per-file output plan (source on plain text → Markdown)
+        source_to_md = bool(want_source and source_as_markdown(input_path))
+        write_md_file = bool(want_md or source_to_md)
+        write_native = bool(
+            want_source
+            and native_suffix(input_path) is not None
+            and cfg.mode != "extract"
+        )
+        write_text_pdf = bool(want_text_pdf)
+        need_md_render = write_md_file or write_text_pdf
+        if source_to_md and not want_md and not quiet:
+            console.print(
+                "[dim]Note:[/dim] --format source for plain text writes Markdown "
+                f"({input_path.stem}.anonymized.md)."
+            )
         try:
             doc = extract_document(
                 input_path,
@@ -707,7 +754,9 @@ def _run_pipeline(
         written_out: Path | None = None
         written_map: Path | None = None
         written_native: Path | None = None
+        written_text_pdf: Path | None = None
         wrote_stdout = False
+        md: str | None = None
 
         # Resolve -o: .pdf/.docx → native path; else Markdown path (when writing MD)
         explicit_native_out: Path | None = None
@@ -718,133 +767,152 @@ def _run_pipeline(
             else:
                 explicit_md_out = output
 
-        if write_md:
+        if need_md_render:
             progress.substep("Rendering Markdown…")
             md = render_from_extracted(doc, anon_blocks, result)
 
-            if output is not None and str(output) == "-":
-                progress.substep("Writing to stdout…")
-                sys.stdout.write(md)
-                if not md.endswith("\n"):
-                    sys.stdout.write("\n")
-                wrote_stdout = True
-            else:
-                if explicit_md_out is not None:
-                    out_path = explicit_md_out
+            if write_md_file:
+                if output is not None and str(output) == "-":
+                    progress.substep("Writing to stdout…")
+                    sys.stdout.write(md)
+                    if not md.endswith("\n"):
+                        sys.stdout.write("\n")
+                    wrote_stdout = True
                 else:
-                    out_path = default_output_path(
-                        input_path, out_dir, mode=cfg.mode
-                    )
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                progress.substep(f"Writing {out_path}…")
-                out_path.write_text(md, encoding="utf-8")
-                written_out = out_path
+                    if explicit_md_out is not None:
+                        out_path = explicit_md_out
+                    else:
+                        out_path = default_output_path(
+                            input_path, out_dir, mode=cfg.mode
+                        )
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    progress.substep(f"Writing {out_path}…")
+                    out_path.write_text(md, encoding="utf-8")
+                    written_out = out_path
 
-        # Native PDF/DOCX (black-box PDF / placeholder|remove DOCX)
-        if write_native and cfg.mode != "extract":
-            if native_suffix(input_path) is None:
+        # Reflow PDF from anonymized Markdown (any input type; not native black-box)
+        if write_text_pdf:
+            if wrote_stdout:
                 if not quiet:
                     console.print(
-                        f"[dim]Note:[/dim] --format {out_fmt} has no native "
-                        f"writer for {input_path.suffix or 'this type'}; "
-                        f"Markdown only."
+                        "[yellow]Note:[/yellow] text PDF skipped with -o - "
+                        "(stdout Markdown only)."
+                    )
+            elif md is None:
+                if not quiet:
+                    console.print(
+                        "[yellow]Warning:[/yellow] text PDF requested but no Markdown "
+                        "was rendered; skipping."
                     )
             else:
-                if explicit_native_out is not None:
-                    native_path = explicit_native_out
-                else:
-                    native_path = default_native_output_path(input_path, out_dir)
-                progress.substep(f"Writing native {native_path.name}…")
-                if doc.used_ocr and not quiet:
-                    ocr_meta = (doc.extra or {}).get("ocr") or {}
-                    low = ocr_meta.get("low_coverage_pages") or []
-                    extra = ""
-                    if low:
-                        preview = ", ".join(str(p) for p in low[:8])
-                        more = f" (+{len(low) - 8} more)" if len(low) > 8 else ""
-                        extra = f" Low-coverage page(s): {preview}{more}."
-                    console.print(
-                        "[yellow]Warning:[/yellow] source used OCR — text-layer "
-                        "native redaction cannot black out glyphs still visible "
-                        f"in the page image (residual image risk).{extra}"
-                    )
+                text_pdf_path = default_text_pdf_output_path(input_path, out_dir)
+                progress.substep(f"Writing text PDF {text_pdf_path.name}…")
                 try:
-                    stats = write_native_redacted(
-                        input_path,
-                        native_path,
-                        native_mapping,
-                        redact_style=final_redact_style,
-                        redact_letterhead_images=cfg.redact_letterhead_images,
-                    )
-                except Exception as exc:
+                    write_pdf_from_markdown(md, text_pdf_path)
+                    written_text_pdf = text_pdf_path
+                except Exception as exc:  # noqa: BLE001
                     console.print(
-                        f"[red]Native write failed[/red] {input_path}: {exc}"
+                        f"[yellow]Warning:[/yellow] text PDF write failed "
+                        f"({text_pdf_path.name}): {exc}"
                     )
+
+        # Native PDF/DOCX (black-box PDF / placeholder|remove DOCX)
+        if write_native:
+            if explicit_native_out is not None:
+                native_path = explicit_native_out
+            else:
+                native_path = default_native_output_path(input_path, out_dir)
+            progress.substep(f"Writing native {native_path.name}…")
+            if doc.used_ocr and not quiet:
+                ocr_meta = (doc.extra or {}).get("ocr") or {}
+                low = ocr_meta.get("low_coverage_pages") or []
+                extra = ""
+                if low:
+                    preview = ", ".join(str(p) for p in low[:8])
+                    more = f" (+{len(low) - 8} more)" if len(low) > 8 else ""
+                    extra = f" Low-coverage page(s): {preview}{more}."
+                console.print(
+                    "[yellow]Warning:[/yellow] source used OCR — text-layer "
+                    "native redaction cannot black out glyphs still visible "
+                    f"in the page image (residual image risk).{extra}"
+                )
+            try:
+                stats = write_native_redacted(
+                    input_path,
+                    native_path,
+                    native_mapping,
+                    redact_style=final_redact_style,
+                    redact_letterhead_images=cfg.redact_letterhead_images,
+                )
+            except Exception as exc:
+                console.print(
+                    f"[red]Native write failed[/red] {input_path}: {exc}"
+                )
+                if multi:
+                    continue
+                raise typer.Exit(1) from exc
+            if stats is not None:
+                written_native = native_path
+                if not quiet:
+                    console.print(f"[dim]{stats.summary()}[/dim]")
+                    if stats.residual_image_risk and not cfg.redact_letterhead_images:
+                        console.print(
+                            "[yellow]Shareability:[/yellow] "
+                            f"{stats.images_total} embedded image(s) remain "
+                            "(logos/letterheads). Use "
+                            "[bold]--redact-letterhead-images[/bold] to black-box "
+                            "header/footer image bands."
+                        )
+                    for line in stats.shareability_lines():
+                        console.print(f"[dim]  · {line}[/dim]")
+                    if stats.surfaces_missed and stats.missed:
+                        preview = ", ".join(
+                            repr(s[:40]) for s in stats.missed[:5]
+                        )
+                        more = (
+                            f" (+{stats.surfaces_missed - 5} more)"
+                            if stats.surfaces_missed > 5
+                            else ""
+                        )
+                        console.print(
+                            f"[yellow]Warning:[/yellow] "
+                            f"{stats.surfaces_missed} surface(s) not found "
+                            f"in original layout: {preview}{more}"
+                        )
+                    if stats.verified and stats.residuals_found and stats.residuals:
+                        preview = ", ".join(
+                            repr(s[:40]) for s in stats.residuals[:5]
+                        )
+                        more = (
+                            f" (+{stats.residuals_found - 5} more)"
+                            if stats.residuals_found > 5
+                            else ""
+                        )
+                        console.print(
+                            f"[yellow]Warning:[/yellow] "
+                            f"{stats.residuals_found} residual cleartext "
+                            f"match(es) after native redaction: "
+                            f"{preview}{more}"
+                        )
+                gate_fail = False
+                if cfg.fail_on_native_miss and not stats.is_clean:
+                    gate_fail = True
+                    console.print(
+                        "[red]Native redaction not clean[/red] "
+                        "(misses and/or residuals) — "
+                        "refusing due to --fail-on-native-miss."
+                    )
+                min_rate = cfg.native_min_match_rate
+                if min_rate is not None and stats.match_rate < min_rate:
+                    gate_fail = True
+                    console.print(
+                        "[red]Native match rate too low[/red] "
+                        f"({stats.match_rate:.0%} < {min_rate:.0%} required)."
+                    )
+                if gate_fail:
                     if multi:
                         continue
-                    raise typer.Exit(1) from exc
-                if stats is not None:
-                    written_native = native_path
-                    if not quiet:
-                        console.print(f"[dim]{stats.summary()}[/dim]")
-                        if stats.residual_image_risk and not cfg.redact_letterhead_images:
-                            console.print(
-                                "[yellow]Shareability:[/yellow] "
-                                f"{stats.images_total} embedded image(s) remain "
-                                "(logos/letterheads). Use "
-                                "[bold]--redact-letterhead-images[/bold] to black-box "
-                                "header/footer image bands."
-                            )
-                        for line in stats.shareability_lines():
-                            console.print(f"[dim]  · {line}[/dim]")
-                        if stats.surfaces_missed and stats.missed:
-                            preview = ", ".join(
-                                repr(s[:40]) for s in stats.missed[:5]
-                            )
-                            more = (
-                                f" (+{stats.surfaces_missed - 5} more)"
-                                if stats.surfaces_missed > 5
-                                else ""
-                            )
-                            console.print(
-                                f"[yellow]Warning:[/yellow] "
-                                f"{stats.surfaces_missed} surface(s) not found "
-                                f"in original layout: {preview}{more}"
-                            )
-                        if stats.verified and stats.residuals_found and stats.residuals:
-                            preview = ", ".join(
-                                repr(s[:40]) for s in stats.residuals[:5]
-                            )
-                            more = (
-                                f" (+{stats.residuals_found - 5} more)"
-                                if stats.residuals_found > 5
-                                else ""
-                            )
-                            console.print(
-                                f"[yellow]Warning:[/yellow] "
-                                f"{stats.residuals_found} residual cleartext "
-                                f"match(es) after native redaction: "
-                                f"{preview}{more}"
-                            )
-                    gate_fail = False
-                    if cfg.fail_on_native_miss and not stats.is_clean:
-                        gate_fail = True
-                        console.print(
-                            "[red]Native redaction not clean[/red] "
-                            "(misses and/or residuals) — "
-                            "refusing due to --fail-on-native-miss."
-                        )
-                    min_rate = cfg.native_min_match_rate
-                    if min_rate is not None and stats.match_rate < min_rate:
-                        gate_fail = True
-                        console.print(
-                            "[red]Native match rate too low[/red] "
-                            f"({stats.match_rate:.0%} < {min_rate:.0%} required)."
-                        )
-                    if gate_fail:
-                        if multi:
-                            continue
-                        raise typer.Exit(1)
+                    raise typer.Exit(1)
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -882,6 +950,7 @@ def _run_pipeline(
             f"entities: {counts}"
             + ocr_bit
             + (f" · format={out_fmt}" if out_fmt != "md" else "")
+            + (" · text-pdf" if written_text_pdf is not None else "")
         )
         progress.done_document(summary)
         _report_write_success(
@@ -892,6 +961,7 @@ def _run_pipeline(
             out_path=written_out,
             map_file=written_map,
             native_path=written_native,
+            text_pdf_path=written_text_pdf,
             wrote_stdout=wrote_stdout,
         )
         ok_count += 1
@@ -1405,15 +1475,29 @@ def main(
         typer.Option(
             "--format",
             help=(
-                "Output: md (default Markdown only), source (redacted original PDF "
-                "or Word, same type as input), or both. Source redaction is "
-                "hardened best-effort (text-layer search + wrap/hyphen variants, "
-                "form/annot scrub, residual verify; image-only text may remain). "
-                "Text inputs stay Markdown-only."
+                "Comma-separated outputs: md (Markdown), source (redacted original "
+                "PDF/DOCX; plain text → Markdown), pdf (reflowed text PDF). "
+                "Examples: md | source | pdf | md,pdf | md,source,pdf. "
+                "Compat: both=md+source, all=md+source+pdf. "
+                "Source on PDF/DOCX is best-effort black-box; Text PDF is a separate "
+                "reflowed file (.anonymized.text.pdf)."
             ),
             rich_help_panel="Common",
         ),
     ] = None,
+    write_text_pdf: Annotated[
+        bool,
+        typer.Option(
+            "--pdf/--no-pdf",
+            "--write-text-pdf/--no-write-text-pdf",
+            help=(
+                "Deprecated: prefer --format pdf or --format md,pdf. "
+                "Adds reflowed text PDF ({stem}.anonymized.text.pdf) to outputs."
+            ),
+            rich_help_panel="Common",
+            hidden=False,
+        ),
+    ] = False,
     fail_on_native_miss: Annotated[
         bool,
         typer.Option(
@@ -1547,15 +1631,17 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Anonymize or extract documents → Markdown (optional native PDF/DOCX).
+    """Anonymize or extract documents → Markdown / source / text PDF.
 
     Examples:
 
       anonymize contract.pdf
 
-      anonymize contract.pdf --format both
+      anonymize contract.pdf --format md,source,pdf
 
       anonymize contract.pdf --format source
+
+      anonymize notes.txt --format pdf
 
       anonymize extract report.pdf -o body.md
 
@@ -1599,6 +1685,7 @@ def main(
         reject=reject,
         redact_style=redact_style,
         output_format=output_format,
+        write_text_pdf=write_text_pdf,
         fail_on_native_miss=fail_on_native_miss,
         native_min_match_rate=native_min_match_rate,
         redact_letterhead_images=redact_letterhead_images,

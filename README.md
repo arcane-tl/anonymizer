@@ -10,9 +10,9 @@
   <a href="https://github.com/arcane-tl/anonymizer/releases/latest"><img src="https://img.shields.io/badge/Windows-Setup.exe-0078D6" alt="Windows" /></a>
 </p>
 
-Turn contracts, reports, and scans into shareable Markdown — on your machine, offline by default.
+Turn contracts, reports, and scans into shareable **Markdown**, **Text PDF**, or **redacted source PDF/DOCX** — on your machine, offline by default.
 
-**Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text → Markdown or source filetype**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
+**Anonymizer** is a local tool for **macOS** and **Windows**: **PDF / DOCX / plain text →** the outputs you tick under **Save as**, with optional PII redaction for **English** and **Finnish**. Personal names, emails, phones, IDs, and more become stable placeholders like `[PERSON_1]` — so you can collaborate, archive, or hand a document to a model without leaking the original identifiers.
 
 - **CLI:** `anonymize`
 - **Mac app:** **Anonymizer.app** (drag-and-drop)
@@ -59,17 +59,219 @@ Document review — toggle findings, inspect the document, then save:
 
 ---
 
+## Supported file types
+
+Anonymizer accepts these **local** inputs:
+
+| Type | Extensions |
+|------|------------|
+| PDF | `.pdf` (text layer or OCR) |
+| Word | `.docx` |
+| Plain text / Markdown | `.txt`, `.text`, `.md`, `.markdown` |
+
+**Not supported as direct input** (convert first):
+
+- **Google Docs** — in the browser: **File → Download → Microsoft Word (.docx)** or **PDF Document**. A local `.gdoc` file is only a shortcut, not the document body.
+- **Apple Pages** (`.pages`) — in Pages: **File → Export To → Word** or **PDF**.
+- Legacy `.doc` / other office formats — save or export as `.docx` or PDF.
+
+If you drop an unsupported type, the CLI and desktop apps show this guidance and link back here.
+
+---
+
+## Use cases
+
+Each scenario below works from the **desktop app** (Mac / Windows) or the **`anonymize` CLI**. Outputs land next to the source by default, or in a folder you choose (**Output folder** / `--out-dir`).
+
+### 1. Batch convert files to Markdown
+
+Turn a pile of PDFs, Word docs, or text into `.md` for search, git, or downstream tools.
+
+**GUI**
+
+1. Drop a folder (or add many files with **+**).
+2. Mode: **Extract** (no redaction) or **Strict** / **Standard** if you also want PII scrubbed.
+3. **Save as:** tick **Markdown** only.
+4. Optional: set **Output folder**, then **Start**.
+
+**CLI**
+
+```bash
+# Text only (no redaction) → *.md
+anonymize extract ./inbox/ --out-dir ./md-out/
+
+# Redacted Markdown in one pass
+anonymize ./inbox/ --format md --out-dir ./md-out/
+```
+
+### 2. Batch convert to Text PDF
+
+Produce a reflowed PDF of the (optionally anonymized) text — works for **any** input type, including `.txt`. This is **not** the same as native black-box PDF redaction.
+
+**GUI**
+
+1. Add files or a folder.
+2. Mode: **Extract** or a redact mode.
+3. **Save as:** tick **PDF text** (and Markdown too if you want both).
+4. **Start** → `{stem}.anonymized.text.pdf` (or extract naming for extract mode’s Markdown companion if also ticked).
+
+**CLI**
+
+```bash
+anonymize ./inbox/ --format pdf --out-dir ./pdf-out/
+anonymize notes.txt --format pdf          # plain text → Text PDF
+anonymize extract ./scans/ --format md,pdf --out-dir ./out/
+```
+
+### 3. Remove sensitive information from many files in one run
+
+Scrub people, contacts, and (in strict mode) orgs across a batch.
+
+**GUI**
+
+1. Drop the folder or multi-select files.
+2. Mode: **Strict** (full scrub) or **Standard** (identity PII; keeps company names).
+3. **Save as:** Markdown and/or PDF text; add **Source filetype** for native PDF/DOCX.
+4. Leave **Review** on for the first batch until you trust the results; turn off later for speed.
+5. **Start**.
+
+**CLI**
+
+```bash
+anonymize ./contracts/ --format md,pdf --out-dir ./safe/
+anonymize standard ./hr-forms/ --format md --out-dir ./safe/
+anonymize ./contracts/ --format md,source,pdf --out-dir ./safe/
+```
+
+### 4. Organization-, service-, or document-type templates
+
+Builtin packs only cover field labels and legal *boilerplate*. For client names, product codes, or recurring false positives, use **your** templates.
+
+**GUI**
+
+1. **Templates…** → enable packs for this run; duplicate a builtin or create a user pack.
+2. Edit allow / deny lists (names to *keep* vs *always redact*).
+3. Run with **Review** on → in the review window, teach keep-clear / new redactions into a user pack.
+4. Later runs: same templates stay selected (`templates_enabled` in config).
+
+**CLI**
+
+```bash
+anonymize templates                                    # list packs
+anonymize contract.pdf --template fi-field-labels,acme-hr
+anonymize contract.pdf --review-window --learn-to acme-hr
+# After review, keep-clear / user-adds merge into the acme-hr user pack
+```
+
+### 5. Fully local review and redaction changes
+
+Nothing leaves the machine by default. Review is transparent: see every tag, un-check false positives, add misses, then write.
+
+**GUI**
+
+1. Add file(s). Mode + **Save as** as needed.
+2. Keep **Review findings before saving** checked (default).
+3. **Start** → document review window: toggle findings, add spans, optionally **teach** a template.
+4. Save; optionally **Open result when finished**.
+
+**CLI**
+
+```bash
+anonymize contract.pdf --review-window --format md
+anonymize contract.pdf --review                 # terminal checklist
+anonymize contract.pdf --reject ORG_1,PHONE_2   # non-interactive keep-clear
+```
+
+### 6. Shareable native PDF or Word (layout preserved)
+
+Black-box redaction of the **original** PDF/DOCX (not a reflow). Pair with **More options** for letterhead logos and a hard fail if text-layer hits are missed.
+
+**GUI**
+
+1. Add `.pdf` / `.docx` files.
+2. Mode: **Strict** or **Standard**.
+3. **Save as:** tick **Source filetype** (optionally Markdown / PDF text too).
+4. **More options:** enable **Black-box PDF letterhead/logo images** and/or **Fail if native … misses cleartext**.
+5. **Review** recommended, then **Start**.
+
+**CLI**
+
+```bash
+anonymize contract.pdf --format source --redact-letterhead-images
+anonymize contract.pdf --format md,source --fail-on-native-miss
+anonymize brief.docx --format source --redact-style placeholder
+```
+
+Plain text with **Source filetype** / `--format source` writes Markdown (`.anonymized.md`) — there is no native `.txt` writer.
+
+### 7. Extract text only (no redaction)
+
+OCR’d archives, bulk text dump, or “just give me Markdown/PDF of what’s in the file.”
+
+**GUI**
+
+1. Mode: **Extract**.
+2. **Save as:** Markdown and/or PDF text.
+3. **Start** (Review is off in extract).
+
+**CLI**
+
+```bash
+anonymize extract ./scans/ --out-dir ./text/
+anonymize extract report.pdf --format md,pdf --force-ocr
+```
+
+### 8. Hand a document to an LLM without leaking PII
+
+Scrub first, then paste or upload the anonymized Markdown (or Text PDF). Stay offline unless you explicitly pass `--llm`.
+
+**GUI**
+
+1. Mode: **Strict**.
+2. **Save as:** Markdown (and PDF text if useful).
+3. **Review** on → clear any over-redaction → save.
+4. Use the `.anonymized.md` with your model. Do **not** share a `--map` file (it contains PII).
+
+**CLI**
+
+```bash
+anonymize notes.pdf --format md --out-dir ./for-llm/
+# Optional local LLM *assist* during detection (still writes local files only):
+anonymize notes.pdf --format md --llm --llm-provider ollama
+```
+
+### 9. Mixed outputs in one pass
+
+One analysis, several artifacts: Markdown for editing, native PDF for layout, Text PDF for a clean reflow.
+
+**GUI**
+
+1. **Save as:** tick **Markdown**, **Source filetype**, and **PDF text**.
+2. **Start** → e.g. `contract.anonymized.md`, `contract.anonymized.pdf`, `contract.anonymized.text.pdf`.
+
+**CLI**
+
+```bash
+anonymize contract.pdf --format md,source,pdf --out-dir ./out/
+# Compat alias:
+anonymize contract.pdf --format all --out-dir ./out/
+```
+
+---
+
 ## Why Anonymizer
 
 - **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM (`--llm`)  
 - **Real office formats** — PDF (including OCR for scans), Word (`.docx`), and text/Markdown  
-- **Optional source redaction** — redacted `.pdf` / `.docx` matching the input type (`--format source` or `both`)  
+- **Flexible outputs** — **Save as** any combo: Markdown, Source filetype (black-box PDF / redacted DOCX; plain text → MD), PDF text (`--format md,source,pdf`)  
 - **Modes that match the job** — full scrub, identity-only, or plain text extract  
 - **Stable placeholders** — the same person stays `[PERSON_1]` throughout a document  
 - **English + Finnish** — auto language detection, patterns + neural NER + domain false-positive filters  
-- **Human in the loop** — optional review to keep false positives in clear text  
-- **No hard-coded company catalogs** — patterns, models, and *your* allow/deny lists only  
-- **Desktop GUIs** — same options on Mac (droplet) and Windows (Setup wizard / Start Menu)
+- **Human in the loop** — **Review** stays on the main panel; keep false positives in clear text  
+- **Templates you own** — org / service / doc-type allow/deny packs; teach after review  
+- **More options** when you need them — output style, fail-on-native-miss, letterhead wipe  
+- **No hard-coded company catalogs** — patterns, models, and *your* lists only  
+- **Desktop GUIs** — same product on Mac (droplet) and Windows (Setup / Start Menu)
 
 ---
 
@@ -193,9 +395,14 @@ anonymize contract.pdf --review
 # Delete findings instead of [PERSON_1] tags
 anonymize contract.pdf --redact-style remove
 
-# Both: Markdown + redacted source (PDF→PDF, DOCX→DOCX)
-anonymize contract.pdf --format both
-# Source only (no Markdown): --format source
+# Markdown + redacted source (PDF→PDF / DOCX→DOCX)
+anonymize contract.pdf --format md,source
+# Source only (native black-box PDF, no Markdown file): --format source
+
+# Reflowed text PDF from Markdown (any input; distinct from source black-box)
+anonymize notes.txt --format pdf
+anonymize contract.pdf --format md,source,pdf
+# → contract.anonymized.md + contract.anonymized.pdf + contract.anonymized.text.pdf
 
 anonymize examples    # more copy-paste commands
 anonymize --help
@@ -208,7 +415,20 @@ anonymize --help
 | **Mac** | **Anonymizer.app** (Applications / Homebrew cask). Double-click opens options with an empty file list, or drop files to pre-fill. Needs CLI on PATH for the droplet. |
 | **Windows** | Start Menu **Anonymizer** (after Setup.exe), or portable `Anonymizer.exe`. |
 
-In options: **Files** with **+** / **−** (add from several folders), mode / style / format, **output folder** (default: same folder as the source), **Templates…**, **Review findings** (opens the document review window; default on), **Open result when finished**.
+**Options panel map**
+
+| Control | Role |
+|---------|------|
+| **Files** (+ / −) | Add from several folders; drop or argv pre-fills |
+| **Mode** | Strict / Standard / Extract |
+| **Save as** | Tick **Markdown**, **Source filetype**, **PDF text** (any combo) |
+| **Output folder** | Default: same folder as source; or Choose… (`--out-dir`) |
+| **Active templates** / **Templates…** | Allow/deny packs for this run |
+| **Review findings** | Always visible (default on) → document review window |
+| **Open result when finished** | Always visible |
+| **More options** | Collapsed: output style, fail-on-native-miss, letterhead wipe |
+
+See [Use cases](#use-cases) for step-by-step scenarios.
 
 ---
 
@@ -278,21 +498,24 @@ anonymize doc.pdf --review --learn-to my-company
 anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 ```
 
-| Flag | Role |
-|------|------|
-| `-r` / `--review` | Terminal checklist: mark false positives to keep clear before write |
-| `--review-window` | Document review UI (used by Mac/Windows GUIs) |
-| `--reject LIST` | Same without a prompt (`ORG_1,PHONE_2`) |
-| `--redact-style` | `placeholder` (default tags) or `remove` (delete text). Review works with both. |
-| `--format` | `md` (default Markdown only), `source` (redacted original PDF or Word, same type as input), or `both`. PDF = black boxes + metadata scrub; DOCX = tags/delete + property scrub. **Best-effort** (not forensic): images, some forms/comments, wrap misses may remain. Text inputs stay Markdown-only. |
-| `--llm` | Opt-in LLM layer only (YAML `use_llm` alone is ignored). `--offline` blocks remote xAI and non-local Ollama URLs. |
-| `--keep-headers` | Keep PDF running headers/footers (default: strip) |
-| `-o -` | Markdown on stdout (progress stays on stderr) |
-| `--config` | YAML: mode, `templates_enabled`, allowlist/denylist (legacy), `redact_style`, `format`, … |
-| `--template` | Comma-separated template ids (allow/deny packs). Default: builtin packs marked default. |
-| `--learn-to` | After `--review`, merge keep-clear / user-added surfaces into a user template. |
+| Flag | GUI counterpart | Role |
+|------|-----------------|------|
+| `-r` / `--review` | **Review findings** (terminal) | Checklist: mark false positives to keep clear before write |
+| `--review-window` | **Review findings** (default) | Document review UI (Mac/Windows GUIs) |
+| `--reject LIST` | — | Same without a prompt (`ORG_1,PHONE_2`) |
+| `--redact-style` | **More options → Output style** | `placeholder` (default) or `remove`. Review works with both. |
+| `--format` | **Save as** ticks | `md` / `source` / `pdf` (comma list). Source on plain text → Markdown. Compat: `both`=`md,source`, `all`=`md,source,pdf`. |
+| `--fail-on-native-miss` | **More options** | Exit 1 if native PDF/DOCX misses or residuals remain |
+| `--redact-letterhead-images` | **More options** | Black-box PDF header/footer logo bands |
+| `--llm` | — | Opt-in LLM layer (`--offline` blocks remote xAI / non-local Ollama) |
+| `--keep-headers` | — | Keep PDF running headers/footers (default: strip) |
+| `-o -` | — | Markdown on stdout (progress on stderr) |
+| `--out-dir` | **Output folder** | Batch / chosen directory |
+| `--config` | — | YAML: mode, `templates_enabled`, `format`, … |
+| `--template` | **Templates…** | Comma-separated pack ids |
+| `--learn-to` | Review window → teach | Merge keep-clear / user-adds into a user template |
 
-**GUIs (Mac + Windows):** options open with empty file list (or pre-filled on drop/argv); **+ / −** files; **output folder** (default same folder as source, or choose `--out-dir`); mode / style / format; **Templates…** (Mac: native AppKit + `templates_io`; Windows: Tk two-step enable/edit); review (default on). Teach into user packs from the **review window**. Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
+**GUIs (Mac + Windows):** empty file list or drop/argv pre-fill; **Save as** / **Review** / **Open** / **More options** as above; **Templates…** (Mac: AppKit + `templates_io`; Windows: Tk). Teach packs from the **review window**. Selection persists as `templates_enabled` in `~/.config/anonymizer/config.yaml`.
 
 ---
 
