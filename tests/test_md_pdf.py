@@ -7,7 +7,11 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from anonymizer.output.md_pdf import strip_yaml_front_matter, write_pdf_from_markdown
+from anonymizer.output.md_pdf import (
+    DEFAULT_MD_PDF_CSS,
+    strip_yaml_front_matter,
+    write_pdf_from_markdown,
+)
 from anonymizer.util.files import default_text_pdf_output_path
 
 
@@ -58,3 +62,62 @@ def test_write_pdf_from_markdown_empty_body(tmp_path: Path):
     dest = tmp_path / "empty.anonymized.text.pdf"
     write_pdf_from_markdown("---\nx: 1\n---\n\n", dest)
     assert dest.is_file()
+
+
+def _span_sizes_by_text(pdf_path: Path) -> list[tuple[str, float]]:
+    doc = pymupdf.open(pdf_path)
+    out: list[tuple[str, float]] = []
+    try:
+        for page in doc:
+            for block in page.get_text("dict").get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        t = (span.get("text") or "").strip()
+                        if t:
+                            out.append((t, float(span.get("size") or 0)))
+    finally:
+        doc.close()
+    return out
+
+
+def test_write_pdf_formats_headings_lists_tables(tmp_path: Path):
+    md = """# Title Heading
+
+## Section Two
+
+Intro with **bold** and *italic*.
+
+- Bullet one
+- Bullet two
+
+| Name | Role |
+| --- | --- |
+| Alice | Lead |
+| Bob | Dev |
+"""
+    dest = tmp_path / "formatted.anonymized.text.pdf"
+    write_pdf_from_markdown(md, dest, css=DEFAULT_MD_PDF_CSS)
+    assert dest.is_file()
+
+    spans = _span_sizes_by_text(dest)
+    by_text = {t: sz for t, sz in spans}
+    assert "Title Heading" in by_text
+    assert "Section Two" in by_text
+    # Heading hierarchy: H1 larger than H2 larger than body
+    assert by_text["Title Heading"] > by_text["Section Two"]
+    body_sizes = [sz for t, sz in spans if t.startswith("Intro")]
+    assert body_sizes
+    assert by_text["Section Two"] > body_sizes[0]
+
+    text = "\n".join(t for t, _ in spans)
+    assert "Bullet one" in text
+    assert "Alice" in text and "Lead" in text
+    # List markers rendered as bullet glyphs
+    assert any(t.startswith("•") or "•" in t for t, _ in spans)
+
+
+def test_default_css_constant_is_nonempty():
+    assert "@page" in DEFAULT_MD_PDF_CSS
+    assert "h1" in DEFAULT_MD_PDF_CSS

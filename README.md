@@ -108,6 +108,8 @@ anonymize ./inbox/ --format md --out-dir ./md-out/
 
 Produce a reflowed PDF of the (optionally anonymized) text — works for **any** input type, including `.txt`. This is **not** the same as native black-box PDF redaction.
 
+Text PDF formatting (titles, lists, tables) follows the **Markdown structure** we recover: headings/lists from Markdown/TXT and DOCX styles, GFM tables from DOCX grids, and **best-effort** heading/list detection from PDF fonts. Prefer **Source filetype** when you need the original page layout.
+
 **GUI**
 
 1. Add files or a folder.
