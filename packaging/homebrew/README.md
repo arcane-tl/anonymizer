@@ -87,6 +87,17 @@ open -a Anonymizer
 
 ## Developer: sync monorepo → tap
 
+Preferred:
+
+```bash
+./packaging/homebrew/sync-tap.sh
+# after a release, optionally:
+./packaging/homebrew/sync-tap.sh --commit "anonymizer 1.4.6"
+git -C "$(brew --repository arcane-tl/anonymizer)" push origin HEAD
+```
+
+Manual equivalent:
+
 ```bash
 TAP="$(brew --repository arcane-tl/anonymizer)"
 mkdir -p "$TAP/Formula" "$TAP/Casks"

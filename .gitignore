@@ -34,10 +34,14 @@ AuthKey_*.p8
 
 # Tool outputs (may contain residual or mapped PII)
 *.anonymized.md
+*.anonymized.pdf
+*.anonymized.docx
+*.anonymized.text.pdf
 *.map.json
 /out/
 /output/
 samples/out/
+tmp_native_smoke/
 
 # Local private / customer documents (never commit)
 /test.pdf
