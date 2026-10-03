@@ -1001,6 +1001,28 @@ def cmd_doctor() -> None:
         )
         ok_all = False
 
+    # Non-fatal: ~/.local/bin may shadow a newer Homebrew install
+    local_cli = Path.home() / ".local" / "bin" / "anonymize"
+    brew_cli = None
+    for candidate in (Path("/opt/homebrew/bin/anonymize"), Path("/usr/local/bin/anonymize")):
+        if candidate.is_file():
+            brew_cli = candidate
+            break
+    if (
+        which
+        and brew_cli is not None
+        and local_cli.is_file()
+        and Path(which).resolve() == local_cli.resolve()
+    ):
+        rows.append(
+            (
+                "PATH shadow",
+                f"{local_cli} shadows Homebrew ({brew_cli}) — "
+                "hash -r or ANONYMIZER_BIN=/opt/homebrew/bin/anonymize",
+                True,  # warning only; do not fail doctor
+            )
+        )
+
     try:
         import anonymizer as _pkg
 

@@ -8,7 +8,7 @@
 # Options:
 #   --review              Document review window (via --review-window on the CLI)
 #   --redact-style STYLE  placeholder (default) | remove
-#   --format FMT          md (default) | source | both (source = redacted PDF/DOCX)
+#   --format FMT          md | source | pdf | comma-list | both | all
 #   --config PATH         YAML config
 #   --template IDS        Comma-separated template ids → CLI --template
 #   --learn-to ID         After review, teach pack (CLI --learn-to)
@@ -21,7 +21,8 @@
 #
 # On success, prints one line per written output file to stdout:
 #   OUTPUT:/absolute/path/to/file.md
-#   OUTPUT:/absolute/path/to/file.anonymized.pdf   (when --format both|source)
+#   OUTPUT:/absolute/path/to/file.anonymized.pdf       (native source)
+#   OUTPUT:/absolute/path/to/file.anonymized.text.pdf  (reflow Text PDF)
 #
 # --review opens the document review window (--review-window). Prefer
 # Terminal.app / a desktop session so the GUI can display.
@@ -30,6 +31,8 @@
 #   1. $ANONYMIZER_BIN
 #   2. $HOME/.local/bin/anonymize
 #   3. command -v anonymize
+# If both ~/.local/bin and Homebrew provide anonymize, a stderr warning is
+# printed so the app does not silently run a stale From-Source CLI.
 
 set -euo pipefail
 
@@ -40,7 +43,7 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
 
   --review              Document review window before saving
   --redact-style STYLE  placeholder | remove (default: placeholder)
-  --format FMT          md | source | both (default: md)
+  --format FMT          md | source | pdf | both | all | comma-list (default: md)
   --fail-on-native-miss Exit 1 when native PDF/DOCX misses or residuals remain
   --redact-letterhead-images  Black-box PDF header/footer logo images
   --config PATH         YAML config file
@@ -54,13 +57,30 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
-Stdout (success): one OUTPUT:/abs/path line per written file (MD and/or native).
+Stdout (success): one OUTPUT:/abs/path line per written file (MD / native / Text PDF).
 --templates-ui stdout: ENABLED:id1,id2  or  CANCEL
 
 Environment:
   ANONYMIZER_BIN   Absolute path to the anonymize executable
   ANONYMIZER_OPEN  If set to 1/y/yes, open output files after success (TTY only)
 EOF
+}
+
+_warn_path_shadow() {
+  local chosen="$1"
+  local brew_bin=""
+  local local_bin="$HOME/.local/bin/anonymize"
+  if [[ -x /opt/homebrew/bin/anonymize ]]; then
+    brew_bin=/opt/homebrew/bin/anonymize
+  elif [[ -x /usr/local/bin/anonymize ]]; then
+    brew_bin=/usr/local/bin/anonymize
+  fi
+  if [[ -n "$brew_bin" && -x "$local_bin" && "$chosen" == "$local_bin" ]]; then
+    echo "warning: using $local_bin while Homebrew also has anonymize at $brew_bin." >&2
+    echo "warning: the Mac app may run an older From-Source CLI. Prefer:" >&2
+    echo "warning:   brew link --overwrite anonymizer && hash -r" >&2
+    echo "warning: or set ANONYMIZER_BIN=$brew_bin" >&2
+  fi
 }
 
 find_anonymize() {
@@ -74,6 +94,7 @@ find_anonymize() {
   fi
   local candidate="$HOME/.local/bin/anonymize"
   if [[ -x "$candidate" ]]; then
+    _warn_path_shadow "$candidate"
     printf '%s\n' "$candidate"
     return 0
   fi
@@ -160,6 +181,66 @@ expected_native_output_path() {
     *) return 1 ;;
   esac
   printf '%s/%s\n' "$dir" "$name"
+}
+
+# Reflow Text PDF: {stem}.anonymized.text.pdf (any input type).
+expected_text_pdf_output_path() {
+  local input_path="$1"
+  local dir base stem name
+  base=$(basename -- "$input_path")
+  if [[ -n "${OUT_DIR:-}" ]]; then
+    dir=$(cd "$OUT_DIR" && pwd)
+  else
+    dir=$(cd "$(dirname -- "$input_path")" && pwd)
+  fi
+  if [[ "$base" == *.* ]]; then
+    stem="${base%.*}"
+  else
+    stem="$base"
+  fi
+  name="${stem}.anonymized.text.pdf"
+  printf '%s/%s\n' "$dir" "$name"
+}
+
+# True if format token set includes Text PDF (pdf / text-pdf / all / …).
+format_wants_text_pdf() {
+  local fmt
+  fmt=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr '\n\r' ',,')
+  case "$fmt" in
+    ""|md|markdown|source|native|original) return 1 ;;
+    pdf|text-pdf|text_pdf|textpdf|all) return 0 ;;
+  esac
+  # Comma / space lists: md,pdf | md,source,pdf
+  if printf '%s' "$fmt" | grep -Eq '(^|[, ])(pdf|text-pdf|text_pdf|textpdf|all)([, ]|$)'; then
+    return 0
+  fi
+  return 1
+}
+
+format_wants_markdown() {
+  local fmt
+  fmt=$(printf '%s' "${1:-md}" | tr '[:upper:]' '[:lower:]' | tr '\n\r' ',,')
+  case "$fmt" in
+    source|native|original|pdf|text-pdf|text_pdf|textpdf) return 1 ;;
+    ""|md|markdown|both|all|dual) return 0 ;;
+  esac
+  if printf '%s' "$fmt" | grep -Eq '(^|[, ])(md|markdown|both|all|dual)([, ]|$)'; then
+    return 0
+  fi
+  # bare "source,pdf" has no md
+  return 1
+}
+
+format_wants_native() {
+  local fmt
+  fmt=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr '\n\r' ',,')
+  case "$fmt" in
+    source|native|original|both|all|dual) return 0 ;;
+  esac
+  if printf '%s' "$fmt" | grep -Eq '(^|[, ])(source|native|original|both|all|dual)([, ]|$)'; then
+    return 0
+  fi
+  return 1
 }
 
 # Build a temp YAML config from optional --config, --allow-from, --deny-from, style.
@@ -414,9 +495,8 @@ for f in "$@"; do
 
   emit_outputs() {
     local f_abs="$1" mode="$2" fmt="${3:-md}"
-    local out_path native_path
-    # Markdown unless format is source-only
-    if [[ "$fmt" != "source" && "$fmt" != "native" && "$fmt" != "original" ]]; then
+    local out_path native_path text_pdf_path
+    if format_wants_markdown "$fmt"; then
       out_path=$(expected_output_path "$f_abs" "$mode")
       if [[ -f "$out_path" ]]; then
         printf 'OUTPUT:%s\n' "$out_path"
@@ -425,19 +505,25 @@ for f in "$@"; do
         echo "warning: expected output missing: $out_path" >&2
       fi
     fi
-    # Native when format is source or both
-    case "$fmt" in
-      source|native|original|both|all|dual)
-        if native_path=$(expected_native_output_path "$f_abs"); then
-          if [[ -f "$native_path" ]]; then
-            printf 'OUTPUT:%s\n' "$native_path"
-            outputs+=("$native_path")
-          else
-            echo "warning: expected native output missing: $native_path" >&2
-          fi
+    if format_wants_native "$fmt"; then
+      if native_path=$(expected_native_output_path "$f_abs"); then
+        if [[ -f "$native_path" ]]; then
+          printf 'OUTPUT:%s\n' "$native_path"
+          outputs+=("$native_path")
+        else
+          echo "warning: expected native output missing: $native_path" >&2
         fi
-        ;;
-    esac
+      fi
+    fi
+    if format_wants_text_pdf "$fmt"; then
+      text_pdf_path=$(expected_text_pdf_output_path "$f_abs")
+      if [[ -f "$text_pdf_path" ]]; then
+        printf 'OUTPUT:%s\n' "$text_pdf_path"
+        outputs+=("$text_pdf_path")
+      else
+        echo "warning: expected Text PDF missing: $text_pdf_path" >&2
+      fi
+    fi
   }
 
   FMT="${OUTPUT_FORMAT:-md}"

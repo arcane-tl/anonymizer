@@ -8,6 +8,11 @@ from pathlib import Path
 
 from anonymizer.anonymize.language import tesseract_lang_string
 from anonymizer.extract.ocr import ocr_pdf_to_searchable
+from anonymizer.extract.pdf_structure import (
+    block_font_stats,
+    classify_pdf_block,
+    page_median_font_size,
+)
 from anonymizer.extract.text_repair import repair_text_artifacts
 from anonymizer.models import BlockKind, ExtractedDoc, TextBlock
 
@@ -113,10 +118,19 @@ def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
         for page_i, page in enumerate(doc, start=1):
             # "blocks" mode: list of (x0,y0,x1,y1, text, block_no, block_type)
             page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+            raw_blocks = [
+                b for b in page_dict.get("blocks", []) if b.get("type") == 0
+            ]
+            # Page median font size for relative heading detection
+            size_samples: list[float] = []
+            for b in raw_blocks:
+                sz, _ = block_font_stats(b)
+                if sz > 0:
+                    size_samples.append(sz)
+            median = page_median_font_size(size_samples)
+
             page_blocks = 0
-            for block in page_dict.get("blocks", []):
-                if block.get("type") != 0:  # text
-                    continue
+            for block in raw_blocks:
                 lines: list[str] = []
                 for line in block.get("lines", []):
                     spans = [s.get("text", "") for s in line.get("spans", [])]
@@ -127,8 +141,20 @@ def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
                 if para:
                     total_chars += len(para)
                     page_blocks += 1
+                    max_size, bold = block_font_stats(block)
+                    kind, level = classify_pdf_block(
+                        para,
+                        max_size=max_size,
+                        page_median_size=median,
+                        bold=bold,
+                    )
                     blocks.append(
-                        TextBlock(text=para, kind=BlockKind.PARAGRAPH, page=page_i)
+                        TextBlock(
+                            text=para,
+                            kind=kind,
+                            level=level,
+                            page=page_i,
+                        )
                     )
             # Fallback if dict empty
             if page_blocks == 0:
@@ -139,9 +165,18 @@ def _extract_with_pymupdf(path: Path) -> tuple[list[TextBlock], int, int]:
                     para = repair_text_artifacts(_join_pdf_lines(raw_lines))
                     if para:
                         total_chars += len(para)
+                        kind, level = classify_pdf_block(
+                            para,
+                            max_size=11.0,
+                            page_median_size=11.0,
+                            bold=False,
+                        )
                         blocks.append(
                             TextBlock(
-                                text=para, kind=BlockKind.PARAGRAPH, page=page_i
+                                text=para,
+                                kind=kind,
+                                level=level,
+                                page=page_i,
                             )
                         )
             # Hyperlink URIs (often only in annotations; display text may omit host)

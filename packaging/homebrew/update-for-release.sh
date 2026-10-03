@@ -78,4 +78,6 @@ Path(r"""$CASK""").write_text(ct, encoding="utf-8")
 print(f"Updated formula + cask to {version}")
 print(f"  source sha256: {source_sha}")
 print(f"  cask   sha256: {cask_sha}")
+print("Next: ./packaging/homebrew/sync-tap.sh --commit \"anonymizer {version}\"")
+print("      then push the tap (Formula/ + Casks/ only — no root anonymizer.rb).")
 PY
