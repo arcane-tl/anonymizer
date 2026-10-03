@@ -264,7 +264,9 @@ def _build_config(
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
-    redact_style: str | None,
+    ai_check: bool | None = None,
+    no_ai_check: bool = False,
+    redact_style: str | None = None,
     output_format: str | None = None,
     write_text_pdf: bool | None = None,
     fail_on_native_miss: bool | None = None,
@@ -306,10 +308,18 @@ def _build_config(
         cfg.llm_provider = llm_provider
     if llm_model:
         cfg.llm_model = llm_model
+    # AI check: --no-ai-check wins; --ai-check forces on; else YAML / auto (None)
+    if no_ai_check:
+        cfg.ai_check = False
+    elif ai_check is True:
+        cfg.ai_check = True
+    # else leave cfg.ai_check from YAML (None = auto when Apple FM available)
     if redact_style is not None:
         cfg.redact_style = normalize_redact_style(redact_style)
     else:
         cfg.redact_style = normalize_redact_style(cfg.redact_style)
+    if cfg.mode == "extract":
+        cfg.ai_check = False
     if output_format is not None:
         kinds = set(parse_output_formats(output_format))
     else:
@@ -378,6 +388,8 @@ def _run_pipeline(
     llm: bool,
     llm_provider: str | None,
     llm_model: str | None,
+    ai_check: bool = False,
+    no_ai_check: bool = False,
     offline: bool,
     quiet: bool,
     verbose: bool,
@@ -424,6 +436,8 @@ def _run_pipeline(
             llm=llm,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            ai_check=True if ai_check else None,
+            no_ai_check=no_ai_check,
             redact_style=redact_style,
             output_format=output_format,
             write_text_pdf=write_text_pdf or None,
@@ -621,6 +635,67 @@ def _run_pipeline(
         # Front matter / result should reflect the user's chosen final style
         result.redact_style = final_redact_style
 
+        # --- Automatic Apple FM AI check (skip silently if unavailable) ---
+        ai_pre_keep: list[str] = []
+        ai_pending_misses: list[tuple[str, str]] = []  # (text, entity_type)
+        ai_enabled = cfg.ai_check is not False and cfg.mode != "extract"
+        if ai_enabled and result.mapping:
+            from anonymizer.anonymize.ai_check import (
+                apply_ai_check_to_session,
+                run_ai_check,
+            )
+            from anonymizer.anonymize.review import ReviewSession as _RS
+
+            progress.substep("AI check (Apple)…")
+            ai_res = run_ai_check(
+                original_blocks=block_texts,
+                mapping=result.mapping,
+                entity_types=cfg.effective_entities(),
+                enabled=True,
+            )
+            if ai_res.ran:
+                if not quiet:
+                    console.print(
+                        f"[dim]AI check ({ai_res.provider}) "
+                        f"{ai_res.latency_s:.1f}s · "
+                        f"{len(ai_res.verdicts)} verdicts · "
+                        f"{len(ai_res.misses)} miss proposals[/dim]"
+                    )
+                if do_review:
+                    # Review on: collect drops for pre_keep; misses added in session
+                    ai_pre_keep = list(ai_res.drop_placeholders)
+                    for m in ai_res.misses:
+                        if m.confidence in {"high", "medium"}:
+                            ai_pending_misses.append((m.text, m.entity_type))
+                else:
+                    # Review off: auto-apply high-confidence gated changes
+                    session_ai = _RS.from_mapping(block_texts, result.mapping)
+                    stats = apply_ai_check_to_session(
+                        session_ai, ai_res, auto_apply=True
+                    )
+                    apply_style = (
+                        "placeholder"
+                        if final_redact_style == "remove"
+                        else final_redact_style
+                    )
+                    anon_blocks, new_map = session_ai.apply(style=apply_style)
+                    result.mapping = new_map
+                    result.entity_counts = recount_entities(new_map)
+                    result.anonymized_text = "\n\n".join(anon_blocks)
+                    if not quiet and (stats["drops"] or stats["misses"]):
+                        bits = []
+                        if stats["drops"]:
+                            bits.append(f"{stats['drops']} dropped")
+                        if stats["misses"]:
+                            bits.append(f"{stats['misses']} added")
+                        console.print(
+                            f"[dim]AI check applied: {', '.join(bits)}.[/dim]"
+                        )
+            elif verbose and ai_res.skip_reason:
+                console.print(
+                    f"[dim]AI check skipped: {ai_res.skip_reason}[/dim]"
+                )
+
         # --- Optional review / --reject (session: un-redact + add) ---
         pre_keep: list[str] = []
         if reject and result.mapping:
@@ -630,6 +705,9 @@ def _run_pipeline(
                     f"[yellow]--reject unknown tag ignored:[/yellow] {u}"
                 )
             pre_keep.extend(accepted)
+        for ph in ai_pre_keep:
+            if ph not in pre_keep and result.mapping and ph in result.mapping:
+                pre_keep.append(ph)
 
         if do_review and result.mapping:
             progress.substep("Review redactions…")
@@ -669,9 +747,22 @@ def _run_pipeline(
                     writing_native=bool(write_native and native_suffix(input_path)),
                     residual_image_risk=bool(doc.used_ocr or img_count),
                 )
+            review_mapping = result.mapping
+            if ai_pending_misses:
+                from anonymizer.anonymize.review import ReviewSession as _RS2
+
+                prep = _RS2.from_mapping(block_texts, result.mapping)
+                for text, et in ai_pending_misses:
+                    try:
+                        prep.add_redaction(text, et)
+                    except ValueError:
+                        pass
+                review_mapping = {
+                    f.placeholder: f.original for f in prep.findings
+                }
             try:
                 session = interactive_review(
-                    result.mapping,
+                    review_mapping,
                     console=console,
                     file_label=label,
                     original_blocks=block_texts,
@@ -1000,6 +1091,25 @@ def cmd_doctor() -> None:
             )
         )
         ok_all = False
+
+    try:
+        from anonymizer.anonymize.ai_check import apple_fm_available
+
+        fm_ok, fm_how = apple_fm_available()
+        if fm_ok:
+            rows.append(
+                ("Apple FM AI check", f"available ({fm_how})", True)
+            )
+        else:
+            rows.append(
+                (
+                    "Apple FM AI check",
+                    f"skip — {fm_how[:80]}",
+                    True,  # informational; not a doctor failure
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        rows.append(("Apple FM AI check", f"probe error ({exc})", True))
 
     # Non-fatal: ~/.local/bin may shadow a newer Homebrew install
     local_cli = Path.home() / ".local" / "bin" / "anonymize"
@@ -1628,6 +1738,25 @@ def main(
             rich_help_panel="Advanced",
         ),
     ] = None,
+    ai_check: Annotated[
+        bool,
+        typer.Option(
+            "--ai-check",
+            help=(
+                "Force Apple Foundation Models AI check when available "
+                "(default: auto-run on Apple Intelligence Macs)."
+            ),
+            rich_help_panel="Advanced",
+        ),
+    ] = False,
+    no_ai_check: Annotated[
+        bool,
+        typer.Option(
+            "--no-ai-check",
+            help="Disable automatic Apple FM AI check.",
+            rich_help_panel="Advanced",
+        ),
+    ] = False,
     offline: Annotated[
         bool,
         typer.Option(
@@ -1714,6 +1843,8 @@ def main(
         llm=llm,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        ai_check=ai_check,
+        no_ai_check=no_ai_check,
         offline=offline,
         quiet=quiet,
         verbose=verbose,

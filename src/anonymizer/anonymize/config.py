@@ -199,6 +199,9 @@ class AnonymizerConfig:
     llm_provider: str = "ollama"  # ollama | xai | off
     llm_model: str | None = None
     ollama_url: str = "http://127.0.0.1:11434"
+    # Automatic Apple Foundation Models AI check when available (None = auto)
+    # True = force attempt; False = never (--no-ai-check)
+    ai_check: bool | None = None
     # Keep PDF running headers/footers/page marks (default: strip them)
     keep_headers: bool = False
     # placeholder = [PERSON_1] tags (default); remove = delete the span
@@ -359,6 +362,13 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.llm_model = str(data["llm_model"]) if data["llm_model"] else None
         if "ollama_url" in data and data["ollama_url"]:
             cfg.ollama_url = str(data["ollama_url"])
+        if "ai_check" in data:
+            # null/omit = auto; true/false force on/off
+            val = data["ai_check"]
+            if val is None:
+                cfg.ai_check = None
+            else:
+                cfg.ai_check = bool(val)
         if "keep_headers" in data:
             cfg.keep_headers = bool(data["keep_headers"])
         if "redact_style" in data and data["redact_style"]:

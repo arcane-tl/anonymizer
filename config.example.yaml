@@ -99,3 +99,9 @@ denylist:
 # llm_provider: ollama   # or xai (remote — sends document text to api.x.ai)
 # llm_model: llama3.2
 # ollama_url: http://127.0.0.1:11434   # non-loopback warned; blocked with --offline
+
+# Automatic Apple Foundation Models AI check (Mac + Apple Intelligence).
+# null/omit = auto (run when FM available, skip otherwise)
+# false = never (--no-ai-check); true = force attempt
+# ai_check: null
+

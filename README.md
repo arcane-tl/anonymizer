@@ -264,6 +264,8 @@ anonymize contract.pdf --format all --out-dir ./out/
 ## Why Anonymizer
 
 - **Privacy first** — processing is local; nothing is sent over the network unless you explicitly enable a remote LLM (`--llm`)  
+- **Apple FM AI check** — on Macs with Apple Intelligence, an automatic on-device second look audits findings and may add high-confidence misses (`--no-ai-check` to disable); other machines skip silently  
+
 - **Real office formats** — PDF (including OCR for scans), Word (`.docx`), and text/Markdown  
 - **Flexible outputs** — **Save as** any combo: Markdown, Source filetype (black-box PDF / redacted DOCX; plain text → MD), PDF text (`--format md,source,pdf`)  
 - **Modes that match the job** — full scrub, identity-only, or plain text extract  
@@ -455,7 +457,8 @@ Aliases: `text` → extract · `normal` / `pii` → standard · `scrub` / `full`
 | `--llm` + non-local `ollama_url` | **Yes** — warned; blocked by `--offline` |
 | `--llm --llm-provider xai` | **Yes** — sent to `https://api.x.ai` (`XAI_API_KEY`) |
 | Config `use_llm: true` **without** `--llm` | **No** — CLI requires explicit `--llm` |
-| `--offline` | Blocks remote xAI and non-loopback Ollama |
+| Apple FM AI check (auto when available) | **No** — on-device only; skipped if unavailable |
+| `--offline` | Blocks remote xAI and non-loopback Ollama; Apple FM still allowed |
 
 - **No telemetry** in this application  
 - **`--map`** writes placeholder → original JSON (**contains PII**; mode `0600` when possible)  
@@ -510,6 +513,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--fail-on-native-miss` | **More options** | Exit 1 if native PDF/DOCX misses or residuals remain |
 | `--redact-letterhead-images` | **More options** | Black-box PDF header/footer logo bands |
 | `--llm` | — | Opt-in LLM layer (`--offline` blocks remote xAI / non-local Ollama) |
+| `--no-ai-check` / `--ai-check` | More options (later) | Disable / force Apple Foundation Models AI check (auto when available) |
 | `--keep-headers` | — | Keep PDF running headers/footers (default: strip) |
 | `-o -` | — | Markdown on stdout (progress on stderr) |
 | `--out-dir` | **Output folder** | Batch / chosen directory |

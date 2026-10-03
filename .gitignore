@@ -56,3 +56,6 @@ models/
 packaging/macos/*.app/
 **/Anonymizer.app/
 packaging/macos/icons/Anonymizer.iconset/
+
+# Built Apple FM helper (rebuild via packaging/macos/fm-check/build.sh)
+packaging/macos/fm-check/anonymizer-fm-check

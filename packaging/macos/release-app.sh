@@ -122,6 +122,14 @@ if [[ ! -d "$APP" ]]; then
   exit 2
 fi
 
+# Apple Foundation Models helper (optional quality pass; skip-safe if missing)
+FM_SRC="$HERE/fm-check"
+if [[ -x "$FM_SRC/build.sh" ]]; then
+  echo "==> Building anonymizer-fm-check (Apple FM)…"
+  "$FM_SRC/build.sh" "$APP/Contents/MacOS/anonymizer-fm-check" || \
+    echo "warning: fm-check build failed — AI check will skip until helper is present" >&2
+fi
+
 ENTITLEMENTS="$HERE/Anonymizer.entitlements"
 if [[ ! -f "$ENTITLEMENTS" ]]; then
   echo "error: missing $ENTITLEMENTS" >&2
