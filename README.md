@@ -510,6 +510,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--fail-on-native-miss` | **More options** | Exit 1 if native PDF/DOCX misses or residuals remain |
 | `--redact-letterhead-images` | **More options** | Black-box PDF header/footer logo bands |
 | `--llm` | — | Opt-in LLM layer (`--offline` blocks remote xAI / non-local Ollama) |
+| `--debug` | **More options → Debug provenance** | Review source chips + per-run findings log (`~/.local/state/anonymizer/logs/`; also `ANONYMIZER_DEBUG=1`) |
 | `--keep-headers` | — | Keep PDF running headers/footers (default: strip) |
 | `-o -` | — | Markdown on stdout (progress on stderr) |
 | `--out-dir` | **Output folder** | Batch / chosen directory |

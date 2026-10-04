@@ -93,6 +93,10 @@ denylist:
 # spacy_proposal_score: 0.55
 # Map Finnish spaCy PRODUCT → ORG (brands/goods); off by default
 # spacy_map_product_to_org: false
+#
+# Debug provenance (Review source chips + ~/.local/state/anonymizer/logs/run-*.json)
+# Also: anonymize … --debug   or   ANONYMIZER_DEBUG=1
+# debug: false
 
 # Custom pattern / Python recognizers (local files only — see docs/plugins.md)
 # recognizers:

@@ -275,6 +275,7 @@ def _build_config(
     template: str | None = None,
     spacy_map_product_to_org: bool | None = None,
     spacy_auto_redact: str | None = None,
+    debug: bool | None = None,
     quiet: bool = False,
 ) -> AnonymizerConfig:
     from anonymizer.anonymize.templates import (
@@ -310,6 +311,8 @@ def _build_config(
                 "spacy_auto_redact must be corroborated|always|never"
             )
         cfg.spacy_auto_redact = mode_s
+    if debug is not None:
+        cfg.debug = bool(debug)
     # Explicit CLI opt-in: without --llm, force LLM off even if YAML enables it.
     if llm:
         cfg.use_llm = True
@@ -398,6 +401,7 @@ def _run_pipeline(
     learn_to: str | None = None,
     spacy_map_product_to_org: bool = False,
     spacy_auto_redact: str | None = None,
+    debug: bool = False,
 ) -> None:
     _setup_logging(verbose)
 
@@ -448,6 +452,7 @@ def _run_pipeline(
             template=template,
             spacy_map_product_to_org=True if spacy_map_product_to_org else None,
             spacy_auto_redact=spacy_auto_redact,
+            debug=True if debug else None,
             quiet=quiet,
         )
     except (ConfigError, ValueError) as exc:
@@ -455,6 +460,11 @@ def _run_pipeline(
         raise typer.Exit(2) from exc
     if keep_headers:
         cfg.keep_headers = True
+
+    from anonymizer.anonymize.debug_log import debug_enabled
+
+    if debug_enabled(flag=debug, config_debug=cfg.debug):
+        cfg.debug = True
 
     if yaml_wanted_llm and not llm and not quiet:
         console.print(
@@ -638,6 +648,22 @@ def _run_pipeline(
         # Front matter / result should reflect the user's chosen final style
         result.redact_style = final_redact_style
 
+        if cfg.debug:
+            from anonymizer.anonymize.debug_log import write_run_debug_log
+            from anonymizer import __version__ as _ver
+
+            log_path = write_run_debug_log(
+                result, source_file=input_path, version=_ver
+            )
+            if log_path is not None and not quiet:
+                summ = getattr(result, "entity_counts", {}) or {}
+                props = len(getattr(result, "proposals", None) or {})
+                console.print(
+                    f"[dim]Debug log[/dim] {log_path} "
+                    f"[dim](auto={len(result.mapping)} proposals={props} "
+                    f"types={dict(summ)})[/dim]"
+                )
+
         # --- Optional review / --reject (session: un-redact + add) ---
         # spaCy soft proposals are Review-only (pre-keep-clear); omitted when Review off
         proposals = dict(getattr(result, "proposals", None) or {})
@@ -704,6 +730,8 @@ def _run_pipeline(
                     pre_keep_clear=pre_keep,
                     learn_to=learn_to,
                     risk=review_risk,
+                    hit_meta=getattr(result, "hit_meta", None) or {},
+                    show_sources=bool(cfg.debug),
                 )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 130
@@ -1695,6 +1723,17 @@ def main(
             rich_help_panel="Advanced",
         ),
     ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            help=(
+                "Debug provenance: Review source chips + per-run findings log "
+                "(~/.local/state/anonymizer/logs/). Also ANONYMIZER_DEBUG=1."
+            ),
+            rich_help_panel="Advanced",
+        ),
+    ] = False,
     include_dates: Annotated[
         bool,
         typer.Option(
@@ -1823,6 +1862,7 @@ def main(
         learn_to=learn_to,
         spacy_map_product_to_org=spacy_product_org,
         spacy_auto_redact=spacy_auto_redact,
+        debug=debug,
     )
 
 

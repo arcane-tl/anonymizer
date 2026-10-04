@@ -45,6 +45,7 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   --redact-style STYLE  placeholder | remove (default: placeholder)
   --format FMT          md | source | pdf | both | all | comma-list (default: md)
   --fail-on-native-miss Exit 1 when native PDF/DOCX misses or residuals remain
+  --debug               Provenance chips in Review + per-run findings log
   --redact-letterhead-images  Black-box PDF header/footer logo images
   --config PATH         YAML config file
   --template IDS        Template packs for this run (comma-separated)
@@ -303,6 +304,7 @@ REDACT_STYLE=""
 OUTPUT_FORMAT=""
 FAIL_ON_NATIVE_MISS=0
 REDACT_LETTERHEAD=0
+DEBUG=0
 CONFIG_PATH=""
 ALLOW_FROM=""
 DENY_FROM=""
@@ -337,6 +339,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --redact-letterhead-images)
       REDACT_LETTERHEAD=1
+      shift
+      ;;
+    --debug)
+      DEBUG=1
       shift
       ;;
     --config)
@@ -459,6 +465,9 @@ if [[ "$FAIL_ON_NATIVE_MISS" -eq 1 ]]; then
 fi
 if [[ "$REDACT_LETTERHEAD" -eq 1 ]]; then
   EXTRA_ARGS+=(--redact-letterhead-images)
+fi
+if [[ "$DEBUG" -eq 1 ]]; then
+  EXTRA_ARGS+=(--debug)
 fi
 if [[ -n "$TEMPLATE_IDS" ]]; then
   EXTRA_ARGS+=(--template "$TEMPLATE_IDS")
