@@ -836,7 +836,9 @@ def _run_pipeline(
 
         if need_md_render:
             progress.substep("Rendering Markdown…")
-            md = render_from_extracted(doc, anon_blocks, result)
+            md = render_from_extracted(
+                doc, anon_blocks, result, debug=bool(cfg.debug)
+            )
 
             if write_md_file:
                 if output is not None and str(output) == "-":

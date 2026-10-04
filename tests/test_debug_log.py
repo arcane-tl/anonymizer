@@ -6,12 +6,14 @@ from pathlib import Path
 
 from anonymizer.anonymize.debug_log import (
     build_run_debug_payload,
+    count_source_families,
     format_sources_chip,
     write_run_debug_log,
 )
 from anonymizer.anonymize.review import ReviewFinding, ReviewSession
 from anonymizer.gui.review_window import format_finding_secondary
-from anonymizer.models import AnonymizeResult, LanguageDecision
+from anonymizer.models import AnonymizeResult, BlockKind, LanguageDecision, TextBlock
+from anonymizer.output.markdown import render_markdown
 
 
 def test_format_sources_chip():
@@ -79,3 +81,39 @@ def test_from_mapping_show_sources():
         show_sources=False,
     )
     assert session2.get("[PERSON_1]").detector_sources == []
+
+
+def test_count_source_families():
+    mapping = {
+        "[PERSON_1]": "Ada",
+        "[ORG_1]": "ACME Oy",
+        "[ORG_2]": "Soft Co",
+    }
+    hit_meta = {
+        "[PERSON_1]": {"sources": ["spacy:en"]},
+        "[ORG_1]": {"sources": ["spacy:en", "pattern:CompanyRecognizer"]},
+        "[ORG_2]": {"sources": ["spacy:en", "spacy:fi"]},
+    }
+    counts = count_source_families(mapping, hit_meta)
+    assert counts["spacy"] == 3
+    assert counts["pattern"] == 1
+    # keep-cleared placeholders are absent from mapping → not counted
+    assert count_source_families({"[PERSON_1]": "Ada"}, hit_meta) == {"spacy": 1}
+
+
+def test_front_matter_detector_sources_debug_only():
+    result = AnonymizeResult(
+        anonymized_text="Hello [PERSON_1]",
+        entity_counts={"PERSON": 1},
+        mapping={"[PERSON_1]": "Alice"},
+        language=LanguageDecision(
+            mode="auto", detected=["en"], nlp_passes=["en"], reason="test"
+        ),
+        hit_meta={"[PERSON_1]": {"sources": ["spacy:en"]}},
+    )
+    blocks = [TextBlock(text="Hello [PERSON_1]", kind=BlockKind.PARAGRAPH)]
+    off = render_markdown("x.txt", blocks, result, debug=False)
+    assert "detector_sources" not in off
+    on = render_markdown("x.txt", blocks, result, debug=True)
+    assert "detector_sources:" in on
+    assert "spacy: 1" in on

@@ -226,3 +226,30 @@ def sources_for_placeholder(
             if h.text == surface and h.source:
                 return [h.source]
     return []
+
+
+def count_source_families(
+    mapping: dict[str, str] | None,
+    hit_meta: dict[str, dict[str, Any]] | None = None,
+    *,
+    hits: list[EntityHit] | None = None,
+) -> dict[str, int]:
+    """Count distinct source families for placeholders still in ``mapping``.
+
+    Multi-source hits contribute once per distinct family (chip-aligned).
+    Missing provenance counts as ``unknown``.
+    """
+    by_family: Counter[str] = Counter()
+    for ph, surface in (mapping or {}).items():
+        sources = sources_for_placeholder(ph, hit_meta, hits=hits, surface=surface)
+        if not sources:
+            by_family["unknown"] += 1
+            continue
+        seen: set[str] = set()
+        for raw in sources:
+            fam = _source_family(str(raw))
+            if fam in seen:
+                continue
+            seen.add(fam)
+            by_family[fam] += 1
+    return dict(by_family.most_common())
