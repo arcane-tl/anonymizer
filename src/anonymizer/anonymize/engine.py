@@ -43,6 +43,7 @@ from anonymizer.anonymize.recognizers.fi_phone import FiPhoneRecognizer
 from anonymizer.anonymize.recognizers.fi_plate import FiPlateRecognizer
 from anonymizer.anonymize.recognizers.fi_postal import FiPostalCodeRecognizer
 from anonymizer.anonymize.recognizers.fi_vat import FiVatRecognizer
+from anonymizer.anonymize.recognizers.license_plate import LicensePlateRecognizer
 from anonymizer.anonymize.recognizers.person_name import PersonNameRecognizer
 from anonymizer.anonymize.recognizers.street import StreetRecognizer
 from anonymizer.anonymize.recognizers.url import WebUrlRecognizer
@@ -142,6 +143,7 @@ def _builtin_recognizer_classes() -> list[type]:
         FiVatRecognizer,
         FiPhoneRecognizer,
         FiPlateRecognizer,
+        LicensePlateRecognizer,
         FiPostalCodeRecognizer,
         WebUrlRecognizer,
         StreetRecognizer,
@@ -172,11 +174,12 @@ def _pattern_analyzer_cached(plugin_key: str = "") -> AnalyzerEngine:
     nlp_engine = provider.create_engine()
     registry = RecognizerRegistry(supported_languages=["en"])
     registry.load_predefined_recognizers(nlp_engine=nlp_engine, languages=["en"])
+    # Plate recognizers are language-gated in _standalone_pattern_recognizers
+    # (FI vs EN) — do not register them on this always-on EN Presidio engine.
     for Rec in (
         FiHetuRecognizer,
         FiBusinessIdRecognizer,
         FiPhoneRecognizer,
-        FiPlateRecognizer,
         FiPostalCodeRecognizer,
         WebUrlRecognizer,
         StreetRecognizer,
@@ -702,6 +705,7 @@ def _pattern_results(
     include_ner: bool,
     *,
     config: AnonymizerConfig | None = None,
+    nlp_passes: list[str] | None = None,
 ) -> list[RecognizerResult]:
     """Run Presidio (EN) for patterns; optionally include EN NER."""
     try:
@@ -709,7 +713,9 @@ def _pattern_results(
     except RuntimeError as exc:
         logger.warning("%s", exc)
         # Still run custom pattern recognizers standalone
-        return _standalone_pattern_recognizers(text, entities, config=config)
+        return _standalone_pattern_recognizers(
+            text, entities, config=config, nlp_passes=nlp_passes
+        )
 
     if include_ner:
         ent_list = list(entities)
@@ -721,7 +727,9 @@ def _pattern_results(
         ner_types = {"PERSON", "ORG", "LOCATION", "NRP", "DATE_TIME"}
         ent_list = [e for e in entities if e not in ner_types]
         if not ent_list:
-            return _standalone_pattern_recognizers(text, entities, config=config)
+            return _standalone_pattern_recognizers(
+                text, entities, config=config, nlp_passes=nlp_passes
+            )
 
     # Pull phones slightly below the default threshold so unlabeled
     # international numbers are not dropped; non-phone types are re-filtered.
@@ -743,7 +751,11 @@ def _pattern_results(
     found = [r for r in found if _keep_pattern_result(r, text, score_threshold)]
 
     # Always run custom patterns (FI IDs, plates, URLs, streets, company suffixes)
-    found.extend(_standalone_pattern_recognizers(text, entities, config=config))
+    found.extend(
+        _standalone_pattern_recognizers(
+            text, entities, config=config, nlp_passes=nlp_passes
+        )
+    )
     return found
 
 
@@ -752,16 +764,22 @@ def _standalone_pattern_recognizers(
     entities: list[str],
     *,
     config: AnonymizerConfig | None = None,
+    nlp_passes: list[str] | None = None,
 ) -> list[RecognizerResult]:
     """Custom regex/suffix recognizers that must run for every document."""
     results: list[RecognizerResult] = []
+    passes = {p.casefold() for p in (nlp_passes or [])}
+    # FI plates when Finnish pass (or unknown lang — keep FI for safety).
+    # Broader EU/US plates only when English pass is explicit.
+    run_fi_plate = (not passes) or ("fi" in passes)
+    run_license_plate = "en" in passes
+
     # Built-in class specs: (class, entity codes they may emit)
     specs: list[tuple[type, list[str]]] = [
         (FiHetuRecognizer, ["FI_HETU"]),
         (FiBusinessIdRecognizer, ["FI_BUSINESS_ID"]),
         (FiVatRecognizer, ["FI_VAT"]),
         (FiPhoneRecognizer, ["PHONE_NUMBER"]),
-        (FiPlateRecognizer, ["FI_LICENSE_PLATE"]),
         (FiPostalCodeRecognizer, ["FI_POSTAL_CODE"]),
         (WebUrlRecognizer, ["URL"]),
         (VehicleVinRecognizer, ["VEHICLE_VIN"]),
@@ -773,6 +791,13 @@ def _standalone_pattern_recognizers(
         (BrandOrgRecognizer, ["ORG"]),
         (PersonNameRecognizer, ["PERSON"]),
     ]
+    if run_fi_plate:
+        specs.insert(4, (FiPlateRecognizer, ["FI_LICENSE_PLATE"]))
+    if run_license_plate:
+        # After FI plate so merge can prefer FI_LICENSE_PLATE on overlap
+        insert_at = 5 if run_fi_plate else 4
+        specs.insert(insert_at, (LicensePlateRecognizer, ["LICENSE_PLATE"]))
+
     for Rec, ents in specs:
         if entities and not any(e in entities for e in ents):
             continue
@@ -797,7 +822,8 @@ _ENTITY_PRIORITY = {
     "STREET": 3,
     "CITY": 3,
     "FI_POSTAL_CODE": 3,
-    "FI_LICENSE_PLATE": 3,
+    "FI_LICENSE_PLATE": 4,  # Prefer over generic LICENSE_PLATE on overlap
+    "LICENSE_PLATE": 3,
     "FI_HETU": 3,
     "FI_BUSINESS_ID": 3,
     "FI_VAT": 3,
@@ -1854,6 +1880,7 @@ class DocumentAnonymizer:
             score_threshold=self.config.score_threshold,
             include_ner=False,
             config=self.config,
+            nlp_passes=list(decision.nlp_passes),
         )
         for r in pattern_hits:
             if not get_source(r):

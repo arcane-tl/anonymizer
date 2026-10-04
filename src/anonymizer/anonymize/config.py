@@ -43,6 +43,7 @@ STRICT_ENTITIES: list[str] = [
     "FI_BUSINESS_ID",
     "FI_VAT",  # ALV-numero / Finnish VAT ID (FI + 8 digits)
     "FI_LICENSE_PLATE",
+    "LICENSE_PLATE",  # EU/US/generic (English NLP pass)
     "FI_POSTAL_CODE",
     "VEHICLE_VIN",  # 17-char VIN / valmistenumero (strict only)
 ]

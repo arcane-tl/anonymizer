@@ -33,6 +33,8 @@ TYPE_LABELS: dict[str, str] = {
     "FI_VAT": "VAT_FI",
     # Plates: PLATE_{COUNTRY}_{n}  e.g. Finnish ABC-123 → [PLATE_FI_1]
     "FI_LICENSE_PLATE": "PLATE_FI",
+    # Broader EU/US/generic → [PLATE_n]
+    "LICENSE_PLATE": "PLATE",
     "FI_POSTAL_CODE": "POSTAL",
     "VEHICLE_VIN": "VIN",
     "URL": "URL",

@@ -29,9 +29,11 @@ def test_plate_placeholder_uses_country_code():
     from anonymizer.anonymize.mapping import placeholder_label
 
     assert placeholder_label("FI_LICENSE_PLATE") == "PLATE_FI"
+    assert placeholder_label("LICENSE_PLATE") == "PLATE"
     assert placeholder_label("SE_LICENSE_PLATE") == "PLATE_SE"
     m = EntityMap()
     assert m.get_or_assign("FI_LICENSE_PLATE", "ABC-123") == "[PLATE_FI_1]"
     assert m.get_or_assign("FI_LICENSE_PLATE", "XYZ-9") == "[PLATE_FI_2]"
     # Same plate surface → same id
     assert m.get_or_assign("FI_LICENSE_PLATE", "abc-123") == "[PLATE_FI_1]"
+    assert m.get_or_assign("LICENSE_PLATE", "ABC-1234") == "[PLATE_1]"

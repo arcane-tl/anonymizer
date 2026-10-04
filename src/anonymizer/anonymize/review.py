@@ -456,6 +456,7 @@ def recount_entities(mapping: dict[str, str]) -> dict[str, int]:
             "IP": "IP_ADDRESS",
             "POSTAL": "FI_POSTAL_CODE",
             "PLATE_FI": "FI_LICENSE_PLATE",
+            "PLATE": "LICENSE_PLATE",
             "VAT_FI": "FI_VAT",
             "VIN": "VEHICLE_VIN",
         }.get(label, label)
