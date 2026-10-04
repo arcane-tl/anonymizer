@@ -93,14 +93,19 @@ def expand_org_stems_in_text(
             if is_weak_org_stem(surf) or surf.casefold().rstrip("n") in CONTRACT_ROLES:
                 continue
             seen.add(span)
-            results.append(
-                RecognizerResult(
-                    entity_type="ORG",
-                    start=start,
-                    end=end,
-                    score=score,
-                )
+            rr = RecognizerResult(
+                entity_type="ORG",
+                start=start,
+                end=end,
+                score=score,
             )
+            try:
+                from anonymizer.anonymize.ner_meta import set_source
+
+                set_source(rr, "org_stem")
+            except Exception:
+                pass
+            results.append(rr)
     return results
 
 

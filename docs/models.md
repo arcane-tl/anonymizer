@@ -91,11 +91,21 @@ spacy_models:
   en: en_core_web_md
   fi: fi_core_news_md
   # sv: sv_core_news_lg
+
+# Soft spaCy PERSON/ORG/LOCATION/CITY (default: corroborated)
+# spacy_auto_redact: corroborated   # or always | never
+# spacy_map_product_to_org: false   # Finnish PRODUCT→ORG; off by default
 ```
 
 ```bash
 anonymize doc.pdf --config config.yaml
+anonymize doc.pdf --spacy-auto-redact always
+anonymize doc.pdf --spacy-product-org
 ```
+
+Review keep-clear decisions are logged to `~/.local/state/anonymizer/fp-rejects.jsonl`
+(override with `ANONYMIZER_FP_LOG`; disable with `ANONYMIZER_FP_LOG=off`). Summarize with
+`anonymize fp-stats`.
 
 ## What size means for quality
 

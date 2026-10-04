@@ -192,6 +192,12 @@ class AnonymizerConfig:
     lang: str = "auto"
     # Optional spaCy primary model overrides: {lang: model_name}
     spacy_models: dict[str, str] = field(default_factory=dict)
+    # Map Finnish spaCy PRODUCT → ORG (off by default; brands/goods noise)
+    spacy_map_product_to_org: bool = False
+    # Soft spaCy PERSON/ORG/LOCATION/CITY: corroborated | always | never
+    spacy_auto_redact: str = "corroborated"
+    # Merge stamp for uncorroborated spaCy soft proposals
+    spacy_proposal_score: float = 0.55
     include_dates: bool = False
     # Optional LLM layer (off by default)
     use_llm: bool = False
@@ -315,6 +321,18 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.spacy_models = {
                 str(k).lower(): str(v) for k, v in data["spacy_models"].items() if v
             }
+        if "spacy_map_product_to_org" in data:
+            cfg.spacy_map_product_to_org = bool(data["spacy_map_product_to_org"])
+        if "spacy_auto_redact" in data and data["spacy_auto_redact"]:
+            mode = str(data["spacy_auto_redact"]).strip().casefold()
+            if mode not in {"corroborated", "always", "never"}:
+                raise ConfigError(
+                    f"spacy_auto_redact in {path} must be corroborated|always|never, "
+                    f"got {data['spacy_auto_redact']!r}"
+                )
+            cfg.spacy_auto_redact = mode
+        if "spacy_proposal_score" in data and data["spacy_proposal_score"] is not None:
+            cfg.spacy_proposal_score = float(data["spacy_proposal_score"])
         if "recognizers" in data and data["recognizers"] is not None:
             from anonymizer.anonymize.plugins import load_recognizer_plugins
 

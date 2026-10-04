@@ -47,7 +47,11 @@ class EntityHit:
     start: int
     end: int
     score: float
-    source: str = ""  # e.g. en_spacy, fi_spacy, pattern, denylist
+    source: str = ""  # e.g. spacy:fi, pattern, denylist
+    pos: list[str] = field(default_factory=list)
+    single_token: bool = False
+    spacy_label: str = ""
+    proposal: bool = False  # spaCy-only soft hit awaiting Review / corroboration
 
 
 @dataclass
@@ -69,3 +73,7 @@ class AnonymizeResult:
     mode: str = "strict"
     # placeholder | remove — how spans were replaced in the body
     redact_style: str = "placeholder"
+    # spaCy soft proposals omitted from auto output (placeholder → surface)
+    proposals: dict[str, str] = field(default_factory=dict)
+    # placeholder → FP-log metadata for Review keep-clear instrumentation
+    hit_meta: dict[str, dict[str, Any]] = field(default_factory=dict)

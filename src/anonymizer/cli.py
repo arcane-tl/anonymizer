@@ -101,7 +101,9 @@ _VERB_TO_MODE: dict[str, str] = {
     "scrub": "strict",
     "full": "strict",
 }
-_META_COMMANDS = frozenset({"doctor", "examples", "templates", "templates-ui"})
+_META_COMMANDS = frozenset(
+    {"doctor", "examples", "templates", "templates-ui", "fp-stats"}
+)
 
 # Options that take a following value (for argv rewrite)
 _OPTS_WITH_VALUE = frozenset(
@@ -271,6 +273,8 @@ def _build_config(
     native_min_match_rate: float | None = None,
     redact_letterhead_images: bool | None = None,
     template: str | None = None,
+    spacy_map_product_to_org: bool | None = None,
+    spacy_auto_redact: str | None = None,
     quiet: bool = False,
 ) -> AnonymizerConfig:
     from anonymizer.anonymize.templates import (
@@ -297,6 +301,15 @@ def _build_config(
     cfg.include_dates = include_dates or cfg.include_dates
     if score_threshold is not None:
         cfg.score_threshold = score_threshold
+    if spacy_map_product_to_org is not None:
+        cfg.spacy_map_product_to_org = bool(spacy_map_product_to_org)
+    if spacy_auto_redact is not None:
+        mode_s = spacy_auto_redact.strip().casefold()
+        if mode_s not in {"corroborated", "always", "never"}:
+            raise typer.BadParameter(
+                "spacy_auto_redact must be corroborated|always|never"
+            )
+        cfg.spacy_auto_redact = mode_s
     # Explicit CLI opt-in: without --llm, force LLM off even if YAML enables it.
     if llm:
         cfg.use_llm = True
@@ -383,6 +396,8 @@ def _run_pipeline(
     verbose: bool,
     template: str | None = None,
     learn_to: str | None = None,
+    spacy_map_product_to_org: bool = False,
+    spacy_auto_redact: str | None = None,
 ) -> None:
     _setup_logging(verbose)
 
@@ -431,6 +446,8 @@ def _run_pipeline(
             native_min_match_rate=native_min_match_rate,
             redact_letterhead_images=redact_letterhead_images or None,
             template=template,
+            spacy_map_product_to_org=True if spacy_map_product_to_org else None,
+            spacy_auto_redact=spacy_auto_redact,
             quiet=quiet,
         )
     except (ConfigError, ValueError) as exc:
@@ -622,16 +639,24 @@ def _run_pipeline(
         result.redact_style = final_redact_style
 
         # --- Optional review / --reject (session: un-redact + add) ---
+        # spaCy soft proposals are Review-only (pre-keep-clear); omitted when Review off
+        proposals = dict(getattr(result, "proposals", None) or {})
+        review_mapping = dict(result.mapping)
+        review_mapping.update(proposals)
+
         pre_keep: list[str] = []
-        if reject and result.mapping:
-            accepted, unknown = parse_reject_list(reject, set(result.mapping.keys()))
+        if do_review and proposals:
+            # spaCy soft proposals start unchecked for redaction (keep clear)
+            pre_keep.extend(proposals.keys())
+        if reject and review_mapping:
+            accepted, unknown = parse_reject_list(reject, set(review_mapping.keys()))
             for u in unknown:
                 console.print(
                     f"[yellow]--reject unknown tag ignored:[/yellow] {u}"
                 )
             pre_keep.extend(accepted)
 
-        if do_review and result.mapping:
+        if do_review and review_mapping:
             progress.substep("Review redactions…")
             label = (
                 f"{input_path.name} ({i}/{len(inputs)})"
@@ -671,7 +696,7 @@ def _run_pipeline(
                 )
             try:
                 session = interactive_review(
-                    result.mapping,
+                    review_mapping,
                     console=console,
                     file_label=label,
                     original_blocks=block_texts,
@@ -683,6 +708,17 @@ def _run_pipeline(
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 130
                 raise typer.Exit(code) from exc
+            # FP instrumentation: log keep-clear decisions (no document body)
+            try:
+                from anonymizer.anonymize.fp_log import log_keep_clear_findings
+
+                log_keep_clear_findings(
+                    session.findings,
+                    lang_passes=list(result.language.nlp_passes),
+                    hit_meta=getattr(result, "hit_meta", None) or {},
+                )
+            except Exception:  # noqa: BLE001 — logging must not break the run
+                pass
             # Apply from originals so user-added redactions are included
             apply_style = (
                 "placeholder"
@@ -691,16 +727,19 @@ def _run_pipeline(
             )
             anon_blocks, new_map = session.apply(style=apply_style)
             result.mapping = new_map
+            result.proposals = {}
             result.entity_counts = recount_entities(new_map)
             result.anonymized_text = "\n\n".join(anon_blocks)
             kept_n = session.summary_counts()["keep_clear"]
             added_n = session.summary_counts()["user_added"]
-            if not quiet and (kept_n or added_n):
+            if not quiet and (kept_n or added_n or proposals):
                 bits = []
                 if kept_n:
                     bits.append(f"{kept_n} kept clear")
                 if added_n:
                     bits.append(f"{added_n} added")
+                if proposals:
+                    bits.append(f"{len(proposals)} spaCy proposal(s)")
                 console.print(f"[dim]Review: {', '.join(bits)}.[/dim]")
             # Teach for terminal checklist when --learn-to set (window teaches itself)
             if (
@@ -719,7 +758,7 @@ def _run_pipeline(
                         )
                 except (OSError, TypeError, ValueError) as exc:
                     console.print(f"[yellow]Could not teach template:[/yellow] {exc}")
-        elif do_review and not result.mapping:
+        elif do_review and not review_mapping:
             console.print("[dim]No redactions to review.[/dim]")
         elif pre_keep and result.mapping:
             # --reject only (no interactive review)
@@ -982,6 +1021,35 @@ def _print_entities() -> None:
     typer.echo("\nDATE_TIME — opt-in via --include-dates (standard/strict)")
 
 
+def cmd_fp_stats() -> None:
+    """Summarize Review keep-clear (FP) log buckets."""
+    from anonymizer.anonymize.fp_log import (
+        default_fp_log_path,
+        load_fp_records,
+        summarize_fp_records,
+    )
+
+    path = default_fp_log_path()
+    records = load_fp_records(path)
+    summary = summarize_fp_records(records)
+    console.print(f"[bold]anonymize fp-stats[/bold]  {path}\n")
+    if not records:
+        console.print("[dim]No FP reject records yet. Run with --review; keep-clear items are logged.[/dim]")
+        console.print("[dim]Disable with ANONYMIZER_FP_LOG=off. Override path with ANONYMIZER_FP_LOG=/path.[/dim]")
+        raise SystemExit(0)
+    console.print(f"Total rejects: [cyan]{summary['total']}[/cyan]")
+    console.print(
+        f"spaCy single-token PERSON: [cyan]{summary['spacy_single_token_person']}[/cyan]"
+    )
+    console.print("\nBy entity type:")
+    for k, v in (summary.get("by_entity_type") or {}).items():
+        console.print(f"  {k}: {v}")
+    console.print("\nBy source family:")
+    for k, v in (summary.get("by_source_family") or {}).items():
+        console.print(f"  {k}: {v}")
+    raise SystemExit(0)
+
+
 def cmd_doctor() -> None:
     """Health check for a working local install."""
     console.print(f"[bold]anonymizer doctor[/bold]  v{__version__}\n")
@@ -1133,6 +1201,21 @@ def cmd_doctor() -> None:
             # Not fatal for CLI-only use; still surface the gap clearly
     except Exception as exc:
         rows.append(("Review window (tk)", f"unavailable ({exc})", False))
+
+    # Optional Finnish morphology (single-token PERSON/ORG gate)
+    try:
+        from anonymizer.anonymize.voikko_fi import voikko_available
+
+        vok, detail = voikko_available()
+        rows.append(
+            (
+                "Voikko (FI)",
+                detail if vok else f"optional — {detail}",
+                True,
+            )
+        )
+    except Exception as exc:
+        rows.append(("Voikko (FI)", f"optional — {exc}", True))
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Check")
@@ -1589,7 +1672,26 @@ def main(
         Optional[float],
         typer.Option(
             "--score-threshold",
-            help="Minimum NER score (0–1).",
+            help="Minimum pattern recognizer score (0–1). Does not gate spaCy.",
+            rich_help_panel="Advanced",
+        ),
+    ] = None,
+    spacy_product_org: Annotated[
+        bool,
+        typer.Option(
+            "--spacy-product-org",
+            help="Map spaCy PRODUCT labels to ORG (off by default).",
+            rich_help_panel="Advanced",
+        ),
+    ] = False,
+    spacy_auto_redact: Annotated[
+        Optional[str],
+        typer.Option(
+            "--spacy-auto-redact",
+            help=(
+                "Soft spaCy PERSON/ORG/LOCATION/CITY: "
+                "corroborated (default) | always | never."
+            ),
             rich_help_panel="Advanced",
         ),
     ] = None,
@@ -1719,6 +1821,8 @@ def main(
         verbose=verbose,
         template=template,
         learn_to=learn_to,
+        spacy_map_product_to_org=spacy_product_org,
+        spacy_auto_redact=spacy_auto_redact,
     )
 
 
@@ -1764,6 +1868,8 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
     if low in _META_COMMANDS:
         if low == "doctor":
             cmd_doctor()
+        elif low == "fp-stats":
+            cmd_fp_stats()
         elif low == "templates":
             cmd_templates(args[idx + 1 :])
         elif low == "templates-ui":
