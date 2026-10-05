@@ -513,7 +513,10 @@ def _spacy_ner_results(
         META_SPACY_LABEL,
         set_meta,
     )
-    from anonymizer.anonymize.voikko_fi import is_common_finnish_word
+    from anonymizer.anonymize.voikko_fi import (
+        all_tokens_common_finnish,
+        is_common_finnish_word,
+    )
 
     try:
         nlp = _spacy_nlp(lang, model_override)
@@ -599,14 +602,24 @@ def _spacy_ner_results(
                         continue
                 if _looks_like_legal_boilerplate_org(nlp, surface):
                     continue
-                # Voikko: single-token common FI word → drop weak ORG
+                # Voikko: common FI word(s) without legal form → drop weak ORG
+                if lang == "fi" and not _LEGAL_FORM_RE.search(surface):
+                    if len(span_toks) == 1:
+                        common = is_common_finnish_word(surface)
+                        if common is True:
+                            continue
+                    elif len(span_toks) >= 2:
+                        tok_texts = [t.text for t in span_toks]
+                        if all_tokens_common_finnish(tok_texts) is True:
+                            continue
+            if mapped in {"LOCATION", "CITY"}:
+                if _looks_like_false_location(surface):
+                    continue
+                # Voikko: single-token common word (not paikannimi) → drop
                 if lang == "fi" and len(span_toks) == 1:
                     common = is_common_finnish_word(surface)
                     if common is True:
                         continue
-            if mapped in {"LOCATION", "CITY"}:
-                if _looks_like_false_location(surface):
-                    continue
             if mapped == "PERSON":
                 if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
                     continue
@@ -924,6 +937,25 @@ def _denylist_hits(
     return results
 
 
+# Possessive / role prefixes common on FI forms ("Yrityksen Y-tunnus")
+_FI_LABEL_PREFIX = re.compile(
+    r"(?i)^(yrityksen|asiakkaan|henkilön|työntekijän|myyjän|ostajan|"
+    r"toimittajan|tilaajan|vakuutuksenottajan|vakuutuksenantajan|"
+    r"vuokralaisen|vuokranantajan)\s+"
+)
+
+# Value-looking remainder after a label in two-column layouts
+_LABEL_VALUE_REST = re.compile(
+    r"\s+(?:"
+    r"\d[\d\s\-./]{2,}|"  # Y-tunnus / phone / postcode-ish
+    r"FI\d{8}|"  # FI VAT
+    r"[A-ZÅÄÖ]{2,3}-\d{1,4}|"  # plate-like
+    r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+|"  # email
+    r"\+?\d[\d\s\-()]{5,}"  # phone
+    r")"
+)
+
+
 def _allowlist_filter(
     text: str,
     results: list[RecognizerResult],
@@ -932,16 +964,50 @@ def _allowlist_filter(
     if not allowlist:
         return results
     allowed = {normalize_entity_text(a) for a in allowlist if a}
-    return [
-        r
-        for r in results
-        if normalize_entity_text(text[r.start : r.end]) not in allowed
-    ]
+    # Longer allow entries first for suffix checks
+    allowed_sorted = sorted((a for a in allowed if a), key=len, reverse=True)
+    label_types = {"ORG", "PERSON", "LOCATION", "STREET", "CITY"}
+
+    kept: list[RecognizerResult] = []
+    for r in results:
+        surface_n = normalize_entity_text(text[r.start : r.end])
+        if surface_n in allowed:
+            continue
+        if r.entity_type in label_types and _allowlist_label_phrase(
+            surface_n, allowed_sorted
+        ):
+            continue
+        kept.append(r)
+    return kept
+
+
+def _allowlist_label_phrase(surface_n: str, allowed_sorted: list[str]) -> bool:
+    """True when surface is an allowlisted label or possessive + allowlisted label.
+
+    Exact allowlist is handled by the caller. This covers
+    ``yrityksen y-tunnus`` when ``y-tunnus`` is allowlisted, without bare
+    substring matches inside arbitrary company names.
+    """
+    if not surface_n or not allowed_sorted:
+        return False
+    for a in allowed_sorted:
+        if surface_n == a:
+            return True
+        # Possessive / role prefix + exact allowlisted label
+        if surface_n.endswith(a) and len(surface_n) > len(a):
+            head = surface_n[: -len(a)].rstrip()
+            if _FI_LABEL_PREFIX.match(head + " "):
+                return True
+            # Also: surface ends with allowlisted multi-word label after one token
+            # e.g. "company business id" when "business id" allowed — skip unless
+            # FI prefix (EN handled via expanded template phrases).
+    return False
 
 
 # Morphological cue for form-field labels (not a place/person catalog)
 _LABEL_TAIL = re.compile(
-    r"(?i)(numero|tunniste|tunnus|osoite|koodi|kenttä|field|label|code)$"
+    r"(?i)(numero|tunniste|tunnus|osoite|koodi|kenttä|field|label|code|"
+    r"email|e-mail|phone|mobile|name|nimi|iban|bic)$"
 )
 
 
@@ -955,6 +1021,7 @@ def _looks_like_field_label(text: str, start: int, end: int) -> bool:
 
     Heuristic only — does not drop real names/companies that happen to sit
     before a colon (e.g. signature lines 'NORDIC WIDGETS OY: ____').
+    Also catches two-column layouts: ``Yrityksen Y-tunnus    1234567-8``.
     """
     surface = text[start:end].strip()
     if not surface or len(surface) > 80:
@@ -962,15 +1029,21 @@ def _looks_like_field_label(text: str, start: int, end: int) -> bool:
     # Companies with legal forms are never treated as field labels
     if _LEGAL_FORM_TOKEN.search(surface):
         return False
-    rest = text[end : end + 24]
+    rest = text[end : end + 48]
     followed_by_sep = bool(re.match(r"\s*[/：:]", rest)) or surface.endswith(":")
+    followed_by_value = bool(_LABEL_VALUE_REST.match(rest))
     # "Rekisterinumero/tunniste" style
     if "/" in surface and _LABEL_TAIL.search(surface.split("/")[-1].strip()):
         return True
-    # Label morphology + separator: "Rekisterinumero:", "Postinumero:"
+    # Label morphology + separator or column value
     if _LABEL_TAIL.search(surface) and (
-        followed_by_sep or re.match(r"\s*(\n|$)", rest)
+        followed_by_sep
+        or followed_by_value
+        or re.match(r"\s*(\n|$)", rest)
     ):
+        return True
+    # FI possessive field: "Yrityksen Y-tunnus" / "Asiakkaan nimi"
+    if _FI_LABEL_PREFIX.match(surface) and _LABEL_TAIL.search(surface):
         return True
     # Single-token label before colon/slash: "Osoite:"
     if followed_by_sep and len(surface.split()) == 1:

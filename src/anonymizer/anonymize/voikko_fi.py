@@ -62,11 +62,48 @@ def is_common_finnish_word(surface: str) -> bool | None:
         return None
     if not analyses:
         return False
-    # If every analysis is a name class → treat as possible name
     classes = [str(a.get("CLASS", "")).casefold() for a in analyses]
-    if classes and all(c in _NAME_CLASSES for c in classes):
+    # Any name-class reading (etunimi / paikannimi / …) → possible proper name.
+    # Avoids dropping brands like Nokia that also analyze as a common noun.
+    if any(c in _NAME_CLASSES for c in classes):
         return False
-    # At least one non-name analysis → common word / compound
+    # Only non-name analyses → common word / compound
     if any(c and c not in _NAME_CLASSES for c in classes):
         return True
     return False
+
+
+def all_tokens_common_finnish(tokens: list[str]) -> bool | None:
+    """True if every token is a Voikko common word.
+
+    Returns ``None`` when Voikko is unavailable or any token is inconclusive
+    (``None``). Returns ``False`` if any token is not a common word.
+    """
+    cleaned = [t.strip(".,;:'\"()[]") for t in tokens if t and t.strip()]
+    cleaned = [t for t in cleaned if t and not t.isdigit()]
+    if not cleaned:
+        return False
+    ok, _ = voikko_available()
+    if not ok:
+        return None
+    results: list[bool] = []
+    for tok in cleaned:
+        # Hyphenated compounds: require each side common when both alphabetic
+        if "-" in tok and not tok.startswith("-"):
+            parts = [p for p in tok.split("-") if p]
+            if len(parts) >= 2 and all(p.isalpha() for p in parts):
+                part_flags = [is_common_finnish_word(p) for p in parts]
+                if any(f is None for f in part_flags):
+                    return None
+                if all(f is True for f in part_flags):
+                    results.append(True)
+                    continue
+                results.append(False)
+                continue
+        flag = is_common_finnish_word(tok)
+        if flag is None:
+            return None
+        results.append(bool(flag))
+    if not results:
+        return False
+    return all(results)

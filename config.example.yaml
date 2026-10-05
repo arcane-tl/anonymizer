@@ -94,6 +94,10 @@ denylist:
 # Map Finnish spaCy PRODUCT → ORG (brands/goods); off by default
 # spacy_map_product_to_org: false
 #
+# Optional Finnish Voikko morphology (reduces common-word ORG/PERSON FPs).
+# macOS: brew install libvoikko voikko-fi && pip install 'anonymizer[fi]'
+# Soft-skip when missing — never required for offline installs.
+#
 # Debug provenance (Review source chips + ~/.local/state/anonymizer/logs/run-*.json)
 # Also: anonymize … --debug   or   ANONYMIZER_DEBUG=1
 # debug: false

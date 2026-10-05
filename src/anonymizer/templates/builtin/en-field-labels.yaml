@@ -34,4 +34,12 @@ allow:
   - Policyholder
   - Lessor
   - Lessee
+  - Business ID
+  - Company Business ID
+  - Company name
+  - Company address
+  - VAT number
+  - Registration number
+  - Licence plate
+  - License plate
 deny: []
