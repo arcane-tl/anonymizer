@@ -97,6 +97,23 @@ class EntityMap:
         self.reverse[placeholder] = text
         return placeholder
 
+    def bind_equivalent(
+        self,
+        entity_type: str,
+        primary: str,
+        aliases: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
+        """Map *aliases* to the same placeholder as *primary* (one party, many surfaces)."""
+        ph = self.get_or_assign(entity_type, primary)
+        label = placeholder_label(entity_type, self.registry)
+        for raw in aliases or []:
+            a = (raw or "").strip()
+            if not a:
+                continue
+            key = (label, normalize_entity_text(a))
+            self._forward[key] = ph
+        return ph
+
     def counts_by_type(self) -> dict[str, int]:
         """Count unique entities assigned per placeholder label."""
         counts: dict[str, int] = {}

@@ -34,6 +34,8 @@ from anonymizer.anonymize.mapping import EntityMap, normalize_entity_text
 from anonymizer.anonymize.org_stems import (
     collect_stems_from_results,
     expand_org_stems_in_text,
+    find_org_alias_bindings,
+    merge_stems_with_aliases,
 )
 from anonymizer.anonymize.recognizers.brand_org import BrandOrgRecognizer
 from anonymizer.anonymize.recognizers.company import CompanyRecognizer
@@ -1997,9 +1999,13 @@ class DocumentAnonymizer:
         merged = _filter_entity_false_positives(text, merged, lex)
         merged = _drop_noisy_surfaces(text, merged)
 
-        # Propagate company stems (LähiTapiola Rahoitus Oy → LähiTapiola / LähiTapiolan)
+        # Propagate company stems + contract hereinafter aliases
+        # (Oy Foo Ab (myöhemmin Foo) → Foo / Foota …)
+        alias_bindings = []
         if "ORG" in entities:
             stems = collect_stems_from_results(text, merged)
+            alias_bindings = find_org_alias_bindings(text, merged)
+            stems = merge_stems_with_aliases(stems, alias_bindings)
             if stems:
                 _p("Expanding company short forms…")
                 merged = _merge_results(
@@ -2037,6 +2043,10 @@ class DocumentAnonymizer:
         emap = EntityMap(
             registry=getattr(self.config, "entity_registry", None)
         )
+        # hereinafter aliases → same [ORG_n] as the full party name when known
+        for binding in find_org_alias_bindings(text, auto_results):
+            if binding.primary and binding.alias:
+                emap.bind_equivalent("ORG", binding.primary, [binding.alias])
         anonymized, entity_map, hits = apply_stable_placeholders(
             text, auto_results, entity_map=emap, style=self.config.redact_style
         )
@@ -2143,6 +2153,9 @@ class DocumentAnonymizer:
         entity_map = EntityMap(
             registry=getattr(self.config, "entity_registry", None)
         )
+        for binding in find_org_alias_bindings(joined, auto_results):
+            if binding.primary and binding.alias:
+                entity_map.bind_equivalent("ORG", binding.primary, [binding.alias])
         all_hits: list[EntityHit] = []
         out_blocks: list[str] = []
         type_counts: dict[str, int] = {}
