@@ -92,6 +92,7 @@ def render_markdown(
     *,
     used_ocr: bool = False,
     ocr_meta: dict | None = None,
+    debug: bool = False,
 ) -> str:
     fm: dict = {
         "source": str(source),
@@ -115,6 +116,16 @@ def render_markdown(
         low = ocr_meta.get("low_coverage_pages") or []
         if low:
             fm["ocr_low_coverage_pages"] = list(low)
+    if debug and result.mapping:
+        from anonymizer.anonymize.debug_log import count_source_families
+
+        sources = count_source_families(
+            result.mapping,
+            getattr(result, "hit_meta", None),
+            hits=getattr(result, "hits", None),
+        )
+        if sources:
+            fm["detector_sources"] = sources
     # sort_keys for stable output in tests
     yaml_body = yaml.safe_dump(fm, sort_keys=True, allow_unicode=True).strip()
     body = blocks_to_markdown_body(blocks)
@@ -125,6 +136,8 @@ def render_from_extracted(
     doc: ExtractedDoc,
     anon_block_texts: list[str],
     result: AnonymizeResult,
+    *,
+    debug: bool = False,
 ) -> str:
     new_blocks: list[TextBlock] = []
     for orig, text in zip(doc.blocks, anon_block_texts, strict=True):
@@ -138,4 +151,5 @@ def render_from_extracted(
         result,
         used_ocr=doc.used_ocr,
         ocr_meta=ocr_meta if isinstance(ocr_meta, dict) else None,
+        debug=debug,
     )

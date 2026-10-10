@@ -192,8 +192,13 @@ def ellipsize_text(text: str, font: object, max_px: int) -> str:
 
 
 def format_finding_secondary(f: ReviewFinding) -> str:
-    """Line 2: type · tag · user-added marker."""
+    """Line 2: type · tag · optional detector chip · user-added marker."""
+    from anonymizer.anonymize.debug_log import format_sources_chip
+
     parts = [_human_type_label(f), f.placeholder]
+    chip = format_sources_chip(getattr(f, "detector_sources", None) or [])
+    if chip:
+        parts.append(chip)
     if f.source == "user":
         parts.append("added")
     return " · ".join(parts)

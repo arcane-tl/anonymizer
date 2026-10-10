@@ -37,4 +37,16 @@ allow:
   - Vuokranantaja
   - Vakuutuksenottaja
   - Vakuutuksenantaja
+  # Possessive / company-field phrases (two-column forms without ':')
+  - Yrityksen Y-tunnus
+  - Yrityksen ALV-numero
+  - Yrityksen rekisterinumero
+  - Yrityksen nimi
+  - Yrityksen osoite
+  - Yrityksen sähköposti
+  - Yrityksen puhelin
+  - Asiakkaan Y-tunnus
+  - Asiakkaan nimi
+  - Henkilön nimi
+  - Henkilötunnus / hetu
 deny: []

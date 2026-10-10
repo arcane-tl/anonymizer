@@ -60,7 +60,9 @@ _BUILTIN_SPECS: tuple[EntityTypeSpec, ...] = (
     _spec("FI_HETU", priority=3, modes=("strict", "standard")),
     _spec("FI_BUSINESS_ID", priority=3, modes=("strict",)),
     _spec("FI_VAT", "VAT_FI", priority=3, modes=("strict",)),
-    _spec("FI_LICENSE_PLATE", "PLATE_FI", priority=3, modes=("strict",)),
+    _spec("FI_LICENSE_PLATE", "PLATE_FI", priority=4, modes=("strict",)),
+    # Broader EU/US/generic plates (English NLP pass)
+    _spec("LICENSE_PLATE", "PLATE", priority=3, modes=("strict",)),
     _spec("FI_POSTAL_CODE", "POSTAL", priority=3, modes=("strict", "standard")),
     _spec("VEHICLE_VIN", "VIN", priority=3, modes=("strict",)),
     _spec("URL", priority=3, modes=("strict",)),
@@ -165,6 +167,7 @@ class EntityTypeRegistry:
             "FI_BUSINESS_ID",
             "FI_VAT",
             "FI_LICENSE_PLATE",
+            "LICENSE_PLATE",
             "FI_POSTAL_CODE",
             "VEHICLE_VIN",
         ]

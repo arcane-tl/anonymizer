@@ -164,6 +164,8 @@ class ReviewFinding:
     enabled: bool = True  # True = will redact
     source: FindingSource = "auto"
     occurrence_count: int = 1
+    # Detector tags (spacy:fi, pattern:…); shown only when debug provenance is on
+    detector_sources: list[str] = field(default_factory=list)
 
     @property
     def type_label(self) -> str:
@@ -193,12 +195,21 @@ class ReviewSession:
         mapping: dict[str, str],
         *,
         pre_keep_clear: Iterable[str] | None = None,
+        hit_meta: dict[str, dict] | None = None,
+        show_sources: bool = False,
     ) -> ReviewSession:
         """Build session from engine mapping (placeholder → original surface)."""
+        from anonymizer.anonymize.debug_log import sources_for_placeholder
+
         keep = {k for k in (pre_keep_clear or []) if k in mapping}
         findings: list[ReviewFinding] = []
         for ph in sort_placeholders(mapping.keys()):
             original = mapping[ph]
+            dets = (
+                sources_for_placeholder(ph, hit_meta, surface=original)
+                if show_sources
+                else []
+            )
             findings.append(
                 ReviewFinding(
                     placeholder=ph,
@@ -209,6 +220,7 @@ class ReviewSession:
                     occurrence_count=count_surface_occurrences(
                         original_blocks, original
                     ),
+                    detector_sources=list(dets),
                 )
             )
         return cls(original_blocks=list(original_blocks), findings=findings)
@@ -444,6 +456,7 @@ def recount_entities(mapping: dict[str, str]) -> dict[str, int]:
             "IP": "IP_ADDRESS",
             "POSTAL": "FI_POSTAL_CODE",
             "PLATE_FI": "FI_LICENSE_PLATE",
+            "PLATE": "LICENSE_PLATE",
             "VAT_FI": "FI_VAT",
             "VIN": "VEHICLE_VIN",
         }.get(label, label)
@@ -494,10 +507,13 @@ def _checkbox_review(
     *,
     console: Console,
     file_label: str | None,
+    session: ReviewSession | None = None,
 ) -> list[str]:
     """Spacebar multi-select via questionary (all start unchecked)."""
     import questionary
     from questionary import Choice, Style
+
+    from anonymizer.anonymize.debug_log import format_sources_chip
 
     if file_label:
         console.print(f"\n[bold]Review redactions — {file_label}[/bold]")
@@ -514,9 +530,21 @@ def _checkbox_review(
         "[cyan]enter[/cyan] confirm · ctrl+c abort[/dim]\n"
     )
 
+    by_ph = {f.placeholder: f for f in (session.findings if session else [])}
+
+    def _title(ph: str) -> str:
+        bits = [ph]
+        f = by_ph.get(ph)
+        if f is not None:
+            chip = format_sources_chip(f.detector_sources)
+            if chip:
+                bits.append(f"[{chip}]")
+        bits.append(_truncate_display(mapping[ph]))
+        return "  ".join(bits)
+
     choices = [
         Choice(
-            title=f"{ph}  {_truncate_display(mapping[ph])}",
+            title=_title(ph),
             value=ph,
             checked=False,
         )
@@ -701,6 +729,8 @@ def interactive_review(
     pre_keep_clear: Iterable[str] | None = None,
     learn_to: str | None = None,
     risk: ReviewRisk | None = None,
+    hit_meta: dict[str, dict] | None = None,
+    show_sources: bool = False,
 ) -> ReviewSession:
     """Interactive review: terminal checklist or document window.
 
@@ -719,6 +749,8 @@ def interactive_review(
         GUIs should pass ``"window"``; plain CLI ``--review`` uses ``"cli"``.
     pre_keep_clear
         Placeholders already rejected (e.g. from ``--reject``) start unchecked.
+    hit_meta / show_sources
+        When ``show_sources`` (debug provenance), attach detector chips to findings.
     """
     console = console or Console(stderr=True)
     blocks = list(original_blocks or [])
@@ -728,7 +760,11 @@ def interactive_review(
         return ReviewSession.from_mapping(blocks, {})
 
     session = ReviewSession.from_mapping(
-        blocks, mapping, pre_keep_clear=pre_keep_clear
+        blocks,
+        mapping,
+        pre_keep_clear=pre_keep_clear,
+        hit_meta=hit_meta,
+        show_sources=show_sources,
     )
 
     if not session.findings:
@@ -805,7 +841,12 @@ def interactive_review(
         has_q = False
 
     if has_q:
-        keep = _checkbox_review(mapping, console=console, file_label=file_label)
+        keep = _checkbox_review(
+            mapping,
+            console=console,
+            file_label=file_label,
+            session=session,
+        )
     else:
         console.print(
             "[yellow]Note:[/yellow] install [bold]questionary[/bold] for "

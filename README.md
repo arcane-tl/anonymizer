@@ -481,7 +481,7 @@ Dates are off by default (`--include-dates` to enable).
 
 ### How detection works (short)
 
-Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **templates** (named allow/deny packs). The app does **not** ship a list of real-world companies or people — builtin templates are field labels and legal *boilerplate* only. Create user packs for client-specific names; teach them after `--review` with `--learn-to`. See `config.example.yaml` and `anonymize templates`. Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **templates** (named allow/deny packs). Soft spaCy ORG/LOCATION/CITY hits auto-redact only when corroborated (pattern / denylist / dual-lang); uncorroborated soft hits are Review proposals (`spacy_auto_redact`, default `corroborated`). Finnish `PRODUCT→ORG` is opt-in. Optional **Voikko** (`pip install 'anonymizer[fi]'`, plus system `libvoikko` / `voikko-fi`) further drops common-word FI ORG/PERSON noise when installed; missing Voikko is skipped. Review keep-clear decisions log to `anonymize fp-stats`. The app does **not** ship a list of real-world companies or people — builtin templates are field labels and legal *boilerplate* only. Create user packs for client-specific names; teach them after `--review` with `--learn-to`. See `config.example.yaml` and `anonymize templates`. Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
 
 ---
 
@@ -510,6 +510,7 @@ anonymize doc.pdf --llm --llm-provider ollama   # optional local LLM layer
 | `--fail-on-native-miss` | **More options** | Exit 1 if native PDF/DOCX misses or residuals remain |
 | `--redact-letterhead-images` | **More options** | Black-box PDF header/footer logo bands |
 | `--llm` | — | Opt-in LLM layer (`--offline` blocks remote xAI / non-local Ollama) |
+| `--debug` | **More options → Debug provenance** | Review source chips + per-run findings log (`~/.local/state/anonymizer/logs/`; also `ANONYMIZER_DEBUG=1`) |
 | `--keep-headers` | — | Keep PDF running headers/footers (default: strip) |
 | `-o -` | — | Markdown on stdout (progress on stderr) |
 | `--out-dir` | **Output folder** | Batch / chosen directory |

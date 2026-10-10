@@ -34,6 +34,8 @@ from anonymizer.anonymize.mapping import EntityMap, normalize_entity_text
 from anonymizer.anonymize.org_stems import (
     collect_stems_from_results,
     expand_org_stems_in_text,
+    find_org_alias_bindings,
+    merge_stems_with_aliases,
 )
 from anonymizer.anonymize.recognizers.brand_org import BrandOrgRecognizer
 from anonymizer.anonymize.recognizers.company import CompanyRecognizer
@@ -43,6 +45,7 @@ from anonymizer.anonymize.recognizers.fi_phone import FiPhoneRecognizer
 from anonymizer.anonymize.recognizers.fi_plate import FiPlateRecognizer
 from anonymizer.anonymize.recognizers.fi_postal import FiPostalCodeRecognizer
 from anonymizer.anonymize.recognizers.fi_vat import FiVatRecognizer
+from anonymizer.anonymize.recognizers.license_plate import LicensePlateRecognizer
 from anonymizer.anonymize.recognizers.person_name import PersonNameRecognizer
 from anonymizer.anonymize.recognizers.street import StreetRecognizer
 from anonymizer.anonymize.recognizers.url import WebUrlRecognizer
@@ -52,20 +55,54 @@ from anonymizer.models import AnonymizeResult, EntityHit, LanguageDecision
 
 logger = logging.getLogger(__name__)
 
-# spaCy label → Presidio entity type
-_SPACY_LABEL_MAP = {
+# spaCy label → Presidio entity type (PRODUCT → ORG is opt-in via config)
+_SPACY_LABEL_MAP_BASE = {
     "PERSON": "PERSON",
     "PER": "PERSON",
     "ORG": "ORG",
     "ORGANIZATION": "ORG",
-    # Brands / products often tagged PRODUCT by Finnish models
-    "PRODUCT": "ORG",
     "LOC": "LOCATION",
     "GPE": "LOCATION",
     "LOCATION": "LOCATION",
     "FAC": "LOCATION",
     "NORP": "NRP",
 }
+
+
+def _spacy_label_map(*, map_product_to_org: bool = False) -> dict[str, str]:
+    m = dict(_SPACY_LABEL_MAP_BASE)
+    if map_product_to_org:
+        m["PRODUCT"] = "ORG"
+    return m
+
+
+# Back-compat alias used by tests / probes that expect PRODUCT→ORG historically
+_SPACY_LABEL_MAP = {**_SPACY_LABEL_MAP_BASE, "PRODUCT": "ORG"}
+
+# Neighbor cues that justify a single-token PERSON (not a person catalog)
+_PERSON_CONTEXT_CUES = frozenset(
+    {
+        "nimi",
+        "allekirjoitus",
+        "allekirjoittaja",
+        "yhteyshenkilö",
+        "yhteyshenkilo",
+        "name",
+        "signer",
+        "signature",
+        "contact",
+        "kontakt",
+        "underskrift",
+    }
+)
+_EMAIL_SHAPE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
+_PHONE_SHAPE = re.compile(r"\+?\d[\d\s\-()]{6,}\d")
+_HETU_SHAPE = re.compile(
+    r"\b\d{6}[-+A]\d{3}[\dA-Z]\b",
+    re.I,
+)
+# Neighbor window for PERSON context + legal boilerplate cues
+_BOILERPLATE_WINDOW = 64
 
 
 def _resolve_spacy_model(
@@ -108,6 +145,7 @@ def _builtin_recognizer_classes() -> list[type]:
         FiVatRecognizer,
         FiPhoneRecognizer,
         FiPlateRecognizer,
+        LicensePlateRecognizer,
         FiPostalCodeRecognizer,
         WebUrlRecognizer,
         StreetRecognizer,
@@ -138,11 +176,12 @@ def _pattern_analyzer_cached(plugin_key: str = "") -> AnalyzerEngine:
     nlp_engine = provider.create_engine()
     registry = RecognizerRegistry(supported_languages=["en"])
     registry.load_predefined_recognizers(nlp_engine=nlp_engine, languages=["en"])
+    # Plate recognizers are language-gated in _standalone_pattern_recognizers
+    # (FI vs EN) — do not register them on this always-on EN Presidio engine.
     for Rec in (
         FiHetuRecognizer,
         FiBusinessIdRecognizer,
         FiPhoneRecognizer,
-        FiPlateRecognizer,
         FiPostalCodeRecognizer,
         WebUrlRecognizer,
         StreetRecognizer,
@@ -368,6 +407,95 @@ def _looks_like_false_person(
     return False
 
 
+def _person_context_ok(text: str, start: int, end: int) -> bool:
+    """Single-token PERSON needs email/phone/hetu or a name/signer label nearby."""
+    left = text[max(0, start - _BOILERPLATE_WINDOW) : start]
+    right = text[end : min(len(text), end + _BOILERPLATE_WINDOW)]
+    window = f"{left} {right}"
+    if _EMAIL_SHAPE.search(window) or _PHONE_SHAPE.search(window) or _HETU_SHAPE.search(
+        window
+    ):
+        return True
+    for raw in re.findall(r"[\wÅÄÖåäö-]+", window.casefold(), flags=re.UNICODE):
+        if raw.strip("-") in _PERSON_CONTEXT_CUES:
+            return True
+    return False
+
+
+def _is_pre_ner_skip_line(line: str, allowlist_folded: set[str] | None = None) -> bool:
+    """Form labels / ALL-CAPS rows — spaCy is sentence-trained; skip these lines."""
+    s = line.strip()
+    if not s:
+        return False
+    if len(s) <= 48 and s.endswith(":"):
+        return True
+    folded = s.casefold().rstrip(":")
+    if allowlist_folded and folded in allowlist_folded:
+        return True
+    letters = [c for c in s if c.isalpha()]
+    if len(letters) >= 4 and len(s) <= 64:
+        upper = sum(1 for c in letters if c.isupper())
+        if upper / len(letters) >= 0.9 and " " not in s.strip():
+            # Single ALL-CAPS token row (REKISTERI, PDF, …)
+            return True
+        if upper / len(letters) >= 0.9 and len(s.split()) <= 4 and not _LEGAL_FORM_RE.search(
+            s
+        ):
+            return True
+    return False
+
+
+def _blank_pre_ner_noise(
+    text: str, allowlist: list[str] | None = None
+) -> str:
+    """Replace label-like lines with spaces (offsets preserved)."""
+    allow_folded = {a.strip().casefold().rstrip(":") for a in (allowlist or []) if a}
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body_end = len(line.rstrip("\r\n"))
+        body = line[:body_end]
+        nl = line[body_end:]
+        if _is_pre_ner_skip_line(body, allow_folded):
+            out.append((" " * len(body)) + nl)
+        else:
+            out.append(line)
+    return "".join(out)
+
+
+def _ner_segment_spans(text: str) -> list[tuple[int, int]]:
+    """Split into paragraph / line-ish spans for spaCy (project back to doc)."""
+    spans: list[tuple[int, int]] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        while i < n and text[i] in "\n\r":
+            i += 1
+        if i >= n:
+            break
+        # Prefer blank-line paragraphs; else accumulate ~2–4 lines
+        j = i
+        lines = 0
+        while j < n:
+            if text[j] == "\n":
+                lines += 1
+                if j + 1 < n and text[j + 1] == "\n":
+                    j += 1
+                    break
+                if lines >= 4:
+                    break
+            j += 1
+        # trim trailing newlines from segment end
+        end = j
+        while end > i and text[end - 1] in "\n\r":
+            end -= 1
+        if end > i and text[i:end].strip():
+            spans.append((i, end))
+        i = j if j > i else i + 1
+    if not spans and text.strip():
+        spans.append((0, len(text)))
+    return spans
+
+
 def _spacy_ner_results(
     text: str,
     lang: str,
@@ -375,8 +503,23 @@ def _spacy_ner_results(
     score: float = 0.75,
     *,
     model_override: str = "",
+    map_product_to_org: bool = False,
+    allowlist: list[str] | None = None,
 ) -> list[RecognizerResult]:
     """Neural NER layer (spaCy). No hard-coded entity catalogs."""
+    from anonymizer.anonymize.ner_meta import (
+        META_LANG,
+        META_POS,
+        META_SINGLE_TOKEN,
+        META_SOURCE,
+        META_SPACY_LABEL,
+        set_meta,
+    )
+    from anonymizer.anonymize.voikko_fi import (
+        all_tokens_common_finnish,
+        is_common_finnish_word,
+    )
+
     try:
         nlp = _spacy_nlp(lang, model_override)
     except Exception as exc:
@@ -387,80 +530,135 @@ def _spacy_ner_results(
     if len(text) > nlp.max_length:
         logger.warning("Text length %s exceeds spaCy max; truncating", len(text))
         text = text[: nlp.max_length]
-    doc = nlp(text)
+
+    blanked = _blank_pre_ner_noise(text, allowlist)
+    label_map = _spacy_label_map(map_product_to_org=map_product_to_org)
     wanted = set(entities)
     results: list[RecognizerResult] = []
-    for ent in doc.ents:
-        mapped = _SPACY_LABEL_MAP.get(ent.label_.upper())
-        if not mapped:
+
+    for seg_start, seg_end in _ner_segment_spans(blanked):
+        segment = blanked[seg_start:seg_end]
+        if not segment.strip():
             continue
-        if wanted and mapped not in wanted:
-            continue
-        start, end = ent.start_char, ent.end_char
-        surface = text[start:end]
-        # Clip multi-line NER spans to the first line (spaCy often glues
-        # "Jordan Avery Blake\n- Email" into one PERSON).
-        if "\n" in surface or "\r" in surface:
-            first = re.split(r"[\r\n]+", surface, maxsplit=1)[0].rstrip(" \t-–—:;")
-            if not first.strip():
+        doc = nlp(segment)
+        for ent in doc.ents:
+            mapped = label_map.get(ent.label_.upper())
+            if not mapped:
                 continue
-            end = start + len(first)
+            if wanted and mapped not in wanted:
+                continue
+            start = seg_start + ent.start_char
+            end = seg_start + ent.end_char
             surface = text[start:end]
-            if not surface.strip():
-                continue
-        span_toks = [
-            t
-            for t in doc
-            if t.idx >= start and t.idx < end and not t.is_space and not t.is_punct
-        ]
-        if mapped == "ORG":
-            start, end = _trim_spacy_org_span_with_doc(doc, start, end)
-            if start >= end or not text[start:end].strip():
-                continue
-            surface = text[start:end]
+            # Clip multi-line NER spans to the first line
             if "\n" in surface or "\r" in surface:
+                first = re.split(r"[\r\n]+", surface, maxsplit=1)[0].rstrip(" \t-–—:;")
+                if not first.strip():
+                    continue
+                end = start + len(first)
+                surface = text[start:end]
+                if not surface.strip():
+                    continue
+            # Skip if the span sits on a blanked (label) line
+            if not blanked[start:end].strip():
                 continue
             span_toks = [
                 t
                 for t in doc
-                if t.idx >= start and t.idx < end and not t.is_space and not t.is_punct
+                if t.idx >= ent.start_char
+                and t.idx < ent.end_char
+                and not t.is_space
+                and not t.is_punct
             ]
-            # Drop weak single-token common nouns tagged ORG ("Work", "PDF")
-            if len(span_toks) == 1 and span_toks[0].pos_ in {
-                "NOUN",
-                "ADJ",
-                "VERB",
-                "SCONJ",
-                "X",
-            }:
-                continue
-            # Multi-token ORG without any PROPN and without legal form → boilerplate
-            if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
-                if not _LEGAL_FORM_RE.search(surface):
+            if mapped == "ORG":
+                local_start, local_end = _trim_spacy_org_span_with_doc(
+                    doc, ent.start_char, ent.end_char
+                )
+                start = seg_start + local_start
+                end = seg_start + local_end
+                if start >= end or not text[start:end].strip():
                     continue
-            if _looks_like_legal_boilerplate_org(nlp, surface):
-                continue
-        if mapped in {"LOCATION", "CITY"}:
-            if _looks_like_false_location(surface):
-                continue
-        if mapped == "PERSON":
-            # Real person names almost always include a PROPN token
-            if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
-                continue
-            if len(span_toks) == 1 and span_toks[0].pos_ in {"NOUN", "ADJ", "VERB"}:
-                continue
-            if _looks_like_false_person(nlp, surface, span_toks):
-                continue
-            if _is_contract_role_surface(surface):
-                continue
-        results.append(
-            RecognizerResult(
+                surface = text[start:end]
+                if "\n" in surface or "\r" in surface:
+                    continue
+                if not blanked[start:end].strip():
+                    continue
+                span_toks = [
+                    t
+                    for t in doc
+                    if t.idx >= local_start
+                    and t.idx < local_end
+                    and not t.is_space
+                    and not t.is_punct
+                ]
+                if len(span_toks) == 1 and span_toks[0].pos_ in {
+                    "NOUN",
+                    "ADJ",
+                    "VERB",
+                    "SCONJ",
+                    "X",
+                }:
+                    continue
+                if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
+                    if not _LEGAL_FORM_RE.search(surface):
+                        continue
+                if _looks_like_legal_boilerplate_org(nlp, surface):
+                    continue
+                # Voikko: common FI word(s) without legal form → drop weak ORG
+                if lang == "fi" and not _LEGAL_FORM_RE.search(surface):
+                    if len(span_toks) == 1:
+                        common = is_common_finnish_word(surface)
+                        if common is True:
+                            continue
+                    elif len(span_toks) >= 2:
+                        tok_texts = [t.text for t in span_toks]
+                        if all_tokens_common_finnish(tok_texts) is True:
+                            continue
+            if mapped in {"LOCATION", "CITY"}:
+                if _looks_like_false_location(surface):
+                    continue
+                # Voikko: single-token common word (not paikannimi) → drop
+                if lang == "fi" and len(span_toks) == 1:
+                    common = is_common_finnish_word(surface)
+                    if common is True:
+                        continue
+            if mapped == "PERSON":
+                if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
+                    continue
+                if len(span_toks) == 1 and span_toks[0].pos_ in {"NOUN", "ADJ", "VERB"}:
+                    continue
+                if _looks_like_false_person(nlp, surface, span_toks):
+                    continue
+                if _is_contract_role_surface(surface):
+                    continue
+                propn_n = sum(1 for t in span_toks if t.pos_ == "PROPN")
+                if len(span_toks) == 1 or propn_n < 2:
+                    # Single-token (or single PROPN) needs context; else drop
+                    if not _person_context_ok(text, start, end):
+                        continue
+                    if lang == "fi":
+                        common = is_common_finnish_word(surface)
+                        if common is True:
+                            continue
+            pos_tags = [t.pos_ for t in span_toks]
+            single = len(span_toks) <= 1
+            rr = RecognizerResult(
                 entity_type=mapped,
                 start=start,
                 end=end,
                 score=score,
             )
-        )
+            set_meta(
+                rr,
+                **{
+                    META_SOURCE: f"spacy:{lang}",
+                    META_POS: pos_tags,
+                    META_SINGLE_TOKEN: single,
+                    META_SPACY_LABEL: ent.label_.upper(),
+                    META_LANG: lang,
+                },
+            )
+            results.append(rr)
     return results
 
 
@@ -522,6 +720,7 @@ def _pattern_results(
     include_ner: bool,
     *,
     config: AnonymizerConfig | None = None,
+    nlp_passes: list[str] | None = None,
 ) -> list[RecognizerResult]:
     """Run Presidio (EN) for patterns; optionally include EN NER."""
     try:
@@ -529,7 +728,9 @@ def _pattern_results(
     except RuntimeError as exc:
         logger.warning("%s", exc)
         # Still run custom pattern recognizers standalone
-        return _standalone_pattern_recognizers(text, entities, config=config)
+        return _standalone_pattern_recognizers(
+            text, entities, config=config, nlp_passes=nlp_passes
+        )
 
     if include_ner:
         ent_list = list(entities)
@@ -541,7 +742,9 @@ def _pattern_results(
         ner_types = {"PERSON", "ORG", "LOCATION", "NRP", "DATE_TIME"}
         ent_list = [e for e in entities if e not in ner_types]
         if not ent_list:
-            return _standalone_pattern_recognizers(text, entities, config=config)
+            return _standalone_pattern_recognizers(
+                text, entities, config=config, nlp_passes=nlp_passes
+            )
 
     # Pull phones slightly below the default threshold so unlabeled
     # international numbers are not dropped; non-phone types are re-filtered.
@@ -563,7 +766,11 @@ def _pattern_results(
     found = [r for r in found if _keep_pattern_result(r, text, score_threshold)]
 
     # Always run custom patterns (FI IDs, plates, URLs, streets, company suffixes)
-    found.extend(_standalone_pattern_recognizers(text, entities, config=config))
+    found.extend(
+        _standalone_pattern_recognizers(
+            text, entities, config=config, nlp_passes=nlp_passes
+        )
+    )
     return found
 
 
@@ -572,16 +779,22 @@ def _standalone_pattern_recognizers(
     entities: list[str],
     *,
     config: AnonymizerConfig | None = None,
+    nlp_passes: list[str] | None = None,
 ) -> list[RecognizerResult]:
     """Custom regex/suffix recognizers that must run for every document."""
     results: list[RecognizerResult] = []
+    passes = {p.casefold() for p in (nlp_passes or [])}
+    # FI plates when Finnish pass (or unknown lang — keep FI for safety).
+    # Broader EU/US plates only when English pass is explicit.
+    run_fi_plate = (not passes) or ("fi" in passes)
+    run_license_plate = "en" in passes
+
     # Built-in class specs: (class, entity codes they may emit)
     specs: list[tuple[type, list[str]]] = [
         (FiHetuRecognizer, ["FI_HETU"]),
         (FiBusinessIdRecognizer, ["FI_BUSINESS_ID"]),
         (FiVatRecognizer, ["FI_VAT"]),
         (FiPhoneRecognizer, ["PHONE_NUMBER"]),
-        (FiPlateRecognizer, ["FI_LICENSE_PLATE"]),
         (FiPostalCodeRecognizer, ["FI_POSTAL_CODE"]),
         (WebUrlRecognizer, ["URL"]),
         (VehicleVinRecognizer, ["VEHICLE_VIN"]),
@@ -593,6 +806,13 @@ def _standalone_pattern_recognizers(
         (BrandOrgRecognizer, ["ORG"]),
         (PersonNameRecognizer, ["PERSON"]),
     ]
+    if run_fi_plate:
+        specs.insert(4, (FiPlateRecognizer, ["FI_LICENSE_PLATE"]))
+    if run_license_plate:
+        # After FI plate so merge can prefer FI_LICENSE_PLATE on overlap
+        insert_at = 5 if run_fi_plate else 4
+        specs.insert(insert_at, (LicensePlateRecognizer, ["LICENSE_PLATE"]))
+
     for Rec, ents in specs:
         if entities and not any(e in entities for e in ents):
             continue
@@ -617,7 +837,8 @@ _ENTITY_PRIORITY = {
     "STREET": 3,
     "CITY": 3,
     "FI_POSTAL_CODE": 3,
-    "FI_LICENSE_PLATE": 3,
+    "FI_LICENSE_PLATE": 4,  # Prefer over generic LICENSE_PLATE on overlap
+    "LICENSE_PLATE": 3,
     "FI_HETU": 3,
     "FI_BUSINESS_ID": 3,
     "FI_VAT": 3,
@@ -704,16 +925,37 @@ def _denylist_hits(
             idx = lower.find(nlow, start)
             if idx < 0:
                 break
-            results.append(
-                RecognizerResult(
-                    entity_type=etype,
-                    start=idx,
-                    end=idx + len(needle),
-                    score=1.0,
-                )
+            rr = RecognizerResult(
+                entity_type=etype,
+                start=idx,
+                end=idx + len(needle),
+                score=1.0,
             )
+            from anonymizer.anonymize.ner_meta import set_source
+
+            set_source(rr, "denylist")
+            results.append(rr)
             start = idx + max(len(needle), 1)
     return results
+
+
+# Possessive / role prefixes common on FI forms ("Yrityksen Y-tunnus")
+_FI_LABEL_PREFIX = re.compile(
+    r"(?i)^(yrityksen|asiakkaan|henkilön|työntekijän|myyjän|ostajan|"
+    r"toimittajan|tilaajan|vakuutuksenottajan|vakuutuksenantajan|"
+    r"vuokralaisen|vuokranantajan)\s+"
+)
+
+# Value-looking remainder after a label in two-column layouts
+_LABEL_VALUE_REST = re.compile(
+    r"\s+(?:"
+    r"\d[\d\s\-./]{2,}|"  # Y-tunnus / phone / postcode-ish
+    r"FI\d{8}|"  # FI VAT
+    r"[A-ZÅÄÖ]{2,3}-\d{1,4}|"  # plate-like
+    r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+|"  # email
+    r"\+?\d[\d\s\-()]{5,}"  # phone
+    r")"
+)
 
 
 def _allowlist_filter(
@@ -724,16 +966,50 @@ def _allowlist_filter(
     if not allowlist:
         return results
     allowed = {normalize_entity_text(a) for a in allowlist if a}
-    return [
-        r
-        for r in results
-        if normalize_entity_text(text[r.start : r.end]) not in allowed
-    ]
+    # Longer allow entries first for suffix checks
+    allowed_sorted = sorted((a for a in allowed if a), key=len, reverse=True)
+    label_types = {"ORG", "PERSON", "LOCATION", "STREET", "CITY"}
+
+    kept: list[RecognizerResult] = []
+    for r in results:
+        surface_n = normalize_entity_text(text[r.start : r.end])
+        if surface_n in allowed:
+            continue
+        if r.entity_type in label_types and _allowlist_label_phrase(
+            surface_n, allowed_sorted
+        ):
+            continue
+        kept.append(r)
+    return kept
+
+
+def _allowlist_label_phrase(surface_n: str, allowed_sorted: list[str]) -> bool:
+    """True when surface is an allowlisted label or possessive + allowlisted label.
+
+    Exact allowlist is handled by the caller. This covers
+    ``yrityksen y-tunnus`` when ``y-tunnus`` is allowlisted, without bare
+    substring matches inside arbitrary company names.
+    """
+    if not surface_n or not allowed_sorted:
+        return False
+    for a in allowed_sorted:
+        if surface_n == a:
+            return True
+        # Possessive / role prefix + exact allowlisted label
+        if surface_n.endswith(a) and len(surface_n) > len(a):
+            head = surface_n[: -len(a)].rstrip()
+            if _FI_LABEL_PREFIX.match(head + " "):
+                return True
+            # Also: surface ends with allowlisted multi-word label after one token
+            # e.g. "company business id" when "business id" allowed — skip unless
+            # FI prefix (EN handled via expanded template phrases).
+    return False
 
 
 # Morphological cue for form-field labels (not a place/person catalog)
 _LABEL_TAIL = re.compile(
-    r"(?i)(numero|tunniste|tunnus|osoite|koodi|kenttä|field|label|code)$"
+    r"(?i)(numero|tunniste|tunnus|osoite|koodi|kenttä|field|label|code|"
+    r"email|e-mail|phone|mobile|name|nimi|iban|bic)$"
 )
 
 
@@ -747,6 +1023,7 @@ def _looks_like_field_label(text: str, start: int, end: int) -> bool:
 
     Heuristic only — does not drop real names/companies that happen to sit
     before a colon (e.g. signature lines 'NORDIC WIDGETS OY: ____').
+    Also catches two-column layouts: ``Yrityksen Y-tunnus    1234567-8``.
     """
     surface = text[start:end].strip()
     if not surface or len(surface) > 80:
@@ -754,15 +1031,21 @@ def _looks_like_field_label(text: str, start: int, end: int) -> bool:
     # Companies with legal forms are never treated as field labels
     if _LEGAL_FORM_TOKEN.search(surface):
         return False
-    rest = text[end : end + 24]
+    rest = text[end : end + 48]
     followed_by_sep = bool(re.match(r"\s*[/：:]", rest)) or surface.endswith(":")
+    followed_by_value = bool(_LABEL_VALUE_REST.match(rest))
     # "Rekisterinumero/tunniste" style
     if "/" in surface and _LABEL_TAIL.search(surface.split("/")[-1].strip()):
         return True
-    # Label morphology + separator: "Rekisterinumero:", "Postinumero:"
+    # Label morphology + separator or column value
     if _LABEL_TAIL.search(surface) and (
-        followed_by_sep or re.match(r"\s*(\n|$)", rest)
+        followed_by_sep
+        or followed_by_value
+        or re.match(r"\s*(\n|$)", rest)
     ):
+        return True
+    # FI possessive field: "Yrityksen Y-tunnus" / "Asiakkaan nimi"
+    if _FI_LABEL_PREFIX.match(surface) and _LABEL_TAIL.search(surface):
         return True
     # Single-token label before colon/slash: "Osoite:"
     if followed_by_sep and len(surface.split()) == 1:
@@ -810,10 +1093,6 @@ def _filter_false_org_location(
 ) -> list[RecognizerResult]:
     """Backward-compatible alias for unified post-merge FP filter."""
     return _filter_entity_false_positives(text, results)
-
-
-# Window (chars) for cheap boilerplate neighbourhood checks
-_BOILERPLATE_WINDOW = 64
 
 
 def _has_legal_form(surface: str) -> bool:
@@ -1199,6 +1478,8 @@ def _project_results_to_block(
     block via a multi-block join are still applied on the overlapping slice
     (e.g. postcode+city line of a split Finnish address form).
     """
+    from anonymizer.anonymize.ner_meta import copy_result
+
     local: list[RecognizerResult] = []
     for r in results:
         if r.end <= block_start or r.start >= block_end:
@@ -1209,15 +1490,199 @@ def _project_results_to_block(
         loc_end = ov_end - block_start
         if loc_end <= loc_start:
             continue
-        local.append(
-            RecognizerResult(
-                entity_type=r.entity_type,
-                start=loc_start,
-                end=loc_end,
-                score=r.score,
-            )
-        )
+        local.append(copy_result(r, start=loc_start, end=loc_end))
     return local
+
+
+def _promote_corroborated_spacy(
+    text: str,
+    results: list[RecognizerResult],
+    *,
+    auto_mode: str = "corroborated",
+    proposal_score: float = 0.55,
+) -> list[RecognizerResult]:
+    """Mark weak spaCy soft hits as proposals unless corroborated.
+
+    Auto-redact (not a proposal) when any of:
+    - non-spaCy overlap / same surface (pattern, denylist, org_stem, …)
+    - dual spaCy language agreement on the surface
+    - PERSON with ≥2 tokens, or PERSON with contact/label neighbor context
+
+    ORG / LOCATION / CITY without the above stay proposals (news-model noise).
+    """
+    from anonymizer.anonymize.ner_meta import (
+        META_POS,
+        SPACY_SOFT_TYPES,
+        get_meta,
+        get_source,
+        is_spacy_source,
+        set_proposal,
+    )
+
+    if auto_mode == "always":
+        return results
+
+    spacy_langs: dict[str, set[str]] = {}
+    for r in results:
+        if not is_spacy_source(r) or r.entity_type not in SPACY_SOFT_TYPES:
+            continue
+        key = normalize_entity_text(text[r.start : r.end])
+        src = get_source(r)
+        lang = src.split(":", 1)[-1] if ":" in src else ""
+        spacy_langs.setdefault(key, set()).add(lang)
+
+    out: list[RecognizerResult] = []
+    for r in results:
+        if auto_mode == "never":
+            if is_spacy_source(r) and r.entity_type in SPACY_SOFT_TYPES:
+                set_proposal(r, True)
+                r.score = min(float(r.score), proposal_score)
+            out.append(r)
+            continue
+
+        if not is_spacy_source(r) or r.entity_type not in SPACY_SOFT_TYPES:
+            out.append(r)
+            continue
+
+        surface = text[r.start : r.end]
+        surface_key = normalize_entity_text(surface)
+        langs = spacy_langs.get(surface_key) or set()
+        dual_spacy = len(langs) >= 2
+
+        corroborated = dual_spacy
+        if not corroborated:
+            for other in results:
+                if other is r:
+                    continue
+                same_surface = (
+                    normalize_entity_text(text[other.start : other.end]) == surface_key
+                )
+                overlaps = not (other.end <= r.start or other.start >= r.end)
+                if not (overlaps or same_surface):
+                    continue
+                osrc = get_source(other)
+                if not osrc.startswith("spacy:"):
+                    corroborated = True
+                    break
+
+        # PERSON: multi-token names and contact-neighbor singles are trusted
+        if not corroborated and r.entity_type == "PERSON":
+            pos = list(get_meta(r, META_POS) or [])
+            tokens = [t for t in surface.split() if t.strip(".,;:'\"")]
+            if len(tokens) >= 2 or sum(1 for p in pos if p == "PROPN") >= 2:
+                corroborated = True
+            elif _person_context_ok(text, r.start, r.end):
+                corroborated = True
+
+        if corroborated:
+            set_proposal(r, False)
+            out.append(r)
+        else:
+            set_proposal(r, True)
+            r.score = min(float(r.score), proposal_score)
+            out.append(r)
+    return out
+
+
+def _split_auto_and_proposals(
+    results: list[RecognizerResult],
+) -> tuple[list[RecognizerResult], list[RecognizerResult]]:
+    from anonymizer.anonymize.ner_meta import is_proposal
+
+    auto: list[RecognizerResult] = []
+    proposals: list[RecognizerResult] = []
+    for r in results:
+        if is_proposal(r):
+            proposals.append(r)
+        else:
+            auto.append(r)
+    return auto, proposals
+
+
+def _assign_proposal_placeholders(
+    proposal_results: list[RecognizerResult],
+    text: str,
+    entity_map: EntityMap,
+    auto_placeholders: set[str],
+) -> dict[str, str]:
+    """Reserve placeholders for spaCy proposals; leave them out of the live map."""
+    proposals: dict[str, str] = {}
+    for r in sorted(proposal_results, key=lambda x: (x.start, x.end)):
+        surface = text[r.start : r.end]
+        if not surface.strip():
+            continue
+        ph = entity_map.get_or_assign(r.entity_type, surface)
+        if ph in auto_placeholders:
+            continue
+        proposals[ph] = surface
+        # Detach so apply_known_surfaces will not redact this surface
+        entity_map.reverse.pop(ph, None)
+        label = ph.strip("[]").rsplit("_", 1)[0]
+        entity_map._forward.pop((label, normalize_entity_text(surface)), None)
+    return proposals
+
+
+def _build_hit_meta(
+    mapping: dict[str, str],
+    hits: list[EntityHit],
+    proposal_results: list[RecognizerResult],
+    text: str,
+    proposals: dict[str, str],
+    lang_passes: list[str],
+) -> dict[str, dict]:
+    from anonymizer.anonymize.ner_meta import (
+        META_POS,
+        META_SINGLE_TOKEN,
+        META_SOURCE,
+        META_SPACY_LABEL,
+        get_meta,
+    )
+
+    # Prefer first hit per normalized surface
+    by_surface: dict[str, EntityHit] = {}
+    for h in hits:
+        key = normalize_entity_text(h.text)
+        if key not in by_surface:
+            by_surface[key] = h
+
+    meta: dict[str, dict] = {}
+    for ph, original in mapping.items():
+        h = by_surface.get(normalize_entity_text(original))
+        if h:
+            meta[ph] = {
+                "entity_type": h.entity_type,
+                "source": h.source,
+                "sources": [h.source] if h.source else [],
+                "pos": list(h.pos),
+                "single_token": h.single_token,
+                "spacy_label": h.spacy_label,
+                "lang_passes": list(lang_passes),
+            }
+
+    for r in proposal_results:
+        surface = text[r.start : r.end]
+        key = normalize_entity_text(surface)
+        ph = next(
+            (
+                p
+                for p, orig in proposals.items()
+                if normalize_entity_text(orig) == key
+            ),
+            None,
+        )
+        if not ph:
+            continue
+        src = str(get_meta(r, META_SOURCE) or "")
+        meta[ph] = {
+            "entity_type": r.entity_type,
+            "source": src,
+            "sources": [src] if src else [],
+            "pos": list(get_meta(r, META_POS) or []),
+            "single_token": bool(get_meta(r, META_SINGLE_TOKEN)),
+            "spacy_label": str(get_meta(r, META_SPACY_LABEL) or ""),
+            "lang_passes": list(lang_passes),
+        }
+    return meta
 
 
 def apply_stable_placeholders(
@@ -1245,10 +1710,20 @@ def apply_stable_placeholders(
     forward = sorted(results, key=lambda r: (r.start, r.end))
     planned: list[tuple[RecognizerResult, str, str]] = []
     hits: list[EntityHit] = []
+    from anonymizer.anonymize.ner_meta import (
+        META_POS,
+        META_SINGLE_TOKEN,
+        META_SOURCE,
+        META_SPACY_LABEL,
+        get_meta,
+        is_proposal,
+    )
+
     for r in forward:
         surface = text[r.start : r.end]
         placeholder = entity_map.get_or_assign(r.entity_type, surface)
         planned.append((r, surface, placeholder))
+        pos = list(get_meta(r, META_POS) or [])
         hits.append(
             EntityHit(
                 entity_type=r.entity_type,
@@ -1256,6 +1731,11 @@ def apply_stable_placeholders(
                 start=r.start,
                 end=r.end,
                 score=r.score,
+                source=str(get_meta(r, META_SOURCE) or ""),
+                pos=pos,
+                single_token=bool(get_meta(r, META_SINGLE_TOKEN)),
+                spacy_label=str(get_meta(r, META_SPACY_LABEL) or ""),
+                proposal=is_proposal(r),
             )
         )
     chars = list(text)
@@ -1450,26 +1930,39 @@ class DocumentAnonymizer:
         model_overrides = getattr(self.config, "spacy_models", None) or {}
 
         # Neural NER (one pass per language in nlp_passes)
+        map_product = bool(getattr(self.config, "spacy_map_product_to_org", False))
         for lang in decision.nlp_passes:
             _p(f"Neural NER ({lang})…")
             override = model_overrides.get(lang, "")
             all_results.extend(
                 _spacy_ner_results(
-                    text, lang, entities, model_override=override
+                    text,
+                    lang,
+                    entities,
+                    model_override=override,
+                    map_product_to_org=map_product,
+                    allowlist=list(self.config.allowlist or []),
                 )
             )
 
         # Patterns + heuristics (+ config plugin recognizers)
         _p("Patterns & heuristics…")
-        all_results.extend(
-            _pattern_results(
-                text,
-                entities,
-                score_threshold=self.config.score_threshold,
-                include_ner=False,
-                config=self.config,
-            )
+        from anonymizer.anonymize.ner_meta import get_source, set_source
+
+        pattern_hits = _pattern_results(
+            text,
+            entities,
+            score_threshold=self.config.score_threshold,
+            include_ner=False,
+            config=self.config,
+            nlp_passes=list(decision.nlp_passes),
         )
+        for r in pattern_hits:
+            if not get_source(r):
+                expl = getattr(r, "analysis_explanation", None)
+                rname = getattr(expl, "recognizer", None) if expl else None
+                set_source(r, f"pattern:{rname}" if rname else "pattern")
+        all_results.extend(pattern_hits)
 
         # Optional LLM
         if self.config.use_llm:
@@ -1506,9 +1999,13 @@ class DocumentAnonymizer:
         merged = _filter_entity_false_positives(text, merged, lex)
         merged = _drop_noisy_surfaces(text, merged)
 
-        # Propagate company stems (LähiTapiola Rahoitus Oy → LähiTapiola / LähiTapiolan)
+        # Propagate company stems + contract hereinafter aliases
+        # (Oy Foo Ab (myöhemmin Foo) → Foo / Foota …)
+        alias_bindings = []
         if "ORG" in entities:
             stems = collect_stems_from_results(text, merged)
+            alias_bindings = find_org_alias_bindings(text, merged)
+            stems = merge_stems_with_aliases(stems, alias_bindings)
             if stems:
                 _p("Expanding company short forms…")
                 merged = _merge_results(
@@ -1517,6 +2014,16 @@ class DocumentAnonymizer:
                 merged = _filter_entity_false_positives(text, merged, lex)
 
         merged = _allowlist_filter(text, merged, self.config.allowlist)
+
+        # spaCy soft types: proposal unless corroborated (config)
+        auto_mode = getattr(self.config, "spacy_auto_redact", "corroborated") or "corroborated"
+        prop_score = float(getattr(self.config, "spacy_proposal_score", 0.55) or 0.55)
+        merged = _promote_corroborated_spacy(
+            text,
+            merged,
+            auto_mode=auto_mode,
+            proposal_score=prop_score,
+        )
         return merged, decision
 
     def anonymize_text(
@@ -1532,11 +2039,32 @@ class DocumentAnonymizer:
         )
         if progress:
             progress("Applying redactions…")
+        auto_results, proposal_results = _split_auto_and_proposals(results)
         emap = EntityMap(
             registry=getattr(self.config, "entity_registry", None)
         )
+        # hereinafter aliases → same [ORG_n] as the full party name when known
+        for binding in find_org_alias_bindings(text, auto_results):
+            if binding.primary and binding.alias:
+                emap.bind_equivalent("ORG", binding.primary, [binding.alias])
         anonymized, entity_map, hits = apply_stable_placeholders(
-            text, results, entity_map=emap, style=self.config.redact_style
+            text, auto_results, entity_map=emap, style=self.config.redact_style
+        )
+        anonymized = apply_known_surfaces(
+            anonymized, entity_map, style=self.config.redact_style
+        )
+        auto_ph = set(entity_map.reverse.keys())
+        proposals = _assign_proposal_placeholders(
+            proposal_results, text, entity_map, auto_ph
+        )
+        mapping = dict(entity_map.reverse)
+        hit_meta = _build_hit_meta(
+            mapping,
+            hits,
+            proposal_results,
+            text,
+            proposals,
+            decision.nlp_passes,
         )
         type_counts: dict[str, int] = {}
         seen_keys: set[tuple[str, str]] = set()
@@ -1550,11 +2078,13 @@ class DocumentAnonymizer:
         return AnonymizeResult(
             anonymized_text=anonymized,
             entity_counts=type_counts,
-            mapping=dict(entity_map.reverse),
+            mapping=mapping,
             language=decision,
             hits=hits,
             mode=self.config.mode,
             redact_style=self.config.redact_style,
+            proposals=proposals,
+            hit_meta=hit_meta,
         )
 
     def anonymize_blocks(
@@ -1619,9 +2149,13 @@ class DocumentAnonymizer:
             if style == "remove"
             else "Applying placeholders…"
         )
+        auto_results, proposal_results = _split_auto_and_proposals(results)
         entity_map = EntityMap(
             registry=getattr(self.config, "entity_registry", None)
         )
+        for binding in find_org_alias_bindings(joined, auto_results):
+            if binding.primary and binding.alias:
+                entity_map.bind_equivalent("ORG", binding.primary, [binding.alias])
         all_hits: list[EntityHit] = []
         out_blocks: list[str] = []
         type_counts: dict[str, int] = {}
@@ -1631,7 +2165,7 @@ class DocumentAnonymizer:
             if not block.strip():
                 out_blocks.append(block)
                 continue
-            local = _project_results_to_block(results, b_start, b_end)
+            local = _project_results_to_block(auto_results, b_start, b_end)
             anon, entity_map, hits = apply_stable_placeholders(
                 block, local, entity_map=entity_map, style=style
             )
@@ -1652,13 +2186,29 @@ class DocumentAnonymizer:
             for b in out_blocks
         ]
 
+        auto_ph = set(entity_map.reverse.keys())
+        proposals = _assign_proposal_placeholders(
+            proposal_results, joined, entity_map, auto_ph
+        )
+        mapping = dict(entity_map.reverse)
+        hit_meta = _build_hit_meta(
+            mapping,
+            all_hits,
+            proposal_results,
+            joined,
+            proposals,
+            decision.nlp_passes,
+        )
+
         summary = AnonymizeResult(
             anonymized_text="\n\n".join(out_blocks),
             entity_counts=type_counts,
-            mapping=dict(entity_map.reverse),
+            mapping=mapping,
             language=decision,
             hits=all_hits,
             mode=self.config.mode,
             redact_style=style,
+            proposals=proposals,
+            hit_meta=hit_meta,
         )
         return out_blocks, summary

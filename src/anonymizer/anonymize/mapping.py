@@ -33,6 +33,8 @@ TYPE_LABELS: dict[str, str] = {
     "FI_VAT": "VAT_FI",
     # Plates: PLATE_{COUNTRY}_{n}  e.g. Finnish ABC-123 → [PLATE_FI_1]
     "FI_LICENSE_PLATE": "PLATE_FI",
+    # Broader EU/US/generic → [PLATE_n]
+    "LICENSE_PLATE": "PLATE",
     "FI_POSTAL_CODE": "POSTAL",
     "VEHICLE_VIN": "VIN",
     "URL": "URL",
@@ -94,6 +96,23 @@ class EntityMap:
         self._forward[key] = placeholder
         self.reverse[placeholder] = text
         return placeholder
+
+    def bind_equivalent(
+        self,
+        entity_type: str,
+        primary: str,
+        aliases: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
+        """Map *aliases* to the same placeholder as *primary* (one party, many surfaces)."""
+        ph = self.get_or_assign(entity_type, primary)
+        label = placeholder_label(entity_type, self.registry)
+        for raw in aliases or []:
+            a = (raw or "").strip()
+            if not a:
+                continue
+            key = (label, normalize_entity_text(a))
+            self._forward[key] = ph
+        return ph
 
     def counts_by_type(self) -> dict[str, int]:
         """Count unique entities assigned per placeholder label."""
