@@ -650,12 +650,13 @@ _build_summary_plain() {
 }
 
 # Native macOS summary dialog for the Terminal --review path.
-# Body text comes from a temp UTF-8 file (no fragile string embedding).
+# Body text from a temp file; paths passed via osascript argv (no mktemp suffix
+# after XXXXXX — macOS leaves a literal XXXXXX otherwise).
 _show_summary_osascript() {
   local summary_json="${1:-}"
   local plain="$2"
   local first_out="" save_default="anonymizer-summary.json"
-  local txt_file as_file err_file rc=0 btn_list
+  local txt_file err_file rc=0
   if ! command -v osascript >/dev/null 2>&1; then
     return 1
   fi
@@ -668,50 +669,60 @@ _show_summary_osascript() {
     save_default="$(basename -- "$first_out")"
     save_default="${save_default%.*}.anonymizer-summary.json"
   fi
-  # ASCII-only button labels (Unicode ellipsis broke some osascript compiles).
-  if [[ -n "$first_out" ]]; then
-    btn_list='"Save summary...", "Show in Finder", "OK"'
-  else
-    btn_list='"Save summary...", "OK"'
-  fi
 
-  txt_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-body.XXXXXX.txt")"
-  as_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-dialog.XXXXXX.applescript")"
+  # XXXXXX must be at the end of the mktemp template on macOS.
+  txt_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-body.XXXXXX")"
   err_file="${TMPDIR:-/tmp}/anonymizer-summary-osascript.log"
   printf '%s' "$plain" >"$txt_file"
 
-  cat >"$as_file" <<EOF
-try
-  tell application "Terminal" to activate
-end try
-delay 0.2
-set txtPath to "$(printf '%s' "$txt_file" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-set plainSum to read (POSIX file txtPath) as «class utf8»
-try
-  set doneBtn to button returned of (display dialog plainSum buttons {${btn_list}} default button "OK" with title "Anonymizer run summary")
-on error number errNum
-  if errNum is -128 then return "cancel"
-  error
-end try
-if doneBtn is "Save summary..." then
+  # argv: 1=body path, 2=summary json (may be empty), 3=first output (may be empty), 4=save default name
+  if osascript - "$txt_file" "${summary_json:-}" "${first_out:-}" "$save_default" 2>"$err_file" <<'APPLESCRIPT'
+on run argv
+  set txtPath to item 1 of argv
+  set jsonPath to item 2 of argv
+  set firstOut to item 3 of argv
+  set saveDefault to item 4 of argv
   try
-    set saveTarget to choose file name with prompt "Save run summary" default name "$(printf '%s' "$save_default" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    set savePosix to POSIX path of saveTarget
-    do shell script "cp $(printf '%q' "$summary_json") " & quoted form of savePosix & " && chmod 600 " & quoted form of savePosix
+    tell application "Terminal" to activate
+  end try
+  delay 0.2
+  set plainSum to do shell script "cat " & quoted form of txtPath
+  if firstOut is "" then
+    set btnList to {"Save summary...", "OK"}
+  else
+    set btnList to {"Save summary...", "Show in Finder", "OK"}
+  end if
+  try
+    set doneBtn to button returned of (display dialog plainSum buttons btnList default button "OK" with title "Anonymizer run summary")
   on error number errNum
-    if errNum is not -128 then
-      display dialog "Could not save summary." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
+    if errNum is -128 then return "cancel"
+    error
+  end try
+  if doneBtn is "Save summary..." then
+    if jsonPath is "" then
+      display dialog "No summary JSON to save." buttons {"OK"} default button 1 with title "Anonymizer"
+    else
+      try
+        set saveTarget to choose file name with prompt "Save run summary" default name saveDefault
+        set savePosix to POSIX path of saveTarget
+        do shell script "cp " & quoted form of jsonPath & " " & quoted form of savePosix & " && chmod 600 " & quoted form of savePosix
+      on error number errNum
+        if errNum is not -128 then
+          display dialog "Could not save summary." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
+        end if
+      end try
     end if
-  end try
-else if doneBtn is "Show in Finder" then
-  try
-    do shell script "open -R $(printf '%q' "$first_out")"
-  end try
-end if
-return doneBtn
-EOF
-
-  if osascript "$as_file" 2>"$err_file"; then
+  else if doneBtn is "Show in Finder" then
+    if firstOut is not "" then
+      try
+        do shell script "open -R " & quoted form of firstOut
+      end try
+    end if
+  end if
+  return doneBtn
+end run
+APPLESCRIPT
+  then
     rc=0
   else
     rc=$?
@@ -721,7 +732,7 @@ EOF
       cat "$err_file" >&2 || true
     fi
   fi
-  rm -f "$as_file" "$txt_file"
+  rm -f "$txt_file"
   return "$rc"
 }
 
