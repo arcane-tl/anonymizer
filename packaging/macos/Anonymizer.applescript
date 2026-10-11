@@ -694,7 +694,20 @@ on processFiles(theFiles)
 	-- Commit the hide before the shell blocks the run loop (Review must be the only window).
 	hideAnonymizerWindows()
 	delay 0.2
-	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & reviewFlag & extraOpts & " " & modeArg & " " & fileArgs
+
+	-- Quiet progress strip (separate process; this run loop stays blocked).
+	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
+	set progressPath to ""
+	try
+		set progressPath to do shell script "mktemp \"${TMPDIR:-/tmp}/anonymizer-progress.XXXXXX\""
+		set progressJson to "{\"state\":\"running\",\"phase\":\"Starting\",\"index\":0,\"total\":" & (nFiles as text) & ",\"file\":\"\",\"fraction\":0}"
+		do shell script "printf '%s\n' " & quoted form of progressJson & " > " & quoted form of progressPath
+		do shell script pathExport & "nohup anonymize show-progress " & quoted form of progressPath & " >/dev/null 2>&1 &"
+	end try
+
+	set shellCmd to "export ANONYMIZER_OPEN=0; "
+	if progressPath is not "" then set shellCmd to shellCmd & "export ANONYMIZER_PROGRESS_FILE=" & quoted form of progressPath & "; "
+	set shellCmd to shellCmd & "bash " & quoted form of helper & reviewFlag & extraOpts & " " & modeArg & " " & fileArgs
 	set exitCode to 0
 	set shellOut to ""
 	try
@@ -717,7 +730,7 @@ on processFiles(theFiles)
 	display notification "Finished. Open results from the summary window." with title "Anonymizer" subtitle "Done"
 
 	-- Detached polished Tk summary (survives droplet finishing).
-	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
+	-- pathExport was set above for the progress strip.
 	if summaryPath is not "" then
 		try
 			-- Background so do shell script returns immediately; --ephemeral deletes the temp JSON after load.

@@ -85,8 +85,10 @@ Windows Tk options/templates share the same product logic.
    - Markdown stays **body-only**; use **Save summary…** for a JSON/MD sidecar
 
 ```text
-Open app or drop files → [ Options ] → [ Review window? ] → [ Run summary ]
+Open app or drop files → [ Options ] → [ progress strip ] → [ Review window? ] → [ Run summary ]
 ```
+
+A short progress strip sits at the bottom of the screen from Start until the summary opens. It does not take focus, so Review stays in front. It closes itself when the job finishes.
 
 ### Modes (pop-up)
 

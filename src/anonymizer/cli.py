@@ -110,6 +110,7 @@ _META_COMMANDS = frozenset(
         "templates-ui",
         "fp-stats",
         "show-summary",
+        "show-progress",
     }
 )
 
@@ -1439,6 +1440,32 @@ Templates (allow/deny packs)
     )
 
 
+def cmd_show_progress(rest: list[str] | None = None) -> None:
+    """Show the quiet progress strip until STATUS.json says the job finished.
+
+    Internal meta-command used by the Mac droplet and Windows GUI. Not a
+    public flag.
+
+    Usage::
+
+        anonymize show-progress STATUS.json
+    """
+    rest = rest or []
+    path: str | None = None
+    for tok in rest:
+        if tok.startswith("-"):
+            console.print(f"[red]Unknown option for show-progress:[/red] {tok}")
+            raise SystemExit(2)
+        if path is None:
+            path = tok
+    if not path:
+        console.print("[red]Usage:[/red] anonymize show-progress STATUS.json")
+        raise SystemExit(2)
+    from anonymizer.gui.progress_window import show_progress_window
+
+    show_progress_window(path)
+
+
 def cmd_show_summary(rest: list[str] | None = None) -> None:
     """Show a post-run summary dialog (GUI/Mac helper), or print plain text.
 
@@ -2094,6 +2121,8 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
             cmd_templates_ui(args[idx + 1 :])
         elif low == "show-summary":
             cmd_show_summary(args[idx + 1 :])
+        elif low == "show-progress":
+            cmd_show_progress(args[idx + 1 :])
         else:
             cmd_examples()
         return None

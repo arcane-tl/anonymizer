@@ -2820,8 +2820,13 @@ class OptionsApp(tk.Tk):
         )
         env = os.environ.copy()
         env["ANONYMIZER_WRITE_SUMMARY_JSON"] = str(summary_path)
+        progress_path = _begin_job_progress(cli, list(self.files))
+        if progress_path is not None:
+            env["ANONYMIZER_PROGRESS_FILE"] = str(progress_path)
+            env["ANONYMIZER_PROGRESS_TOTAL"] = str(len(self.files))
         try:
-            for fpath in self.files:
+            for i, fpath in enumerate(self.files, start=1):
+                env["ANONYMIZER_PROGRESS_INDEX"] = str(i)
                 cmd = [*cli, mode, str(fpath), *common_flags]
                 _log(f"RUN: {cli[0] if cli else '?'} {mode} <file>")
                 proc = subprocess.run(
@@ -2847,6 +2852,7 @@ class OptionsApp(tk.Tk):
             except OSError:
                 pass
             self._set_working(False)
+            _end_job_progress(progress_path, error=bool(errors and not outputs))
 
         if errors and not outputs:
             messagebox.showerror(
@@ -2937,12 +2943,17 @@ class OptionsApp(tk.Tk):
         errors: list[str] = []
         cancelled = 0
         outputs: list[str] = []
+        progress_path = _begin_job_progress(_cli_prefix(cmds[0] if cmds else []), src_files)
+        if progress_path is not None:
+            env["ANONYMIZER_PROGRESS_FILE"] = str(progress_path)
+            env["ANONYMIZER_PROGRESS_TOTAL"] = str(len(src_files))
         try:
             self.withdraw()
         except tk.TclError:
             pass
 
         for i, cmd in enumerate(cmds):
+            env["ANONYMIZER_PROGRESS_INDEX"] = str(i + 1)
             fpath = src_files[i] if i < len(src_files) else None
             _log(f"REVIEW RUN: {' '.join(cmd[:6])}…")
             try:
@@ -2996,6 +3007,11 @@ class OptionsApp(tk.Tk):
         except tk.TclError:
             pass
 
+        _end_job_progress(
+            progress_path,
+            error=bool(errors and not outputs),
+        )
+
         if errors and not cancelled:
             messagebox.showerror(
                 "Anonymizer",
@@ -3031,6 +3047,60 @@ def shlex_quote(s: str) -> str:
     import shlex
 
     return shlex.quote(s)
+
+
+def _cli_prefix(cmd: list[str]) -> list[str]:
+    """Argv up to but not including the mode verb."""
+    for i, part in enumerate(cmd):
+        if part in {"strict", "standard", "extract"}:
+            return cmd[:i] or cmd[:1]
+    return cmd[:1]
+
+
+def _begin_job_progress(cli: list[str], files: list[Path]) -> Path | None:
+    """Launch the quiet progress strip. Returns the status file, or None."""
+    from anonymizer.util.progress import write_progress_status
+
+    try:
+        fd, name = tempfile.mkstemp(prefix="anonymizer-progress-", suffix=".json")
+        os.close(fd)
+        path = Path(name)
+        first = files[0].name if files else ""
+        write_progress_status(
+            path,
+            state="running",
+            phase="Starting",
+            index=0,
+            total=len(files),
+            file=first,
+            fraction=0.0,
+        )
+        subprocess.Popen(
+            [*cli, "show-progress", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return path
+    except OSError as exc:
+        _log(f"progress strip failed: {exc}")
+        return None
+
+
+def _end_job_progress(path: Path | None, *, error: bool = False) -> None:
+    if path is None:
+        return
+    from anonymizer.util.progress import write_progress_status
+
+    try:
+        write_progress_status(
+            path,
+            state="error" if error else "done",
+            phase="",
+            fraction=1.0,
+        )
+    except OSError:
+        pass
 
 
 def _parse_outputs(stdout: str, stderr: str) -> list[str]:
