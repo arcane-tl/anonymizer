@@ -50,7 +50,6 @@ from anonymizer.anonymize.recognizers.person_name import PersonNameRecognizer
 from anonymizer.anonymize.recognizers.street import StreetRecognizer
 from anonymizer.anonymize.recognizers.url import WebUrlRecognizer
 from anonymizer.anonymize.recognizers.vin import VehicleVinRecognizer
-from anonymizer.anonymize.saas_tools import is_saas_tool_stem
 from anonymizer.extract.text_repair import is_real_web_url, repair_text_artifacts
 from anonymizer.models import AnonymizeResult, EntityHit, LanguageDecision
 
@@ -408,90 +407,6 @@ def _looks_like_false_person(
     return False
 
 
-_NAME_PROPN_SHAPE = re.compile(
-    r"^[A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-']{1,40}$", re.UNICODE
-)
-# spaCy labels that must not be absorbed into a PERSON expansion
-_NON_PERSON_ENT_LABELS = frozenset(
-    {
-        "ORG",
-        "ORGANIZATION",
-        "LOC",
-        "LOCATION",
-        "GPE",
-        "FAC",
-        "PRODUCT",
-        "WORK_OF_ART",
-        "EVENT",
-        "DATE",
-        "TIME",
-        "MONEY",
-        "PERCENT",
-        "QUANTITY",
-        "ORDINAL",
-        "CARDINAL",
-    }
-)
-
-def _token_is_name_shaped_propn(tok) -> bool:
-    if tok.is_space or tok.is_punct:
-        return False
-    if tok.pos_ != "PROPN":
-        return False
-    if not _NAME_PROPN_SHAPE.match(tok.text):
-        return False
-    # Surname attach: require *empty* ent_type (not ORG/PRODUCT/…)
-    if (tok.ent_type_ or "").strip():
-        return False
-    if is_saas_tool_stem(tok.text):
-        return False
-    return True
-
-
-def _expand_person_with_adjacent_propn(
-    doc,
-    local_start: int,
-    local_end: int,
-    span_toks: list,
-) -> tuple[int, int, list]:
-    """Grow a single-token PERSON by at most one surname PROPN to the right.
-
-    spaCy FI often tags only the given name (``Karo``); the surname
-    (``Vallittu``) stays PROPN outside the entity. Expanding once yields a
-    two-PROPN PERSON that passes the multi-token gate without context.
-    """
-    if doc is None or not span_toks:
-        return local_start, local_end, span_toks
-
-    # Non-space tokens in document order (match by t.i — spaCy Token
-    # wrappers are not stable by Python id()).
-    tok_list = [t for t in doc if not t.is_space]
-    if not tok_list:
-        return local_start, local_end, span_toks
-
-    span_is = {t.i for t in span_toks}
-    idxs = [i for i, t in enumerate(tok_list) if t.i in span_is]
-    if not idxs:
-        return local_start, local_end, span_toks
-    lo, hi = min(idxs), max(idxs)
-
-    # Only expand a *single-token* PERSON seed by +1 surname
-    if (hi - lo + 1) != 1 or hi + 1 >= len(tok_list):
-        return local_start, local_end, span_toks
-
-    nxt = tok_list[hi + 1]
-    gap = doc.text[tok_list[hi].idx + len(tok_list[hi].text) : nxt.idx]
-    if gap.strip():
-        return local_start, local_end, span_toks
-    if not _token_is_name_shaped_propn(nxt):
-        return local_start, local_end, span_toks
-
-    new_toks = tok_list[lo : hi + 2]
-    new_start = new_toks[0].idx
-    new_end = new_toks[-1].idx + len(new_toks[-1].text)
-    return new_start, new_end, new_toks
-
-
 def _person_context_ok(text: str, start: int, end: int) -> bool:
     """Single-token PERSON needs email/phone/hetu or a name/signer label nearby."""
     left = text[max(0, start - _BOILERPLATE_WINDOW) : start]
@@ -708,14 +623,6 @@ def _spacy_ner_results(
                     if common is True:
                         continue
             if mapped == "PERSON":
-                # spaCy FI often tags only the given name; attach adjacent PROPN
-                # surname/given so "Karo Vallittu" becomes one PERSON span.
-                exp_start, exp_end, span_toks = _expand_person_with_adjacent_propn(
-                    doc, ent.start_char, ent.end_char, span_toks
-                )
-                start = seg_start + exp_start
-                end = seg_start + exp_end
-                surface = text[start:end]
                 if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
                     continue
                 if len(span_toks) == 1 and span_toks[0].pos_ in {"NOUN", "ADJ", "VERB"}:
@@ -1433,28 +1340,21 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
     if not s:
         return False
     low = s.casefold()
-    # Multi-word SaaS products
+    # Productivity / ticket tools (not customer PII)
     if low in {
-        "microsoft teams",
-        "power bi",
-        "powerbi",
-        "google cloud",
-        "amazon web services",
-    }:
-        return True
-    if is_saas_tool_stem(low.replace(" ", "")):
-        return True
-    # Any whitespace token or whole surface is a known tool stem
-    if is_saas_tool_stem(low):
-        return True
-    for part in re.split(r"[\s/]+", low):
-        if is_saas_tool_stem(part):
-            return True
-    # Legacy short labels / lead roles (not all are SaaS stems)
-    if low in {
+        "teams",
+        "team",
+        "salesforce",
+        "salesforcen",
+        "sharepoint",
+        "jira",
+        "excel",
+        "retro",
+        "retainer",
         "presales",
         "pre-sales",
         "sales",
+        "secman",
         "lead",
         "leadin",
         "liidin",
@@ -1462,14 +1362,9 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
         "team lead",
         "team leadin",
         "team leadit",
-        "salesforcen",
     }:
         return True
     if re.fullmatch(r"(?i)jira(\s+)?(epic\s+)?id", s):
-        return True
-    if re.fullmatch(r"(?i)power\s*bi\b.*", s):
-        return True
-    if re.fullmatch(r"(?i)microsoft(\s+teams)?\b.*", s) and len(s) < 40:
         return True
     # Consulting / delivery role titles (EN + FI), optional Finnish case endings
     if re.search(
