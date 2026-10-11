@@ -93,6 +93,8 @@ def render_markdown(
     used_ocr: bool = False,
     ocr_meta: dict | None = None,
     debug: bool = False,
+    outputs: list[dict] | None = None,
+    extra_front_matter: dict | None = None,
 ) -> str:
     fm: dict = {
         "source": str(source),
@@ -126,10 +128,33 @@ def render_markdown(
         )
         if sources:
             fm["detector_sources"] = sources
+    if outputs:
+        fm["outputs"] = outputs
+    if extra_front_matter:
+        fm.update(extra_front_matter)
     # sort_keys for stable output in tests
     yaml_body = yaml.safe_dump(fm, sort_keys=True, allow_unicode=True).strip()
     body = blocks_to_markdown_body(blocks)
     return f"---\n{yaml_body}\n---\n\n{body}\n"
+
+
+def output_descriptor(
+    kind: str,
+    path: str | Path | None = None,
+    *,
+    source_metadata_carried: bool,
+    note: str | None = None,
+) -> dict:
+    """Machine-readable artifact class for front matter / summaries."""
+    d: dict = {
+        "kind": kind,
+        "source_metadata_carried": source_metadata_carried,
+    }
+    if path is not None:
+        d["path"] = str(path)
+    if note:
+        d["note"] = note
+    return d
 
 
 def render_from_extracted(
@@ -138,6 +163,8 @@ def render_from_extracted(
     result: AnonymizeResult,
     *,
     debug: bool = False,
+    outputs: list[dict] | None = None,
+    extra_front_matter: dict | None = None,
 ) -> str:
     new_blocks: list[TextBlock] = []
     for orig, text in zip(doc.blocks, anon_block_texts, strict=True):
@@ -152,4 +179,6 @@ def render_from_extracted(
         used_ocr=doc.used_ocr,
         ocr_meta=ocr_meta if isinstance(ocr_meta, dict) else None,
         debug=debug,
+        outputs=outputs,
+        extra_front_matter=extra_front_matter,
     )

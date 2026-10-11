@@ -41,6 +41,8 @@ See `examples/plugins/employee_id.yaml` for a complete sample.
 
 ## Python recognizers (advanced)
 
+> **Trust boundary:** `module:` and `python:` entries **import and execute arbitrary Python** from that config. Treat a shared org config with Python plugins like a script you would run yourself — only load files you trust. Prefer YAML `path:` pattern packs when possible.
+
 For checksums or multi-span logic, implement a Presidio `EntityRecognizer` (same shape as `FiHetuRecognizer`):
 
 ```yaml
@@ -97,3 +99,4 @@ entities:
 - Plugins load only when listed in config.
 - No automatic scanning of `site-packages`.
 - Offline default unchanged (no network for plugins).
+- **`python:` / `module:` = code execution.** Do not open untrusted configs that register Python recognizers.

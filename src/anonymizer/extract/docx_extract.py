@@ -43,6 +43,14 @@ def _iter_block_items(parent):
 
 def extract_docx(path: Path) -> ExtractedDoc:
     doc = Document(str(path))
+    # Promote tracked insertions / drop deletions so extract matches Word view
+    # and detection sees the same cleartext native redaction will scrub.
+    try:
+        from anonymizer.output.docx_redact import prepare_docx_for_redaction
+
+        prepare_docx_for_redaction(doc)
+    except Exception:  # noqa: BLE001
+        pass
     blocks: list[TextBlock] = []
 
     for item in _iter_block_items(doc):

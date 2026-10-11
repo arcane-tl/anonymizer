@@ -41,7 +41,7 @@ from anonymizer.anonymize.review import (
     strip_placeholders_in_blocks,
 )
 from anonymizer.extract import extract_document
-from anonymizer.output.markdown import render_from_extracted
+from anonymizer.output.markdown import output_descriptor, render_from_extracted
 from anonymizer.output.md_pdf import write_pdf_from_markdown
 from anonymizer.output.native import (
     default_native_output_path,
@@ -834,6 +834,10 @@ def _run_pipeline(
             else:
                 explicit_md_out = output
 
+        # Artifact class list for front matter (filled as we write)
+        output_descs: list[dict] = []
+        native_stats_for_fm: dict | None = None
+
         if need_md_render:
             progress.substep("Rendering Markdown…")
             md = render_from_extracted(
@@ -847,6 +851,14 @@ def _run_pipeline(
                     if not md.endswith("\n"):
                         sys.stdout.write("\n")
                     wrote_stdout = True
+                    output_descs.append(
+                        output_descriptor(
+                            "markdown",
+                            "-",
+                            source_metadata_carried=False,
+                            note="rebuilt text; source PDF/DOCX metadata not carried",
+                        )
+                    )
                 else:
                     if explicit_md_out is not None:
                         out_path = explicit_md_out
@@ -858,6 +870,14 @@ def _run_pipeline(
                     progress.substep(f"Writing {out_path}…")
                     out_path.write_text(md, encoding="utf-8")
                     written_out = out_path
+                    output_descs.append(
+                        output_descriptor(
+                            "markdown",
+                            out_path,
+                            source_metadata_carried=False,
+                            note="rebuilt text; source PDF/DOCX metadata not carried",
+                        )
+                    )
 
         # Reflow PDF from anonymized Markdown (any input type; not native black-box)
         if write_text_pdf:
@@ -879,6 +899,14 @@ def _run_pipeline(
                 try:
                     write_pdf_from_markdown(md, text_pdf_path)
                     written_text_pdf = text_pdf_path
+                    output_descs.append(
+                        output_descriptor(
+                            "text_pdf",
+                            text_pdf_path,
+                            source_metadata_carried=False,
+                            note="reflow rebuild from Markdown; not native layout redaction",
+                        )
+                    )
                 except Exception as exc:  # noqa: BLE001
                     console.print(
                         f"[yellow]Warning:[/yellow] text PDF write failed "
@@ -922,6 +950,23 @@ def _run_pipeline(
                 raise typer.Exit(1) from exc
             if stats is not None:
                 written_native = native_path
+                native_stats_for_fm = stats.front_matter_fields()
+                kind = (
+                    "native_pdf"
+                    if native_path.suffix.lower() == ".pdf"
+                    else "native_docx"
+                )
+                output_descs.append(
+                    output_descriptor(
+                        kind,
+                        native_path,
+                        source_metadata_carried=True,
+                        note=(
+                            "in-place style redaction; see native_clean / residuals — "
+                            "source container channels scrubbed best-effort"
+                        ),
+                    )
+                )
                 if not quiet:
                     console.print(f"[dim]{stats.summary()}[/dim]")
                     if stats.residual_image_risk and not cfg.redact_letterhead_images:
@@ -958,10 +1003,23 @@ def _run_pipeline(
                             else ""
                         )
                         console.print(
-                            f"[yellow]Warning:[/yellow] "
-                            f"{stats.residuals_found} residual cleartext "
-                            f"match(es) after native redaction: "
-                            f"{preview}{more}"
+                            f"[bold yellow]Warning:[/bold yellow] "
+                            f"native file may still contain cleartext "
+                            f"({stats.residuals_found} residual match(es) in "
+                            f"covered channels): {preview}{more}. "
+                            f"Prefer Markdown/text-PDF when you need a rebuild "
+                            f"without source container metadata — see docs/"
+                            f"output-formats.md."
+                        )
+                    if stats.scrub_errors:
+                        console.print(
+                            f"[bold yellow]Warning:[/bold yellow] "
+                            f"{stats.scrub_errors} native scrub step(s) failed "
+                            f"(counted as not clean). Samples: "
+                            + ", ".join(
+                                repr(s[:60])
+                                for s in (stats.scrub_error_samples or [])[:3]
+                            )
                         )
                 gate_fail = False
                 if cfg.fail_on_native_miss and not stats.is_clean:
@@ -982,6 +1040,24 @@ def _run_pipeline(
                     if multi:
                         continue
                     raise typer.Exit(1)
+
+        # Refresh Markdown front matter with outputs + native honesty fields
+        if (
+            written_out is not None
+            and need_md_render
+            and (output_descs or native_stats_for_fm)
+            and not wrote_stdout
+        ):
+            extra = dict(native_stats_for_fm or {})
+            md = render_from_extracted(
+                doc,
+                anon_blocks,
+                result,
+                debug=bool(cfg.debug),
+                outputs=output_descs or None,
+                extra_front_matter=extra or None,
+            )
+            written_out.write_text(md, encoding="utf-8")
 
         if map_path is not None and cfg.mode != "extract":
             if multi:

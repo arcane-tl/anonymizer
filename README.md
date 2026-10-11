@@ -188,6 +188,8 @@ anonymize contract.pdf --reject ORG_1,PHONE_2   # non-interactive keep-clear
 
 Black-box redaction of the **original** PDF/DOCX (not a reflow). Pair with **More options** for letterhead logos and a hard fail if text-layer hits are missed.
 
+**Markdown** and **text PDF** are **rebuilds** — original container metadata / outline / tracked changes do **not** carry over. **Native** keeps the source file shape and scrubs known channels best-effort; always check `native_clean` and residual warnings. Full comparison: [docs/output-formats.md](docs/output-formats.md).
+
 **GUI**
 
 1. Add `.pdf` / `.docx` files.
