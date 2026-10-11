@@ -27,7 +27,7 @@
 #
 # Shareable Markdown is body-only (no YAML run report). GUIs read SUMMARY: and
 # show a completion dialog with optional Save. Set ANONYMIZER_SHOW_SUMMARY=1
-# for the helper to open that dialog itself (Terminal --review path).
+# for the helper to open a native osascript summary dialog (Terminal --review).
 #
 # --review opens the document review window (--review-window). Prefer
 # Terminal.app / a desktop session so the GUI can display.
@@ -69,7 +69,7 @@ Stdout (success): OUTPUT:/abs/path lines, then SUMMARY:/abs/path.json when writt
 Environment:
   ANONYMIZER_BIN            Absolute path to the anonymize executable
   ANONYMIZER_OPEN           If set to 1/y/yes, open output files after success (TTY only)
-  ANONYMIZER_SHOW_SUMMARY   If 1/y/yes, open the Tk run-summary dialog after success
+  ANONYMIZER_SHOW_SUMMARY   If 1/y/yes, open a native osascript run-summary dialog
   ANONYMIZER_WRITE_SUMMARY_JSON  Override path for the summary JSON array (testing)
 EOF
 }
@@ -621,11 +621,99 @@ if [[ ${#outputs[@]} -gt 0 ]]; then
   esac
 fi
 
-# Terminal --review path: open Tk summary here so AppleScript need not wait.
+# Escape text for an AppleScript double-quoted string (newlines → return).
+_as_escape() {
+  # Prefer the same Python the CLI uses; fall back to /usr/bin/python3.
+  local py=""
+  if command -v python3 >/dev/null 2>&1; then
+    py=python3
+  elif [[ -x "${BIN%/*}/python" ]]; then
+    py="${BIN%/*}/python"
+  else
+    py=/usr/bin/python3
+  fi
+  "$py" -c '
+import sys
+t = sys.stdin.read()
+if len(t) > 1700:
+    t = t[:1700] + "\n\n… (truncated; use Save summary… for the full JSON)"
+t = t.replace("\\", "\\\\").replace("\"", "\\\"")
+t = t.replace("\r\n", "\n").replace("\r", "\n")
+t = t.replace("\n", "\" & return & \"")
+sys.stdout.write(t)
+'
+}
+
+# Native macOS summary dialog for the Terminal --review path.
+_show_summary_osascript() {
+  local summary_json="$1"
+  local plain escaped btn_list first_out="" save_default="anonymizer-summary.json"
+  local as_file rc=0
+  if ! command -v osascript >/dev/null 2>&1; then
+    return 1
+  fi
+  plain=$("$BIN" show-summary "$summary_json" --print 2>/dev/null) || plain=""
+  if [[ -z "$plain" ]]; then
+    plain="Done. ${ok} file(s) ok (mode=${MODE})."
+    if [[ ${#outputs[@]} -gt 0 ]]; then
+      plain+=$'\n\nCreated:'
+      local p
+      for p in "${outputs[@]}"; do
+        plain+=$'\n'"$(basename -- "$p")"
+      done
+    fi
+  fi
+  escaped=$(_as_escape <<<"$plain") || return 1
+  if [[ ${#outputs[@]} -gt 0 ]]; then
+    first_out="${outputs[0]}"
+    save_default="$(basename -- "$first_out")"
+    save_default="${save_default%.*}.anonymizer-summary.json"
+  fi
+  if [[ -n "$first_out" ]]; then
+    btn_list='"Save summary…", "Show in Finder", "OK"'
+  else
+    btn_list='"Save summary…", "OK"'
+  fi
+  as_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-dialog.XXXXXX.applescript")"
+  # shellcheck disable=SC2086
+  cat >"$as_file" <<EOF
+set plainSum to "${escaped}"
+try
+  set doneBtn to button returned of (display dialog plainSum buttons {${btn_list}} default button "OK" with title "Anonymizer — run summary")
+on error number errNum
+  if errNum is -128 then return "cancel"
+  error
+end try
+if doneBtn is "Save summary…" then
+  try
+    set saveTarget to choose file name with prompt "Save run summary" default name "$(printf '%s' "$save_default" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    set savePosix to POSIX path of saveTarget
+    do shell script "cp $(printf '%q' "$summary_json") " & quoted form of savePosix & " && chmod 600 " & quoted form of savePosix
+  on error number errNum
+    if errNum is not -128 then
+      display dialog "Could not save summary." buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
+    end if
+  end try
+else if doneBtn is "Show in Finder" then
+  try
+    do shell script "open -R $(printf '%q' "$first_out")"
+  end try
+end if
+return doneBtn
+EOF
+  osascript "$as_file" >/dev/null 2>&1 || rc=$?
+  rm -f "$as_file"
+  return "$rc"
+}
+
+# Terminal --review path: native osascript dialog (Tk show-summary is unreliable here).
 case "$(printf '%s' "${ANONYMIZER_SHOW_SUMMARY:-}" | tr '[:upper:]' '[:lower:]')" in
   1|y|yes)
     if [[ -f "$SUMMARY_JSON" && -s "$SUMMARY_JSON" ]]; then
-      "$BIN" show-summary "$SUMMARY_JSON" || true
+      if ! _show_summary_osascript "$SUMMARY_JSON"; then
+        echo "--- Run summary ---" >&2
+        "$BIN" show-summary "$SUMMARY_JSON" --print 2>/dev/null >&2 || true
+      fi
       if [[ "$SUMMARY_OWNED" -eq 1 ]]; then
         rm -f "$SUMMARY_JSON"
       fi

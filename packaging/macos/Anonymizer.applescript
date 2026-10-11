@@ -674,9 +674,10 @@ on processFiles(theFiles)
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
-		-- Helper writes SUMMARY JSON and opens the Tk summary dialog when asked.
+		-- Helper shows a native osascript summary when ANONYMIZER_SHOW_SUMMARY=1.
+		-- Do not exec bash — that leaves Terminal asking to "terminate" on close.
 		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; export ANONYMIZER_SHOW_SUMMARY=1; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
-		set termCmd to shellLine & "; echo; echo '--- Finished. You can close this window. ---'; exec bash"
+		set termCmd to shellLine & "; status=$?; echo; echo '--- Finished. You can close this Terminal window. ---'; exit \$status"
 		tell application "Terminal"
 			activate
 			do script termCmd

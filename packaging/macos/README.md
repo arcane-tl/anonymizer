@@ -100,7 +100,9 @@ Open app or drop files → [ Options window ] → work → [ Run summary ]
 
 ### Review
 
-When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`): toggle false positives, add redactions, teach templates. Opening results follows the **Open result when finished** checkbox (no second prompt).
+When **Review findings before saving** is checked, Start opens **Terminal** for the review window (`--review-window`): toggle false positives, add redactions, teach templates. Opening results follows the **Open result when finished** checkbox.
+
+After Review finishes, a **native run summary** dialog appears (Save summary… / Show in Finder / OK). Terminal then prints “Finished” and **exits** — you can close the Terminal window without a “terminate” prompt (no leftover interactive bash).
 
 ## How it works
 
