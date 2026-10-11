@@ -59,6 +59,17 @@ on clickOptionsStart_(sender)
 		display dialog "Add at least one document." & return & return & "Use + under Files to choose PDF, DOCX, or text." buttons {"OK"} default button 1 with icon note with title "Anonymizer"
 		return
 	end if
+	-- Hide while the modal run loop can still paint. do shell script later
+	-- blocks AppKit for the whole batch, so a close queued after stopModal
+	-- never appears and the panel floats over Review.
+	try
+		set w to sender's window()
+		w's setLevel:0
+		w's orderOut_(missing value)
+	end try
+	try
+		current application's NSApp's hide_(missing value)
+	end try
 	set optionsModalCode to 1
 	current application's NSApp's stopModal()
 end clickOptionsStart_
@@ -608,13 +619,12 @@ on processFiles(theFiles)
 		showUnsupportedTypeNotice(unsupportedNotice)
 	end if
 
-	-- One window: files (+/−), mode, style, format, out folder, templates, review/open
+	-- One window: files (+/−), mode, style, format, out folder, templates, review
 	set choices to showOptionsPanel()
 	if choices is missing value then return
 
 	set modeArg to modeArg of choices
 	set wantReview to wantReview of choices
-	set wantOpen to wantOpen of choices
 	set wantFailNative to false
 	try
 		set wantFailNative to wantFailNative of choices
@@ -656,8 +666,6 @@ on processFiles(theFiles)
 		set end of quotedPaths to quoted form of (pp as text)
 	end repeat
 	set fileArgs to my joinSpace(quotedPaths)
-	set openEnv to "0"
-	if wantOpen then set openEnv to "1"
 
 	set extraOpts to " --redact-style " & quoted form of redactStyle & " --format " & quoted form of outputFormat
 	if templateCSV is not "" then set extraOpts to extraOpts & " --template " & quoted form of templateCSV
@@ -682,7 +690,10 @@ on processFiles(theFiles)
 		set reviewFlag to ""
 	end if
 
-	-- Keep OPEN=0 here; we open files ourselves after success so order is: review → open → summary.
+	-- Never auto-open outputs. Summary window has per-file Open / Reveal.
+	-- Commit the hide before the shell blocks the run loop (Review must be the only window).
+	hideAnonymizerWindows()
+	delay 0.2
 	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & reviewFlag & extraOpts & " " & modeArg & " " & fileArgs
 	set exitCode to 0
 	set shellOut to ""
@@ -694,6 +705,7 @@ on processFiles(theFiles)
 	end try
 
 	if exitCode is not 0 then
+		unhideAnonymizer()
 		display dialog "Something went wrong:" & return & return & shellOut buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
 		return
 	end if
@@ -702,18 +714,7 @@ on processFiles(theFiles)
 	set nOut to count of outPaths
 	set summaryPath to parseSummaryLine(shellOut)
 
-	if wantOpen then
-		if nOut > 0 then
-			repeat with p in outPaths
-				try
-					do shell script "open " & quoted form of p
-				end try
-			end repeat
-			display notification "Opened " & (nOut as text) & " result file" & pluralS(nOut) & "." with title "Anonymizer" subtitle "Done"
-		else
-			display notification "Finished. Look next to your original files for .md." with title "Anonymizer" subtitle "Done"
-		end if
-	end if
+	display notification "Finished. Open results from the summary window." with title "Anonymizer" subtitle "Done"
 
 	-- Detached polished Tk summary (survives droplet finishing).
 	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
@@ -726,6 +727,7 @@ on processFiles(theFiles)
 			try
 				do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --ephemeral"
 			on error
+				unhideAnonymizer()
 				display dialog "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths)) buttons {"OK"} default button 1 with title "Anonymizer"
 				try
 					do shell script "rm -f " & quoted form of summaryPath
@@ -736,7 +738,7 @@ on processFiles(theFiles)
 	end if
 
 	-- No SUMMARY line (older CLI): simple Done dialog
-	if wantOpen then return
+	unhideAnonymizer()
 	set resultBody to "Done" & return & return
 	if nOut is 0 then
 		set resultBody to resultBody & "Finished. Check next to your original files for Markdown and/or redacted source output."
@@ -757,6 +759,30 @@ on processFiles(theFiles)
 		end try
 	end if
 end processFiles
+
+-- Order every window out, then hide the app. Called before the long shell
+-- so Review (a different process) is not covered by the options panel.
+on hideAnonymizerWindows()
+	try
+		set wins to current application's NSApp's windows()
+		repeat with w in wins
+			try
+				w's setLevel:0
+				w's orderOut_(missing value)
+			end try
+		end repeat
+	end try
+	try
+		current application's NSApp's hide_(missing value)
+	end try
+end hideAnonymizerWindows
+
+on unhideAnonymizer()
+	try
+		current application's NSApp's unhide_(missing value)
+		current application's NSApp's activateIgnoringOtherApps:true
+	end try
+end unhideAnonymizer
 
 on templatesStatusLine(templateCSV)
 	-- Ids only (wraps in UI); no count prefix / Templates… suffix
@@ -1754,7 +1780,6 @@ on showOptionsPanel()
 	set lastStyleRow to 0
 	-- optionsOutMd / Source / Pdf are script properties (persist across rebuilds)
 	set lastReview to true
-	set lastOpen to true
 	set lastFailNative to false
 	set lastLetterhead to false
 	set lastDebug to false
@@ -1807,14 +1832,14 @@ on showOptionsPanel()
 		-- Match Choose… / Clear button height so helper text can sit on the same midline
 		set outPathH to btnH
 
-		-- Main: Mode + Save as + folder + templates + Review + Open + More options
+		-- Main: Mode + Save as + folder + templates + Review + More options
 		-- Expanded More options adds: style label/popup + fail + letterhead + debug
 		set moreRowH to checkH
 		set moreBlockH to 0
 		if optionsMoreOpen then
 			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH + gapSm + checkH
 		end if
-		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
+		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
@@ -1942,18 +1967,6 @@ on showOptionsPanel()
 		reviewBox's setFont:(current application's NSFont's systemFontOfSize:13)
 		content's addSubview:reviewBox
 
-		set y to y - gapSm - checkH
-		set openBox to current application's NSButton's alloc()'s initWithFrame:{{margin, y}, {innerW, checkH}}
-		openBox's setButtonType:(current application's NSButtonTypeSwitch)
-		openBox's setTitle:"Open result when finished"
-		if lastOpen then
-			openBox's setState:(current application's NSControlStateValueOn)
-		else
-			openBox's setState:(current application's NSControlStateValueOff)
-		end if
-		openBox's setFont:(current application's NSFont's systemFontOfSize:13)
-		content's addSubview:openBox
-
 		-- More options disclosure (style + native shareability)
 		set y to y - gapSm - moreRowH
 		set moreTitle to "▶  More options"
@@ -2044,7 +2057,6 @@ on showOptionsPanel()
 		if lastModeRow < 0 then set lastModeRow to 0
 		if lastModeRow > 2 then set lastModeRow to 0
 		set lastReview to switchStateOn(reviewBox)
-		set lastOpen to switchStateOn(openBox)
 		set optionsOutMd to switchStateOn(outMdBox)
 		set optionsOutSource to switchStateOn(outSourceBox)
 		set optionsOutPdf to switchStateOn(outPdfBox)
@@ -2093,14 +2105,13 @@ on showOptionsPanel()
 			end if
 			set outputFormat to joinWithDelimiter(fmtParts, ",")
 			set wantReview to lastReview
-			set wantOpen to lastOpen
 			set wantFailNative to lastFailNative
 			set wantLetterhead to lastLetterhead
 			set wantDebug to lastDebug
 			if modeArg is "extract" then
 				set wantReview to false
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, wantDebug:wantDebug, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
+			return {modeArg:modeArg, wantReview:wantReview, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, wantDebug:wantDebug, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
 		else if response is 4 then
 			-- File list / out-dir changed — rebuild panel
 			try

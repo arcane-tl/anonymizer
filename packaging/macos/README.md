@@ -69,7 +69,6 @@ sharp custom square and breaks size/shape next to other apps.
    - **Output folder** — default *same folder as source file*, or **Choose…** (`--out-dir`)  
    - **Active templates** / **Templates…** — native AppKit pack editor; enable packs for this run  
    - ☑ **Review findings before saving** (default on) — always visible  
-   - ☑ **Open result when finished** — always visible  
    - **More options** — collapsed disclosure: Output style, fail-on-native-miss, letterhead wipe  
    - Action bar: **Templates…** left · **Cancel** + **Start** right  
 
@@ -81,8 +80,7 @@ Windows Tk options/templates share the same product logic.
 **Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
 3. Click **Start** (or Cancel). Start requires at least one file.
 4. When finished (Review or not):
-   - **Open** checked → result files open, then a **polished Tk run summary** window
-   - **Open** unchecked → the same summary window (Save summary… / Show in folder / Done)
+   - A **dark Tk run summary** opens (same visual language as Review). Each output row has **Open** and **Reveal**. Files are not opened automatically.
    - **No Terminal.app** — Review uses the document review window via the droplet
    - Markdown stays **body-only**; use **Save summary…** for a JSON/MD sidecar
 
@@ -100,9 +98,9 @@ Open app or drop files → [ Options ] → [ Review window? ] → [ Run summary 
 
 ### Review
 
-When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`) inside the app flow — **no Terminal**. Toggle false positives, add redactions, teach templates. Opening results follows **Open result when finished**.
+When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`) inside the app flow — **no Terminal**. Toggle false positives, add redactions, teach templates.
 
-After Review (or a non-Review run), a detached **run summary** window appears with entity chips, output cards, and Save / Show in folder / Done.
+After Review (or a non-Review run), a detached **run summary** window appears (Review dark theme): entity chips, one row per output with **Open** / **Reveal**, plus Save summary… / Done.
 
 ## How it works
 

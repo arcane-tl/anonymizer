@@ -2253,7 +2253,6 @@ class OptionsApp(tk.Tk):
         self.fail_native_var = tk.BooleanVar(value=False)
         self.letterhead_var = tk.BooleanVar(value=False)
         self.debug_var = tk.BooleanVar(value=False)
-        self.open_var = tk.BooleanVar(value=True)
 
         pad = 24
         root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
@@ -2389,12 +2388,6 @@ class OptionsApp(tk.Tk):
             "Review findings before saving",
             variable=self.review_var,
             pady=(18, 4),
-        )
-        _dark_check(
-            root,
-            "Open result when finished",
-            variable=self.open_var,
-            pady=(2, 2),
         )
 
         # More options (collapsed): output style + native shareability gates
@@ -2759,7 +2752,6 @@ class OptionsApp(tk.Tk):
             return
         out_fmt = ",".join(kinds)
         want_review = self.review_var.get() and mode != "extract"
-        want_open = self.open_var.get()
         out_dir = self.out_dir
 
         cfg_path = self._write_temp_config(style, self.enabled_template_ids)
@@ -2799,7 +2791,6 @@ class OptionsApp(tk.Tk):
             try:
                 self._run_review_batch(
                     cmds,
-                    want_open,
                     files=list(self.files),
                     mode=mode,
                     out_fmt=out_fmt,
@@ -2869,9 +2860,6 @@ class OptionsApp(tk.Tk):
                 pass
             return
 
-        if want_open and outputs:
-            _open_result_paths(outputs)
-
         from anonymizer.gui.summary_dialog import show_summary_from_json_file
 
         show_summary_from_json_file(self, summary_path, errors=errors or None)
@@ -2917,7 +2905,6 @@ class OptionsApp(tk.Tk):
     def _run_review_batch(
         self,
         cmds: list[list[str]],
-        want_open: bool,
         *,
         files: list[Path] | None = None,
         mode: str = "strict",
@@ -2926,13 +2913,11 @@ class OptionsApp(tk.Tk):
     ) -> None:
         """Run CLI with --review-window; wait for each job and surface errors.
 
-        On success: optionally open outputs (Open checkbox); **no** Done dialog.
-        ANONYMIZER_OPEN is not honored by the Python CLI — GUI opens after exit.
+        On success: show the run summary (Open/Reveal per output). Never auto-open files.
         """
         src_files = list(files or self.files)
         env = os.environ.copy()
-        if want_open:
-            env["ANONYMIZER_OPEN"] = "1"
+        env["ANONYMIZER_OPEN"] = "0"
         summary_path = Path(
             tempfile.mkstemp(suffix=".json", prefix="anonymizer-summary-")[1]
         )
@@ -3026,9 +3011,6 @@ class OptionsApp(tk.Tk):
                 parent=self if self.winfo_exists() else None,
             )
         elif not errors:
-            if want_open and outputs:
-                _open_result_paths(outputs)
-                _log(f"REVIEW done open=1 n_out={len(outputs)}")
             from anonymizer.gui.summary_dialog import show_summary_from_json_file
 
             show_summary_from_json_file(
@@ -3060,21 +3042,6 @@ def _parse_outputs(stdout: str, stderr: str) -> list[str]:
                 if p:
                     out.append(p)
     return out
-
-
-def _open_result_paths(paths: list[str]) -> None:
-    """Open output files in the OS default app (Open-result checkbox)."""
-    for out in paths:
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["open", out], check=False)
-            elif sys.platform == "win32":
-                os.startfile(out)  # type: ignore[attr-defined]
-            else:
-                subprocess.run(["xdg-open", out], check=False)
-            _log(f"opened result: {out}")
-        except OSError as exc:
-            _log(f"open result failed {out}: {exc}")
 
 
 def _guess_outputs(

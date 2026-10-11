@@ -58,7 +58,7 @@ Opens straight into the **options** panel (same product logic as Mac):
 - No files yet → **+** under Files (add from several folders). **−** removes.
 - Drag-drop / argv paths pre-fill the list.
 - **Mode**, **Save as** (Markdown / Source / PDF text), **Output folder**, **Templates…**
-- **Review** and **Open result** always on the main panel; **More options** holds style + native gates
+- **Review** always on the main panel; **More options** holds style + native gates. After a run, the summary window opens each output on demand (**Open** / **Reveal**).
 - End-to-end scenarios: **[Use cases in the main README](../../README.md#use-cases)**
 
 ### GUI won’t open / no log file
@@ -114,7 +114,7 @@ Options (same as Mac):
 - **Save as** — Markdown / Source filetype (PDF, DOCX, or MD) / PDF text (indented ticks)  
 - **Output folder** — default same folder as source, or Choose…  
 - **Templates…** — allow/deny packs; teach from the **review window**  
-- **Review findings** / **Open result** — always visible (Review default on)  
+- **Review findings** — always visible (default on). Results open from the summary, not automatically.
 - **More options** — Output style, fail-on-native-miss, letterhead wipe  
 
 ## Helper (advanced)

@@ -174,7 +174,7 @@ Nothing leaves the machine by default. Review is transparent: see every tag, un-
 1. Add file(s). Mode + **Save as** as needed.
 2. Keep **Review findings before saving** checked (default).
 3. **Start** → document review window: toggle findings, add spans, optionally **teach** a template.
-4. Save; optionally **Open result when finished**.
+4. Save. The run summary lists each output with **Open** and **Reveal** — files are not opened automatically.
 
 **CLI**
 
@@ -188,7 +188,7 @@ anonymize contract.pdf --reject ORG_1,PHONE_2   # non-interactive keep-clear
 
 Black-box redaction of the **original** PDF/DOCX (not a reflow). Pair with **More options** for letterhead logos and a hard fail if text-layer hits are missed.
 
-**Markdown** and **text PDF** are **rebuilds** — original container metadata / outline / tracked changes do **not** carry over. Shareable Markdown is **body only** (no run-report YAML). **Native** keeps the source file shape and scrubs known channels best-effort; always check `native_clean` and residual warnings in the **GUI/Mac completion summary** (optional **Save summary…**). Detailed detector logs: `--debug`. Full comparison: [docs/output-formats.md](docs/output-formats.md).
+**Markdown** and **text PDF** are **rebuilds** — original container metadata / outline / tracked changes do **not** carry over. Shareable Markdown is **body only** (no run-report YAML). **Native** keeps the source file shape and scrubs known channels best-effort. The completion window lists the files; `native_clean` and residuals stay in the optional **Save summary…** JSON and in the CLI log. Detailed detector logs: `--debug`. Full comparison: [docs/output-formats.md](docs/output-formats.md).
 
 **GUI**
 
@@ -429,7 +429,7 @@ anonymize --help
 | **Output folder** | Default: same folder as source; or Choose… (`--out-dir`) |
 | **Active templates** / **Templates…** | Allow/deny packs for this run |
 | **Review findings** | Always visible (default on) → document review window |
-| **Open result when finished** | Always visible |
+| **Run summary** | After Start: dark summary with per-output **Open** / **Reveal** (no auto-open) |
 | **More options** | Collapsed: output style, fail-on-native-miss, letterhead wipe |
 
 See [Use cases](#use-cases) for step-by-step scenarios.

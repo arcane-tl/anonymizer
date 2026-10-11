@@ -882,7 +882,7 @@ def _run_pipeline(
                             "markdown",
                             "-",
                             source_metadata_carried=False,
-                            note="rebuilt text; source PDF/DOCX metadata not carried",
+                            note="New text file. Original document details are not included.",
                         )
                     )
                 else:
@@ -901,7 +901,7 @@ def _run_pipeline(
                             "markdown",
                             out_path,
                             source_metadata_carried=False,
-                            note="rebuilt text; source PDF/DOCX metadata not carried",
+                            note="New text file. Original document details are not included.",
                         )
                     )
 
@@ -930,7 +930,7 @@ def _run_pipeline(
                             "text_pdf",
                             text_pdf_path,
                             source_metadata_carried=False,
-                            note="reflow rebuild from Markdown; not native layout redaction",
+                            note="New PDF from the text. Not the original page layout.",
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -987,10 +987,7 @@ def _run_pipeline(
                         kind,
                         native_path,
                         source_metadata_carried=True,
-                        note=(
-                            "in-place style redaction; see native_clean / residuals — "
-                            "source container channels scrubbed best-effort"
-                        ),
+                        note="Original layout kept.",
                     )
                 )
                 if not quiet:
