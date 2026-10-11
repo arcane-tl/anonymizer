@@ -407,6 +407,89 @@ def _looks_like_false_person(
     return False
 
 
+_NAME_PROPN_SHAPE = re.compile(
+    r"^[A-ZÅÄÖ][a-zåäöA-ZÅÄÖ\-']{1,40}$", re.UNICODE
+)
+# spaCy labels that must not be absorbed into a PERSON expansion
+_NON_PERSON_ENT_LABELS = frozenset(
+    {
+        "ORG",
+        "ORGANIZATION",
+        "LOC",
+        "LOCATION",
+        "GPE",
+        "FAC",
+        "PRODUCT",
+        "EVENT",
+        "DATE",
+        "TIME",
+        "MONEY",
+        "PERCENT",
+        "QUANTITY",
+        "ORDINAL",
+        "CARDINAL",
+    }
+)
+
+
+def _token_is_name_shaped_propn(tok) -> bool:
+    if tok.is_space or tok.is_punct:
+        return False
+    if tok.pos_ != "PROPN":
+        return False
+    if not _NAME_PROPN_SHAPE.match(tok.text):
+        return False
+    label = (tok.ent_type_ or "").upper()
+    if label in _NON_PERSON_ENT_LABELS:
+        return False
+    return True
+
+
+def _expand_person_with_adjacent_propn(
+    doc,
+    local_start: int,
+    local_end: int,
+    span_toks: list,
+) -> tuple[int, int, list]:
+    """Grow a PERSON char span over neighboring name-shaped PROPN tokens.
+
+    spaCy FI often tags only the given name (``Karo``); the surname
+    (``Vallittu``) stays PROPN outside the entity. Expanding yields a
+    two-PROPN PERSON that passes the multi-token gate without context.
+    """
+    if doc is None or not span_toks:
+        return local_start, local_end, span_toks
+
+    # Non-space tokens in document order (match by t.i — spaCy Token
+    # wrappers are not stable by Python id()).
+    tok_list = [t for t in doc if not t.is_space]
+    if not tok_list:
+        return local_start, local_end, span_toks
+
+    span_is = {t.i for t in span_toks}
+    idxs = [i for i, t in enumerate(tok_list) if t.i in span_is]
+    if not idxs:
+        return local_start, local_end, span_toks
+    lo, hi = min(idxs), max(idxs)
+
+    # Expand right only (given → surname). Left expansion absorbs false
+    # PROPNs like English "Contact Alice Example".
+    while hi + 1 < len(tok_list) and (hi - lo + 1) < 4:
+        nxt = tok_list[hi + 1]
+        # Immediate adjacency (only spaces between tokens)
+        gap = doc.text[tok_list[hi].idx + len(tok_list[hi].text) : nxt.idx]
+        if gap.strip():
+            break
+        if not _token_is_name_shaped_propn(nxt):
+            break
+        hi += 1
+
+    new_toks = tok_list[lo : hi + 1]
+    new_start = new_toks[0].idx
+    new_end = new_toks[-1].idx + len(new_toks[-1].text)
+    return new_start, new_end, new_toks
+
+
 def _person_context_ok(text: str, start: int, end: int) -> bool:
     """Single-token PERSON needs email/phone/hetu or a name/signer label nearby."""
     left = text[max(0, start - _BOILERPLATE_WINDOW) : start]
@@ -623,6 +706,14 @@ def _spacy_ner_results(
                     if common is True:
                         continue
             if mapped == "PERSON":
+                # spaCy FI often tags only the given name; attach adjacent PROPN
+                # surname/given so "Karo Vallittu" becomes one PERSON span.
+                exp_start, exp_end, span_toks = _expand_person_with_adjacent_propn(
+                    doc, ent.start_char, ent.end_char, span_toks
+                )
+                start = seg_start + exp_start
+                end = seg_start + exp_end
+                surface = text[start:end]
                 if span_toks and not any(t.pos_ == "PROPN" for t in span_toks):
                     continue
                 if len(span_toks) == 1 and span_toks[0].pos_ in {"NOUN", "ADJ", "VERB"}:

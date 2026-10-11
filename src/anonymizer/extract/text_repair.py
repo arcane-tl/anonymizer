@@ -212,6 +212,16 @@ _SOFT_HYPHEN_PAIR = re.compile(
     r"(?![A-Za-zÅÄÖåäö])"
 )
 
+# Same break with an embedded newline (DOCX / reflow leftovers): koko-\nnaistunti…
+_SOFT_HYPHEN_NEWLINE = re.compile(
+    r"(?<![A-Za-zÅÄÖåäö])"
+    r"([A-Za-zÅÄÖåäö]{1,32})"
+    r"-"
+    r"[\r\n]+"
+    r"([a-zåäö]{2,40})"
+    r"(?![A-Za-zÅÄÖåäö])"
+)
+
 
 def should_keep_compound_hyphen(left: str, right: str) -> bool:
     """True when ``left-right`` is a real compound (pre-sales, Jira-tiketin, ETA-maat)."""
@@ -291,8 +301,9 @@ def should_join_soft_hyphen(left: str, right: str) -> bool:
 def repair_soft_hyphens(text: str) -> str:
     """Drop syllable / wrap hyphens; keep real compounds.
 
-    Handles same-paragraph Word leftovers (``työ-kokemus``) and strips
-    Unicode soft hyphens (U+00AD).
+    Handles same-paragraph Word leftovers (``työ-kokemus``), embedded
+    line breaks (``koko-\\nnaistuntimäärään``), and strips Unicode soft
+    hyphens (U+00AD).
     """
     if not text:
         return text
@@ -300,11 +311,20 @@ def repair_soft_hyphens(text: str) -> str:
     if "-" not in out:
         return out
 
-    def _repl(m: re.Match[str]) -> str:
+    def _repl_join_or_keep(m: re.Match[str], *, drop_break_only: bool) -> str:
         left, right = m.group(1), m.group(2)
         if should_join_soft_hyphen(left, right):
             return left + right
+        if drop_break_only:
+            # Keep real compound hyphen; remove only the line break
+            return f"{left}-{right}"
         return m.group(0)
+
+    def _repl_same_line(m: re.Match[str]) -> str:
+        return _repl_join_or_keep(m, drop_break_only=False)
+
+    def _repl_newline(m: re.Match[str]) -> str:
+        return _repl_join_or_keep(m, drop_break_only=True)
 
     # Iterate: nested / multiple breaks in one paragraph
     prev = None
@@ -312,7 +332,8 @@ def repair_soft_hyphens(text: str) -> str:
         if prev == out:
             break
         prev = out
-        out = _SOFT_HYPHEN_PAIR.sub(_repl, out)
+        out = _SOFT_HYPHEN_NEWLINE.sub(_repl_newline, out)
+        out = _SOFT_HYPHEN_PAIR.sub(_repl_same_line, out)
     return out
 
 
