@@ -97,14 +97,16 @@ def _detect_with_lingua(sample: str) -> tuple[list[str], str]:
         order = [c for c in ("en", "fi", "sv") if c in pair]
         return order, f"mixed {' '.join(f'{c}={scores[c]:.2f}' for c in order)}"
 
-    # Weak primary still better than nothing
-    if p >= 0.55:
+    # Weak primary still better than nothing — single pass only
+    if p >= 0.40:
         return [primary], f"weak_{primary}={p:.2f}"
 
+    # Very low confidence: still one primary (heuristic), not automatic en+fi
+    heur = _heuristic_primary_lang(sample)
     return (
-        ["en", "fi"],
-        f"low_confidence en={scores['en']:.2f} fi={scores['fi']:.2f} "
-        f"sv={scores['sv']:.2f}",
+        [heur],
+        f"low_confidence_primary_{heur} en={scores['en']:.2f} "
+        f"fi={scores['fi']:.2f} sv={scores['sv']:.2f}",
     )
 
 
@@ -112,15 +114,63 @@ def detect_languages(text: str) -> tuple[list[str], str]:
     """Detect document languages as en / fi / sv list and a reason string."""
     sample = sample_text_for_detection(text)
     if not sample or not sample.strip():
-        return ["en", "fi"], "empty_text"
+        return ["en"], "empty_text"
 
     if count_alpha_tokens(sample) < MIN_ALPHA_TOKENS:
-        return ["en", "fi"], "short_text"
+        # Prefer a single primary on short docs — dual en+fi reintroduces
+        # English NER false hits on Finnish form labels.
+        primary = _heuristic_primary_lang(sample)
+        return [primary], f"short_text_{primary}"
 
     try:
         return _detect_with_lingua(sample)
     except Exception as exc:  # pragma: no cover - defensive
-        return ["en", "fi"], f"detector_error:{exc}"
+        primary = _heuristic_primary_lang(sample)
+        return [primary], f"detector_error:{exc}"
+
+
+# Form / function words that mark Finnish without needing äöå (not a name catalog)
+_FI_TOKEN_HINTS = frozenset(
+    {
+        "ja",
+        "tai",
+        "on",
+        "ei",
+        "nimi",
+        "osoite",
+        "puhelin",
+        "hetu",
+        "ytunnus",
+        "y-tunnus",
+        "rekisterinumero",
+        "tunniste",
+        "allekirjoitus",
+        "yhteyshenkilö",
+        "yhteyshenkilo",
+        "sopimus",
+        "liite",
+        "päiväys",
+        "paivays",
+        "kaupunki",
+        "postinumero",
+        "maa",
+        "iban",
+    }
+)
+
+
+def _heuristic_primary_lang(sample: str) -> str:
+    """Cheap FI vs EN guess from characters + common FI form tokens."""
+    letters = [c for c in sample if c.isalpha()]
+    if not letters:
+        return "en"
+    fi_marks = sum(1 for c in letters if c in "äöåÄÖÅ")
+    if fi_marks / len(letters) >= 0.02 or fi_marks >= 2:
+        return "fi"
+    tokens = {t.casefold() for t in _ALPHA_TOKEN.findall(sample)}
+    if tokens & _FI_TOKEN_HINTS:
+        return "fi"
+    return "en"
 
 
 def resolve_language(lang_flag: str, text: str) -> LanguageDecision:
@@ -135,8 +185,8 @@ def resolve_language(lang_flag: str, text: str) -> LanguageDecision:
     if raw in ("auto", ""):
         detected, reason = detect_languages(text)
         if not detected:
-            passes = ["en", "fi"]
-            detected = ["en", "fi"]
+            passes = ["en"]
+            detected = ["en"]
         elif len(detected) > 1:
             # stable order
             passes = [c for c in SUPPORTED_LANGS if c in detected]

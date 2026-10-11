@@ -43,6 +43,7 @@ STRICT_ENTITIES: list[str] = [
     "FI_BUSINESS_ID",
     "FI_VAT",  # ALV-numero / Finnish VAT ID (FI + 8 digits)
     "FI_LICENSE_PLATE",
+    "LICENSE_PLATE",  # EU/US/generic (English NLP pass)
     "FI_POSTAL_CODE",
     "VEHICLE_VIN",  # 17-char VIN / valmistenumero (strict only)
 ]
@@ -192,6 +193,12 @@ class AnonymizerConfig:
     lang: str = "auto"
     # Optional spaCy primary model overrides: {lang: model_name}
     spacy_models: dict[str, str] = field(default_factory=dict)
+    # Map Finnish spaCy PRODUCT → ORG (off by default; brands/goods noise)
+    spacy_map_product_to_org: bool = False
+    # Soft spaCy PERSON/ORG/LOCATION/CITY: corroborated | always | never
+    spacy_auto_redact: str = "corroborated"
+    # Merge stamp for uncorroborated spaCy soft proposals
+    spacy_proposal_score: float = 0.55
     include_dates: bool = False
     # Optional LLM layer (off by default)
     use_llm: bool = False
@@ -213,6 +220,8 @@ class AnonymizerConfig:
     native_min_match_rate: float | None = None
     # Black-box letterhead/logo images on PDF page header/footer bands
     redact_letterhead_images: bool = False
+    # Debug provenance: Review source chips + per-run findings log
+    debug: bool = False
 
     def apply_mode(self, mode: str | None = None) -> None:
         """Set mode and refresh entities unless user overrode the entity list."""
@@ -315,6 +324,18 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.spacy_models = {
                 str(k).lower(): str(v) for k, v in data["spacy_models"].items() if v
             }
+        if "spacy_map_product_to_org" in data:
+            cfg.spacy_map_product_to_org = bool(data["spacy_map_product_to_org"])
+        if "spacy_auto_redact" in data and data["spacy_auto_redact"]:
+            mode = str(data["spacy_auto_redact"]).strip().casefold()
+            if mode not in {"corroborated", "always", "never"}:
+                raise ConfigError(
+                    f"spacy_auto_redact in {path} must be corroborated|always|never, "
+                    f"got {data['spacy_auto_redact']!r}"
+                )
+            cfg.spacy_auto_redact = mode
+        if "spacy_proposal_score" in data and data["spacy_proposal_score"] is not None:
+            cfg.spacy_proposal_score = float(data["spacy_proposal_score"])
         if "recognizers" in data and data["recognizers"] is not None:
             from anonymizer.anonymize.plugins import load_recognizer_plugins
 
@@ -402,6 +423,8 @@ def load_config(path: Path | None) -> AnonymizerConfig:
             cfg.native_min_match_rate = rate
         if "redact_letterhead_images" in data:
             cfg.redact_letterhead_images = bool(data["redact_letterhead_images"])
+        if "debug" in data:
+            cfg.debug = bool(data["debug"])
         # Template multi-select (ids). Explicit empty list = no packs.
         if "templates_enabled" in data and data["templates_enabled"] is not None:
             te = data["templates_enabled"]

@@ -2252,6 +2252,7 @@ class OptionsApp(tk.Tk):
         self.review_var = tk.BooleanVar(value=True)
         self.fail_native_var = tk.BooleanVar(value=False)
         self.letterhead_var = tk.BooleanVar(value=False)
+        self.debug_var = tk.BooleanVar(value=False)
         self.open_var = tk.BooleanVar(value=True)
 
         pad = 24
@@ -2441,6 +2442,13 @@ class OptionsApp(tk.Tk):
             self._more_frame,
             "Black-box PDF letterhead/logo images (header/footer)",
             variable=self.letterhead_var,
+            pady=(2, 2),
+            padx=_more_pad,
+        )
+        _dark_check(
+            self._more_frame,
+            "Debug provenance (source chips + run log)",
+            variable=self.debug_var,
             pady=(2, 2),
             padx=_more_pad,
         )
@@ -2774,9 +2782,12 @@ class OptionsApp(tk.Tk):
             common_flags.append("--fail-on-native-miss")
         if "source" in kinds and self.letterhead_var.get():
             common_flags.append("--redact-letterhead-images")
+        if self.debug_var.get():
+            common_flags.append("--debug")
         _log(
             f"_run_start mode={mode} style={style} fmt={out_fmt} "
-            f"review={want_review} out_dir={out_dir!r} "
+            f"review={want_review} debug={self.debug_var.get()} "
+            f"out_dir={out_dir!r} "
             f"templates={self.enabled_template_ids!r} cli={cli!r}"
         )
 

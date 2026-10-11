@@ -11,6 +11,10 @@ from anonymizer.anonymize.recognizers.brand_org import BrandOrgRecognizer, find_
 from anonymizer.anonymize.recognizers.company import CompanyRecognizer, find_companies
 from anonymizer.anonymize.recognizers.fi_plate import FiPlateRecognizer, find_fi_plates
 from anonymizer.anonymize.recognizers.fi_postal import find_fi_postals
+from anonymizer.anonymize.recognizers.license_plate import (
+    LicensePlateRecognizer,
+    find_license_plates,
+)
 from anonymizer.anonymize.recognizers.street import StreetRecognizer, find_streets
 from anonymizer.anonymize.recognizers.url import WebUrlRecognizer, find_urls
 
@@ -23,6 +27,65 @@ def test_plate_generic():
     out, _, _ = apply_stable_placeholders(text, results)
     assert "XYZ-987" not in out
     assert "[PLATE_FI_1]" in out
+
+
+def test_fi_plate_allows_aao_and_trailer_like():
+    assert any(h[2] == "ÄBC-12" for h in find_fi_plates("Auto ÄBC-12 parkissa."))
+    assert any(h[2] == "PAB-123" for h in find_fi_plates("Trailer PAB-123."))
+
+
+def test_fi_plate_rejects_label_and_bare_no_hyphen():
+    assert find_fi_plates("See ID-1 and OK-12.") == []
+    assert find_fi_plates("Code ABC123 in table.") == []
+    # Context cue unlocks no-hyphen
+    hits = find_fi_plates("Rekisterinumero ABC123 on vanha.")
+    assert any(h[2].upper() == "ABC123" for h in hits)
+
+
+def test_fi_plate_rejects_us_four_digit():
+    assert find_fi_plates("Plate ABC-1234.") == []
+
+
+def test_fi_plate_moto_digit_leading():
+    hits = find_fi_plates("Moottoripyörä 12-ABC.")
+    assert any(h[2].upper() == "12-ABC" for h in hits)
+
+
+def test_license_plate_us_and_eu():
+    text = "US plate ABC-1234 and DE style B-MW 1234 plus SE AB-12345."
+    hits = find_license_plates(text)
+    surfaces = {h[2].upper() for h in hits}
+    assert "ABC-1234" in surfaces
+    assert "B-MW 1234" in surfaces
+    assert "AB-12345" in surfaces
+    results = LicensePlateRecognizer().analyze(text, entities=["LICENSE_PLATE"])
+    out, _, _ = apply_stable_placeholders(text, results)
+    assert "ABC-1234" not in out
+    assert "[PLATE_" in out
+
+
+def test_license_plate_generic_needs_context():
+    assert find_license_plates("Token AB12CD alone.") == []
+    hits = find_license_plates("Vehicle registration AB12CD on file.")
+    assert any("AB12CD" in h[2].upper() for h in hits)
+
+
+def test_plate_lang_gate_fi_vs_en():
+    """FI pass → FI_LICENSE_PLATE; EN pass → LICENSE_PLATE for US shapes."""
+    fi_text = "Ajoneuvo XYZ-987."
+    en_text = "Vehicle plate ABC-1234."
+
+    anon_fi = DocumentAnonymizer(AnonymizerConfig(mode="strict", lang="fi"))
+    r_fi = anon_fi.anonymize_text(fi_text)
+    assert "[PLATE_FI_" in r_fi.anonymized_text
+    assert "LICENSE_PLATE" not in (r_fi.entity_counts or {})
+
+    anon_en = DocumentAnonymizer(AnonymizerConfig(mode="strict", lang="en"))
+    r_en = anon_en.anonymize_text(en_text)
+    assert "[PLATE_" in r_en.anonymized_text
+    # US four-digit must not be tagged as FI
+    assert "[PLATE_FI_" not in r_en.anonymized_text
+    assert r_en.entity_counts.get("LICENSE_PLATE", 0) >= 1
 
 
 def test_urls():

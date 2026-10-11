@@ -23,11 +23,17 @@ Liitteissä kuvataan maksuaikataulut ja toimitusten välitavoitteet.
 """
 
 
-def test_short_text_defaults_to_mixed():
+def test_short_text_uses_single_primary():
     d = resolve_language("auto", "Hi")
     assert d.mode == "auto"
-    assert set(d.nlp_passes) == {"en", "fi"}
-    assert d.reason == "short_text"
+    assert d.nlp_passes == ["en"]
+    assert d.reason.startswith("short_text_")
+
+
+def test_short_finnish_form_prefers_fi():
+    d = resolve_language("auto", "Rekisterinumero:\nNimi:")
+    assert d.nlp_passes == ["fi"]
+    assert "fi" in d.reason
 
 
 def test_forced_en():

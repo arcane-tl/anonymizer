@@ -41,6 +41,13 @@ dev = [
 llm = [
   "openai>=1.40.0",
 ]
+# Finnish morphology FP gates (macOS: brew install libvoikko + voikko-fi)
+fi = [
+  "libvoikko>=4.3",
+]
+voikko = [
+  "libvoikko>=4.3",
+]
 
 [project.scripts]
 anonymize = "anonymizer.cli:run"

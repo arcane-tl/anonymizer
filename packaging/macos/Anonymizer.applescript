@@ -619,6 +619,10 @@ on processFiles(theFiles)
 	try
 		set wantFailNative to wantFailNative of choices
 	end try
+	set wantDebug to false
+	try
+		set wantDebug to wantDebug of choices
+	end try
 	set wantLetterhead to false
 	try
 		set wantLetterhead to wantLetterhead of choices
@@ -666,6 +670,7 @@ on processFiles(theFiles)
 	if outputFormat contains ",source," then set hasSource to true
 	if wantFailNative and hasSource then set extraOpts to extraOpts & " --fail-on-native-miss"
 	if wantLetterhead and hasSource then set extraOpts to extraOpts & " --redact-letterhead-images"
+	if wantDebug then set extraOpts to extraOpts & " --debug"
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
@@ -1735,6 +1740,7 @@ on showOptionsPanel()
 	set lastOpen to true
 	set lastFailNative to false
 	set lastLetterhead to false
+	set lastDebug to false
 
 	-- Design scale (comfortable, not sparse)
 	set margin to 24
@@ -1785,11 +1791,11 @@ on showOptionsPanel()
 		set outPathH to btnH
 
 		-- Main: Mode + Save as + folder + templates + Review + Open + More options
-		-- Expanded More options adds: style label/popup + fail + letterhead
+		-- Expanded More options adds: style label/popup + fail + letterhead + debug
 		set moreRowH to checkH
 		set moreBlockH to 0
 		if optionsMoreOpen then
-			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH
+			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH + gapSm + checkH
 		end if
 		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
@@ -1944,6 +1950,7 @@ on showOptionsPanel()
 		set stylePopup to missing value
 		set failNativeBox to missing value
 		set letterheadBox to missing value
+		set debugBox to missing value
 		if optionsMoreOpen then
 			set moreIndent to 16
 			set moreX to margin + moreIndent
@@ -1977,6 +1984,18 @@ on showOptionsPanel()
 			end if
 			letterheadBox's setFont:(current application's NSFont's systemFontOfSize:13)
 			content's addSubview:letterheadBox
+
+			set y to y - gapSm - checkH
+			set debugBox to current application's NSButton's alloc()'s initWithFrame:{{moreX, y}, {moreW, checkH}}
+			debugBox's setButtonType:(current application's NSButtonTypeSwitch)
+			debugBox's setTitle:"Debug provenance (source chips + run log)"
+			if lastDebug then
+				debugBox's setState:(current application's NSControlStateValueOn)
+			else
+				debugBox's setState:(current application's NSControlStateValueOff)
+			end if
+			debugBox's setFont:(current application's NSFont's systemFontOfSize:13)
+			content's addSubview:debugBox
 		end if
 
 		-- Action bar: Templates… left · Cancel + Start right
@@ -2026,6 +2045,9 @@ on showOptionsPanel()
 		try
 			if letterheadBox is not missing value then set lastLetterhead to switchStateOn(letterheadBox)
 		end try
+		try
+			if debugBox is not missing value then set lastDebug to switchStateOn(debugBox)
+		end try
 
 		-- Drop floating level so Tk Templates can stack above this panel.
 		-- Keep panel ordered front (visible underneath) for Templates…;
@@ -2057,10 +2079,11 @@ on showOptionsPanel()
 			set wantOpen to lastOpen
 			set wantFailNative to lastFailNative
 			set wantLetterhead to lastLetterhead
+			set wantDebug to lastDebug
 			if modeArg is "extract" then
 				set wantReview to false
 			end if
-			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
+			return {modeArg:modeArg, wantReview:wantReview, wantOpen:wantOpen, wantFailNative:wantFailNative, wantLetterhead:wantLetterhead, wantDebug:wantDebug, outputFormat:outputFormat, redactStyle:redactStyle, templateCSV:templateCSV, outDirPath:optionsOutDir, filePaths:optionsFilePaths}
 		else if response is 4 then
 			-- File list / out-dir changed — rebuild panel
 			try

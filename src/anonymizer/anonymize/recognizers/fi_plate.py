@@ -1,4 +1,12 @@
-"""Finnish vehicle registration plate recognizer."""
+"""Finnish vehicle registration plate recognizer.
+
+Standard passenger / vanity form (Traficom): 2–3 letters + hyphen + 1–3 digits
+(e.g. ``ABC-123``, ``AB-12``). Letters may include Å/Ä/Ö.
+
+Motorcycle / special vanity may also use digit-leading ``123-ABC``.
+
+No-hyphen ``ABC123`` is only accepted next to plate context cues (high FP risk).
+"""
 
 from __future__ import annotations
 
@@ -8,60 +16,126 @@ from typing import List, Optional
 from presidio_analyzer import AnalysisExplanation, EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
 
-# Modern passenger plates: ABC-123 (3 letters + 1–3 digits). Also AB-123, ABC-12.
-# Letters A–Z (Finnish plates do not use Å/Ä/Ö). Case-insensitive.
+# Finnish plate letters (Latin + ÅÄÖ)
+_LETTERS = r"A-Za-zÅÄÖåäö"
+_LETTER_CLS = f"[{_LETTERS}]"
+
+# Passenger / trailer / vanity: ABC-123, AB-12
 _PLATE_RE = re.compile(
-    r"(?<![A-Za-z0-9])"
-    r"([A-Z]{2,3})"
+    rf"(?<![{_LETTERS}0-9])"
+    rf"({_LETTER_CLS}{{2,3}})"
     r"-"
     r"(\d{1,3})"
-    r"(?![A-Za-z0-9])",
-    re.IGNORECASE,
+    rf"(?![{_LETTERS}0-9])",
 )
 
-# Without hyphen (less common in prose, still seen): ABC123
-_PLATE_NO_HYPHEN = re.compile(
-    r"(?<![A-Za-z0-9])"
-    r"([A-Z]{3})"
+# Motorcycle / special: 123-ABC
+_PLATE_MOTO_RE = re.compile(
+    rf"(?<![{_LETTERS}0-9])"
     r"(\d{1,3})"
-    r"(?![A-Za-z0-9])",
-    re.IGNORECASE,
+    r"-"
+    rf"({_LETTER_CLS}{{2,3}})"
+    rf"(?![{_LETTERS}0-9])",
 )
 
-# Letters not used on Finnish plates (approximate filter for no-hyphen false positives)
-_FORBIDDEN = set("ÅÄÖåäö")
+# No hyphen — context-gated only
+_PLATE_NO_HYPHEN = re.compile(
+    rf"(?<![{_LETTERS}0-9])"
+    rf"({_LETTER_CLS}{{3}})"
+    r"(\d{1,3})"
+    rf"(?![{_LETTERS}0-9])",
+)
+
+_CONTEXT_RE = re.compile(
+    r"(?i)\b("
+    r"rekisterinumero|rekisteri(?:nro|nro\.?)?|kilpi|ajoneuvo|"
+    r"rek\.?\s*nro|reg(?:istration)?(?:\s+n(?:umbe)?r|\.?|no\.?)?|"
+    r"licence\s*plate|license\s*plate|number\s*plate|plate\s*no\.?"
+    r")\b"
+)
+
+_CONTEXT_WINDOW = 48
+
+# Label-like letter groups — not plates
+_FORBIDDEN_LETTERS = frozenset(
+    {
+        "ID",
+        "OK",
+        "NO",
+        "YES",
+        "PDF",
+        "URL",
+        "HTTP",
+        "WWW",
+        "API",
+        "VAT",
+        "IBAN",
+        "VIN",
+        "EU",
+        "FI",
+        "EN",
+        "OR",
+        "AND",
+        "THE",
+        "FOR",
+        "TO",
+        "OF",
+    }
+)
+
+
+def _has_plate_context(text: str, start: int, end: int) -> bool:
+    lo = max(0, start - _CONTEXT_WINDOW)
+    hi = min(len(text), end + _CONTEXT_WINDOW)
+    return bool(_CONTEXT_RE.search(text[lo:hi]))
 
 
 def is_plausible_plate(letters: str, digits: str) -> bool:
-    if any(c in _FORBIDDEN for c in letters):
+    if not letters or not digits:
         return False
-    if not letters.isalpha() or not digits.isdigit():
+    if not digits.isdigit() or not (1 <= len(digits) <= 3):
         return False
     if len(letters) not in (2, 3):
         return False
-    if not (1 <= len(digits) <= 3):
+    # Letters only from FI alphabet (already constrained by regex; double-check)
+    if not re.fullmatch(rf"{_LETTER_CLS}+", letters):
         return False
-    # Avoid matching things like "ID-1" or "OK-1" used as labels — weak filter
-    if letters.upper() in {"ID", "OK", "NO", "YES", "PDF", "URL", "HTTP", "WWW"}:
+    if letters.upper() in _FORBIDDEN_LETTERS:
         return False
     return True
 
 
 def find_fi_plates(text: str) -> list[tuple[int, int, str]]:
     hits: list[tuple[int, int, str]] = []
+
+    def _add(start: int, end: int, surface: str) -> None:
+        span = (start, end)
+        if any(s <= span[0] and span[1] <= e for s, e, _ in hits):
+            return
+        # Drop if overlapping an existing hit
+        if any(start < e and end > s for s, e, _ in hits):
+            return
+        hits.append((start, end, surface))
+
     for m in _PLATE_RE.finditer(text):
         letters, digits = m.group(1), m.group(2)
         if is_plausible_plate(letters, digits):
-            hits.append((m.start(), m.end(), m.group(0)))
+            _add(m.start(), m.end(), m.group(0))
+
+    for m in _PLATE_MOTO_RE.finditer(text):
+        digits, letters = m.group(1), m.group(2)
+        if is_plausible_plate(letters, digits):
+            _add(m.start(), m.end(), m.group(0))
+
     for m in _PLATE_NO_HYPHEN.finditer(text):
         letters, digits = m.group(1), m.group(2)
         if not is_plausible_plate(letters, digits):
             continue
-        # Prefer hyphenated form if already captured
-        span = (m.start(), m.end())
-        if any(s <= span[0] and span[1] <= e for s, e, _ in hits):
+        if not _has_plate_context(text, m.start(), m.end()):
             continue
-        hits.append((m.start(), m.end(), m.group(0)))
+        _add(m.start(), m.end(), m.group(0))
+
+    hits.sort(key=lambda h: h[0])
     return hits
 
 

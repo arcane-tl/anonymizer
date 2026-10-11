@@ -167,7 +167,7 @@ def test_checkbox_review_mocked(monkeypatch):
     monkeypatch.setattr(
         review_mod,
         "_checkbox_review",
-        lambda mapping, console, file_label: ["[ORG_1]"],
+        lambda mapping, console, file_label, session=None: ["[ORG_1]"],
     )
     # force_cli skips Tk window; returns ReviewSession with ORG kept clear
     session = review_mod.interactive_review(mapping, force_cli=True)
