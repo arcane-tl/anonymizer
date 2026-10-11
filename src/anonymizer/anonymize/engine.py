@@ -50,6 +50,7 @@ from anonymizer.anonymize.recognizers.person_name import PersonNameRecognizer
 from anonymizer.anonymize.recognizers.street import StreetRecognizer
 from anonymizer.anonymize.recognizers.url import WebUrlRecognizer
 from anonymizer.anonymize.recognizers.vin import VehicleVinRecognizer
+from anonymizer.anonymize.saas_tools import is_saas_tool_stem
 from anonymizer.extract.text_repair import is_real_web_url, repair_text_artifacts
 from anonymizer.models import AnonymizeResult, EntityHit, LanguageDecision
 
@@ -420,6 +421,7 @@ _NON_PERSON_ENT_LABELS = frozenset(
         "GPE",
         "FAC",
         "PRODUCT",
+        "WORK_OF_ART",
         "EVENT",
         "DATE",
         "TIME",
@@ -431,7 +433,6 @@ _NON_PERSON_ENT_LABELS = frozenset(
     }
 )
 
-
 def _token_is_name_shaped_propn(tok) -> bool:
     if tok.is_space or tok.is_punct:
         return False
@@ -439,8 +440,10 @@ def _token_is_name_shaped_propn(tok) -> bool:
         return False
     if not _NAME_PROPN_SHAPE.match(tok.text):
         return False
-    label = (tok.ent_type_ or "").upper()
-    if label in _NON_PERSON_ENT_LABELS:
+    # Surname attach: require *empty* ent_type (not ORG/PRODUCT/…)
+    if (tok.ent_type_ or "").strip():
+        return False
+    if is_saas_tool_stem(tok.text):
         return False
     return True
 
@@ -451,10 +454,10 @@ def _expand_person_with_adjacent_propn(
     local_end: int,
     span_toks: list,
 ) -> tuple[int, int, list]:
-    """Grow a PERSON char span over neighboring name-shaped PROPN tokens.
+    """Grow a single-token PERSON by at most one surname PROPN to the right.
 
     spaCy FI often tags only the given name (``Karo``); the surname
-    (``Vallittu``) stays PROPN outside the entity. Expanding yields a
+    (``Vallittu``) stays PROPN outside the entity. Expanding once yields a
     two-PROPN PERSON that passes the multi-token gate without context.
     """
     if doc is None or not span_toks:
@@ -472,19 +475,18 @@ def _expand_person_with_adjacent_propn(
         return local_start, local_end, span_toks
     lo, hi = min(idxs), max(idxs)
 
-    # Expand right only (given → surname). Left expansion absorbs false
-    # PROPNs like English "Contact Alice Example".
-    while hi + 1 < len(tok_list) and (hi - lo + 1) < 4:
-        nxt = tok_list[hi + 1]
-        # Immediate adjacency (only spaces between tokens)
-        gap = doc.text[tok_list[hi].idx + len(tok_list[hi].text) : nxt.idx]
-        if gap.strip():
-            break
-        if not _token_is_name_shaped_propn(nxt):
-            break
-        hi += 1
+    # Only expand a *single-token* PERSON seed by +1 surname
+    if (hi - lo + 1) != 1 or hi + 1 >= len(tok_list):
+        return local_start, local_end, span_toks
 
-    new_toks = tok_list[lo : hi + 1]
+    nxt = tok_list[hi + 1]
+    gap = doc.text[tok_list[hi].idx + len(tok_list[hi].text) : nxt.idx]
+    if gap.strip():
+        return local_start, local_end, span_toks
+    if not _token_is_name_shaped_propn(nxt):
+        return local_start, local_end, span_toks
+
+    new_toks = tok_list[lo : hi + 2]
     new_start = new_toks[0].idx
     new_end = new_toks[-1].idx + len(new_toks[-1].text)
     return new_start, new_end, new_toks
@@ -1431,21 +1433,28 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
     if not s:
         return False
     low = s.casefold()
-    # Productivity / ticket tools (not customer PII)
+    # Multi-word SaaS products
     if low in {
-        "teams",
-        "team",
-        "salesforce",
-        "salesforcen",
-        "sharepoint",
-        "jira",
-        "excel",
-        "retro",
-        "retainer",
+        "microsoft teams",
+        "power bi",
+        "powerbi",
+        "google cloud",
+        "amazon web services",
+    }:
+        return True
+    if is_saas_tool_stem(low.replace(" ", "")):
+        return True
+    # Any whitespace token or whole surface is a known tool stem
+    if is_saas_tool_stem(low):
+        return True
+    for part in re.split(r"[\s/]+", low):
+        if is_saas_tool_stem(part):
+            return True
+    # Legacy short labels / lead roles (not all are SaaS stems)
+    if low in {
         "presales",
         "pre-sales",
         "sales",
-        "secman",
         "lead",
         "leadin",
         "liidin",
@@ -1453,9 +1462,14 @@ def _looks_like_job_title_or_tool(surface: str) -> bool:
         "team lead",
         "team leadin",
         "team leadit",
+        "salesforcen",
     }:
         return True
     if re.fullmatch(r"(?i)jira(\s+)?(epic\s+)?id", s):
+        return True
+    if re.fullmatch(r"(?i)power\s*bi\b.*", s):
+        return True
+    if re.fullmatch(r"(?i)microsoft(\s+teams)?\b.*", s) and len(s) < 40:
         return True
     # Consulting / delivery role titles (EN + FI), optional Finnish case endings
     if re.search(

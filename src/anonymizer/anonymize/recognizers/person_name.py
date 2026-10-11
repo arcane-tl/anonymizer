@@ -28,6 +28,21 @@ _LABELLED = re.compile(
 )
 
 
+def _side_looks_like_tool_or_inflected_label(side: str) -> bool:
+    """True for SaaS/tool labels and hyphenated inflections (Jira-tikettejä)."""
+    from anonymizer.anonymize.saas_tools import is_saas_tool_stem
+
+    s = (side or "").strip()
+    if not s:
+        return True
+    if is_saas_tool_stem(s):
+        return True
+    # Internal hyphen + lowercase tail → product inflection, not "Last, First"
+    if re.search(r"-[a-zåäö]{3,}$", s):
+        return True
+    return False
+
+
 def _looks_like_person_pair(last: str, first: str) -> bool:
     """Reject acronyms / legal fragments mistaken for 'Last, First'."""
     # Second token ALL-CAPS short → LOI, MOU, ATP…
@@ -49,6 +64,11 @@ def _looks_like_person_pair(last: str, first: str) -> bool:
     }:
         return False
     if first.casefold() in {"intent", "understanding", "majeure", "card"}:
+        return False
+    # CV tool lists: "Jira-tikettejä, Confluence-sivuja"
+    if _side_looks_like_tool_or_inflected_label(last):
+        return False
+    if _side_looks_like_tool_or_inflected_label(first):
         return False
     return True
 
