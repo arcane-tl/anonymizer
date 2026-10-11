@@ -101,7 +101,7 @@ def test_count_source_families():
     assert count_source_families({"[PERSON_1]": "Ada"}, hit_meta) == {"spacy": 1}
 
 
-def test_front_matter_detector_sources_debug_only():
+def test_markdown_never_embeds_detector_sources():
     result = AnonymizeResult(
         anonymized_text="Hello [PERSON_1]",
         entity_counts={"PERSON": 1},
@@ -113,7 +113,7 @@ def test_front_matter_detector_sources_debug_only():
     )
     blocks = [TextBlock(text="Hello [PERSON_1]", kind=BlockKind.PARAGRAPH)]
     off = render_markdown("x.txt", blocks, result, debug=False)
-    assert "detector_sources" not in off
     on = render_markdown("x.txt", blocks, result, debug=True)
-    assert "detector_sources:" in on
-    assert "spacy: 1" in on
+    assert "detector_sources" not in off
+    assert "detector_sources" not in on
+    assert "Hello [PERSON_1]" in on

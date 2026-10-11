@@ -23,6 +23,11 @@
 #   OUTPUT:/absolute/path/to/file.md
 #   OUTPUT:/absolute/path/to/file.anonymized.pdf       (native source)
 #   OUTPUT:/absolute/path/to/file.anonymized.text.pdf  (reflow Text PDF)
+#   SUMMARY:/absolute/path/to/run-summary.json         (machine-readable run report)
+#
+# Shareable Markdown is body-only (no YAML run report). GUIs read SUMMARY: and
+# show a completion dialog with optional Save. Set ANONYMIZER_SHOW_SUMMARY=1
+# for the helper to open that dialog itself (Terminal --review path).
 #
 # --review opens the document review window (--review-window). Prefer
 # Terminal.app / a desktop session so the GUI can display.
@@ -58,12 +63,14 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
-Stdout (success): one OUTPUT:/abs/path line per written file (MD / native / Text PDF).
+Stdout (success): OUTPUT:/abs/path lines, then SUMMARY:/abs/path.json when written.
 --templates-ui stdout: ENABLED:id1,id2  or  CANCEL
 
 Environment:
-  ANONYMIZER_BIN   Absolute path to the anonymize executable
-  ANONYMIZER_OPEN  If set to 1/y/yes, open output files after success (TTY only)
+  ANONYMIZER_BIN            Absolute path to the anonymize executable
+  ANONYMIZER_OPEN           If set to 1/y/yes, open output files after success (TTY only)
+  ANONYMIZER_SHOW_SUMMARY   If 1/y/yes, open the Tk run-summary dialog after success
+  ANONYMIZER_WRITE_SUMMARY_JSON  Override path for the summary JSON array (testing)
 EOF
 }
 
@@ -479,6 +486,21 @@ if [[ -n "$OUT_DIR" ]]; then
   mkdir -p "$OUT_DIR"
   EXTRA_ARGS+=(--out-dir "$OUT_DIR")
 fi
+
+# Per-batch machine-readable summary for GUIs (not embedded in Markdown).
+SUMMARY_OWNED=0
+if [[ -n "${ANONYMIZER_WRITE_SUMMARY_JSON:-}" ]]; then
+  SUMMARY_JSON="$ANONYMIZER_WRITE_SUMMARY_JSON"
+  mkdir -p "$(dirname -- "$SUMMARY_JSON")"
+  : >"$SUMMARY_JSON"
+else
+  # macOS mktemp requires the XXXXXX suffix at the end of the template.
+  SUMMARY_JSON="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary.XXXXXX")"
+  SUMMARY_OWNED=1
+  export ANONYMIZER_WRITE_SUMMARY_JSON="$SUMMARY_JSON"
+  : >"$SUMMARY_JSON"
+fi
+
 cleanup_config() {
   if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
     rm -f "$MERGED_CONFIG"
@@ -555,8 +577,22 @@ for f in "$@"; do
   fi
 done
 
+if [[ -f "$SUMMARY_JSON" ]] && [[ -s "$SUMMARY_JSON" ]]; then
+  # Absolute path for AppleScript / GUIs
+  if command -v realpath >/dev/null 2>&1; then
+    sum_abs=$(realpath "$SUMMARY_JSON")
+  else
+    sum_abs=$(cd "$(dirname -- "$SUMMARY_JSON")" && pwd)/$(basename -- "$SUMMARY_JSON")
+  fi
+  printf 'SUMMARY:%s\n' "$sum_abs"
+fi
+
 if [[ "$fail" -gt 0 ]]; then
   echo "done: $ok ok, $fail failed (mode=$MODE)" >&2
+  # Leave SUMMARY file for the caller when they own the path; drop ours on failure.
+  if [[ "$SUMMARY_OWNED" -eq 1 ]]; then
+    rm -f "$SUMMARY_JSON"
+  fi
   exit 1
 fi
 echo "done: $ok file(s) ok (mode=$MODE)" >&2
@@ -584,5 +620,17 @@ if [[ ${#outputs[@]} -gt 0 ]]; then
       ;;
   esac
 fi
+
+# Terminal --review path: open Tk summary here so AppleScript need not wait.
+case "$(printf '%s' "${ANONYMIZER_SHOW_SUMMARY:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|y|yes)
+    if [[ -f "$SUMMARY_JSON" && -s "$SUMMARY_JSON" ]]; then
+      "$BIN" show-summary "$SUMMARY_JSON" || true
+      if [[ "$SUMMARY_OWNED" -eq 1 ]]; then
+        rm -f "$SUMMARY_JSON"
+      fi
+    fi
+    ;;
+esac
 
 exit 0

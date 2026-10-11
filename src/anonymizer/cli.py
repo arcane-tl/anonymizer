@@ -42,6 +42,7 @@ from anonymizer.anonymize.review import (
 )
 from anonymizer.extract import extract_document
 from anonymizer.output.markdown import output_descriptor, render_from_extracted
+from anonymizer.output.run_summary import RunSummary, write_summary_if_requested
 from anonymizer.output.md_pdf import write_pdf_from_markdown
 from anonymizer.output.native import (
     default_native_output_path,
@@ -102,7 +103,14 @@ _VERB_TO_MODE: dict[str, str] = {
     "full": "strict",
 }
 _META_COMMANDS = frozenset(
-    {"doctor", "examples", "templates", "templates-ui", "fp-stats"}
+    {
+        "doctor",
+        "examples",
+        "templates",
+        "templates-ui",
+        "fp-stats",
+        "show-summary",
+    }
 )
 
 # Options that take a following value (for argv rewrite)
@@ -648,18 +656,19 @@ def _run_pipeline(
         # Front matter / result should reflect the user's chosen final style
         result.redact_style = final_redact_style
 
+        debug_log_path: Path | None = None
         if cfg.debug:
             from anonymizer.anonymize.debug_log import write_run_debug_log
             from anonymizer import __version__ as _ver
 
-            log_path = write_run_debug_log(
+            debug_log_path = write_run_debug_log(
                 result, source_file=input_path, version=_ver
             )
-            if log_path is not None and not quiet:
+            if debug_log_path is not None and not quiet:
                 summ = getattr(result, "entity_counts", {}) or {}
                 props = len(getattr(result, "proposals", None) or {})
                 console.print(
-                    f"[dim]Debug log[/dim] {log_path} "
+                    f"[dim]Debug log[/dim] {debug_log_path} "
                     f"[dim](auto={len(result.mapping)} proposals={props} "
                     f"types={dict(summ)})[/dim]"
                 )
@@ -1041,23 +1050,39 @@ def _run_pipeline(
                         continue
                     raise typer.Exit(1)
 
-        # Refresh Markdown front matter with outputs + native honesty fields
-        if (
-            written_out is not None
-            and need_md_render
-            and (output_descs or native_stats_for_fm)
-            and not wrote_stdout
-        ):
-            extra = dict(native_stats_for_fm or {})
-            md = render_from_extracted(
-                doc,
-                anon_blocks,
-                result,
-                debug=bool(cfg.debug),
-                outputs=output_descs or None,
-                extra_front_matter=extra or None,
-            )
-            written_out.write_text(md, encoding="utf-8")
+        # Optional machine-readable summary for GUIs (ANONYMIZER_WRITE_SUMMARY_JSON).
+        # Not embedded in the shareable Markdown body.
+        detector_sources = None
+        if cfg.debug and result.mapping:
+            from anonymizer.anonymize.debug_log import count_source_families
+
+            detector_sources = count_source_families(
+                result.mapping,
+                getattr(result, "hit_meta", None),
+                hits=getattr(result, "hits", None),
+            ) or None
+        ocr_info = None
+        if doc.used_ocr:
+            ocr_meta = (doc.extra or {}).get("ocr") or {}
+            ocr_info = {
+                "residual_image_risk": bool(ocr_meta.get("residual_image_risk", True)),
+                "reason": ocr_meta.get("reason"),
+                "low_coverage_pages": list(ocr_meta.get("low_coverage_pages") or []),
+            }
+        run_summary = RunSummary(
+            source=str(input_path),
+            mode=str(result.mode),
+            entity_counts=dict(result.entity_counts or {}),
+            outputs=list(output_descs),
+            native=dict(native_stats_for_fm) if native_stats_for_fm else None,
+            debug_log_path=str(debug_log_path) if debug_log_path else None,
+            used_ocr=bool(doc.used_ocr),
+            ocr=ocr_info,
+            detector_sources=detector_sources,
+            lang_mode=getattr(result.language, "mode", None),
+            detected_languages=list(getattr(result.language, "detected", None) or []),
+        )
+        write_summary_if_requested(run_summary)
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -1398,6 +1423,65 @@ Templates (allow/deny packs)
 """.strip()
         + "\n"
     )
+
+
+def cmd_show_summary(rest: list[str] | None = None) -> None:
+    """Show a post-run summary dialog (GUI/Mac helper), or print plain text.
+
+    Internal meta-command used by the Tk GUI and Mac droplet. Not a public
+    ``--summary`` flag — shareable Markdown stays body-only; detailed detector
+    logs remain under ``--debug``.
+
+    Usage::
+
+        anonymize show-summary PATH.json
+        anonymize show-summary PATH.json --print
+    """
+    rest = rest or []
+    print_only = False
+    path: str | None = None
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok in {"--print", "-p"}:
+            print_only = True
+            i += 1
+            continue
+        if tok.startswith("-"):
+            console.print(f"[red]Unknown option for show-summary:[/red] {tok}")
+            raise SystemExit(2)
+        if path is None:
+            path = tok
+        i += 1
+    if not path:
+        console.print(
+            "[red]Usage:[/red] anonymize show-summary PATH.json [--print]"
+        )
+        raise SystemExit(2)
+
+    from anonymizer.output.run_summary import (
+        format_summaries_plain,
+        load_summaries,
+    )
+
+    summaries = load_summaries(path)
+    if print_only:
+        sys.stdout.write(format_summaries_plain(summaries))
+        return
+
+    import tkinter as tk
+
+    from anonymizer.gui.summary_dialog import show_run_summary_dialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        show_run_summary_dialog(root, summaries)
+    finally:
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
 
 
 def cmd_templates_ui(rest: list[str] | None = None) -> None:
@@ -1992,6 +2076,8 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
             cmd_templates(args[idx + 1 :])
         elif low == "templates-ui":
             cmd_templates_ui(args[idx + 1 :])
+        elif low == "show-summary":
+            cmd_show_summary(args[idx + 1 :])
         else:
             cmd_examples()
         return None

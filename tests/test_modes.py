@@ -197,7 +197,8 @@ def test_cli_extract_mode(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     body = out.read_text(encoding="utf-8")
-    assert "mode: extract" in body
+    assert not body.lstrip().startswith("---")
+    assert "mode: extract" not in body
     assert "Maija Korhonen" in body
     assert "131052-308T" in body
     assert "NORDIC WIDGETS OY" in body
@@ -213,7 +214,7 @@ def test_cli_extract_subcommand(tmp_path: Path):
     out = tmp_path / "note.md"
     assert out.is_file(), list(tmp_path.iterdir())
     body = out.read_text(encoding="utf-8")
-    assert "mode: extract" in body
+    assert not body.lstrip().startswith("---")
     assert "Maija Korhonen" in body
     assert "NORDIC WIDGETS OY" in body
 
@@ -230,7 +231,8 @@ def test_cli_standard_subcommand(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     body = out.read_text(encoding="utf-8")
-    assert "mode: standard" in body
+    assert not body.lstrip().startswith("---")
+    assert "mode: standard" not in body
     assert "maija@example.com" not in body
     assert "NORDIC WIDGETS OY" in body
     assert "0737546-2" in body
@@ -271,7 +273,7 @@ def test_cli_help_shows_examples():
     assert "doctor" in out.lower() or "mode" in out.lower()
 
 
-def test_front_matter_includes_mode():
+def test_markdown_body_has_no_mode_front_matter():
     cfg = AnonymizerConfig(mode="standard", lang="en")
     cfg.apply_mode()
     r = DocumentAnonymizer(cfg).anonymize_text("Hello Alice.", lang_flag="en")
@@ -283,4 +285,5 @@ def test_front_matter_includes_mode():
         [TextBlock(text=r.anonymized_text, kind=BlockKind.PARAGRAPH)],
         r,
     )
-    assert "mode: standard" in md
+    assert "mode: standard" not in md
+    assert not md.lstrip().startswith("---")

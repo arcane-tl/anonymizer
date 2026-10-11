@@ -81,11 +81,12 @@ Windows Tk options/templates share the same product logic.
 **Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
 3. Click **Start** (or Cancel). Start requires at least one file.
 4. When finished (no review path):
-   - **Open** checked → file opens; no extra Finder/OK popup (notification only)
-   - **Open** unchecked → one **Done** dialog with **Show in Finder**
+   - **Open** checked → files open, then a **run summary** dialog (entity counts, native status, **Save summary…**)
+   - **Open** unchecked → the same **run summary** dialog (includes **Show in folder**)
+   - Markdown outputs stay **body-only**; use **Save summary…** if you need a sidecar report
 
 ```text
-Open app or drop files → [ Options window ] → work → [ Done ]
+Open app or drop files → [ Options window ] → work → [ Run summary ]
 ```
 
 ### Modes (pop-up)

@@ -674,7 +674,8 @@ on processFiles(theFiles)
 
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
-		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
+		-- Helper writes SUMMARY JSON and opens the Tk summary dialog when asked.
+		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; export ANONYMIZER_SHOW_SUMMARY=1; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
 		set termCmd to shellLine & "; echo; echo '--- Finished. You can close this window. ---'; exec bash"
 		tell application "Terminal"
 			activate
@@ -702,9 +703,9 @@ on processFiles(theFiles)
 
 	set outPaths to parseOutputLines(shellOut)
 	set nOut to count of outPaths
+	set summaryPath to parseSummaryLine(shellOut)
 
-	-- User already chose "Open result when finished" in the options panel:
-	-- open the file(s) and stop — no second dialog (Show in Finder / OK).
+	-- Open result files when the user asked for that, then show the run summary.
 	if wantOpen then
 		if nOut > 0 then
 			repeat with p in outPaths
@@ -716,10 +717,46 @@ on processFiles(theFiles)
 		else
 			display notification "Finished. Look next to your original files for .md." with title "Anonymizer" subtitle "Done"
 		end if
+	end if
+
+	-- Prefer the shared Tk summary (entity counts, native_clean, Save…).
+	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
+	if summaryPath is not "" then
+		try
+			do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath
+		on error errMsg
+			-- Fallback: plain-text AppleScript dialog if Tk/CLI unavailable
+			set plainSum to ""
+			try
+				set plainSum to do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --print"
+			end try
+			if plainSum is "" then set plainSum to "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths))
+			try
+				set doneBtn to button returned of (display dialog plainSum ¬
+					buttons {"Show in Finder", "OK"} default button "OK" with title "Anonymizer")
+			on error number errNum
+				if errNum is -128 then
+					try
+						do shell script "rm -f " & quoted form of summaryPath
+					end try
+					return
+				end if
+				error
+			end try
+			if doneBtn is "Show in Finder" and nOut > 0 then
+				try
+					do shell script "open -R " & quoted form of (item 1 of outPaths)
+				end try
+			end if
+		end try
+		try
+			do shell script "rm -f " & quoted form of summaryPath
+		end try
 		return
 	end if
 
-	-- Open was unchecked: one result dialog so they can still reveal in Finder
+	-- No SUMMARY line (older CLI): simple Done dialog
+	if wantOpen then return
 	set resultBody to "Done" & return & return
 	if nOut is 0 then
 		set resultBody to resultBody & "Finished. Check next to your original files for Markdown and/or redacted source output."
@@ -2179,6 +2216,21 @@ on parseOutputLines(shellOut)
 	end repeat
 	return outPaths
 end parseOutputLines
+
+on parseSummaryLine(shellOut)
+	-- First SUMMARY:/abs/path.json from run-anonymize.sh stdout
+	set AppleScript's text item delimiters to return
+	set linesList to text items of shellOut
+	set AppleScript's text item delimiters to ""
+	repeat with ln in linesList
+		set s to ln as text
+		if s starts with "SUMMARY:" then
+			set p to text 9 thru -1 of s
+			if length of p > 0 then return p
+		end if
+	end repeat
+	return ""
+end parseSummaryLine
 
 on resourcePath(resourceName)
 	try

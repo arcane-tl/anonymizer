@@ -2824,11 +2824,18 @@ class OptionsApp(tk.Tk):
         self.update_idletasks()
         outputs: list[str] = []
         errors: list[str] = []
+        summary_path = Path(
+            tempfile.mkstemp(suffix=".json", prefix="anonymizer-summary-")[1]
+        )
+        env = os.environ.copy()
+        env["ANONYMIZER_WRITE_SUMMARY_JSON"] = str(summary_path)
         try:
             for fpath in self.files:
                 cmd = [*cli, mode, str(fpath), *common_flags]
                 _log(f"RUN: {cli[0] if cli else '?'} {mode} <file>")
-                proc = subprocess.run(cmd, capture_output=True, text=True)
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, env=env
+                )
                 if proc.returncode != 0:
                     err = (proc.stderr or proc.stdout or "error").strip()
                     errors.append(f"{fpath.name}: {err}")
@@ -2856,36 +2863,22 @@ class OptionsApp(tk.Tk):
                 "Something went wrong:\n\n" + "\n\n".join(errors[:3]),
                 parent=self,
             )
+            try:
+                summary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             return
 
         if want_open and outputs:
             _open_result_paths(outputs)
-            _log("OptionsApp done (open results) → destroy")
-            self.destroy()
-            return
 
-        msg = "Done.\n\n"
-        if outputs:
-            msg += "Created:\n" + "\n".join(f"• {Path(o).name}" for o in outputs)
-        else:
-            msg += (
-                "Finished. Check next to your original files for Markdown "
-                "and/or redacted source output."
-            )
-        if errors:
-            msg += "\n\nSome files failed:\n" + "\n".join(errors[:5])
-        if outputs and messagebox.askyesno(
-            "Anonymizer", msg + "\n\nShow in folder?", parent=self
-        ):
-            folder = str(out_dir) if out_dir is not None else str(Path(outputs[0]).parent)
-            if sys.platform == "darwin":
-                subprocess.run(["open", folder], check=False)
-            elif sys.platform == "win32":
-                subprocess.run(["explorer", folder], check=False)
-            else:
-                subprocess.run(["xdg-open", folder], check=False)
-        else:
-            messagebox.showinfo("Anonymizer", msg, parent=self)
+        from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+        show_summary_from_json_file(self, summary_path, errors=errors or None)
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         _log("OptionsApp done → destroy")
         self.destroy()
 
@@ -2940,8 +2933,14 @@ class OptionsApp(tk.Tk):
         env = os.environ.copy()
         if want_open:
             env["ANONYMIZER_OPEN"] = "1"
+        summary_path = Path(
+            tempfile.mkstemp(suffix=".json", prefix="anonymizer-summary-")[1]
+        )
+        env["ANONYMIZER_WRITE_SUMMARY_JSON"] = str(summary_path)
 
         if sys.platform == "darwin":
+            # Mac droplet uses AppleScript for the main path; Terminal review
+            # chain still gets the summary env for CLI JSON (dialog via droplet).
             chain = " ; ".join(" ".join(shlex_quote(c) for c in cmd) for cmd in cmds)
             chain += '; echo; echo "--- Finished. You can close this window. ---"'
             chain_esc = chain.replace("\\", "\\\\").replace('"', '\\"')
@@ -3027,15 +3026,21 @@ class OptionsApp(tk.Tk):
                 parent=self if self.winfo_exists() else None,
             )
         elif not errors:
-            # Success: open outputs if requested; never show a Done alert.
             if want_open and outputs:
                 _open_result_paths(outputs)
                 _log(f"REVIEW done open=1 n_out={len(outputs)}")
-            else:
-                _log(
-                    f"REVIEW done open=0 n_out={len(outputs)} "
-                    f"(no success dialog)"
-                )
+            from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+            show_summary_from_json_file(
+                self if self.winfo_exists() else None,
+                summary_path,
+                errors=None,
+            )
+            _log(f"REVIEW done summary n_out={len(outputs)}")
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def shlex_quote(s: str) -> str:
