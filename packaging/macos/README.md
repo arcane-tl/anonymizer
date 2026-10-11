@@ -80,14 +80,14 @@ Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`
 Windows Tk options/templates share the same product logic.  
 **Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
 3. Click **Start** (or Cancel). Start requires at least one file.
-4. When finished (no review path):
-   - **Open** checked → files open, then a **native run summary** dialog (entity counts, native status)
-   - **Open** unchecked → the same dialog (**Save summary…**, **Show in Finder**, **OK**)
-   - Markdown outputs stay **body-only**; use **Save summary…** for a JSON sidecar
-   - (Tk `show-summary` is for the Windows/Options GUI; the Mac droplet uses AppleScript `display dialog`)
+4. When finished (Review or not):
+   - **Open** checked → result files open, then a **polished Tk run summary** window
+   - **Open** unchecked → the same summary window (Save summary… / Show in folder / Done)
+   - **No Terminal.app** — Review uses the document review window via the droplet
+   - Markdown stays **body-only**; use **Save summary…** for a JSON/MD sidecar
 
 ```text
-Open app or drop files → [ Options window ] → work → [ Run summary ]
+Open app or drop files → [ Options ] → [ Review window? ] → [ Run summary ]
 ```
 
 ### Modes (pop-up)
@@ -100,9 +100,9 @@ Open app or drop files → [ Options window ] → work → [ Run summary ]
 
 ### Review
 
-When **Review findings before saving** is checked, Start opens **Terminal** for the review window (`--review-window`): toggle false positives, add redactions, teach templates. Opening results follows the **Open result when finished** checkbox.
+When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`) inside the app flow — **no Terminal**. Toggle false positives, add redactions, teach templates. Opening results follows **Open result when finished**.
 
-After Review finishes, Terminal always prints an **Anonymizer run summary** banner (mode, entities, outputs). A native dialog (Save summary... / Show in Finder / OK) is also attempted. Terminal then **exits** — close the window without a “terminate” prompt (no leftover interactive bash).
+After Review (or a non-Review run), a detached **run summary** window appears with entity chips, output cards, and Save / Show in folder / Done.
 
 ## How it works
 

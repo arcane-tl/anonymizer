@@ -672,23 +672,18 @@ on processFiles(theFiles)
 	if wantLetterhead and hasSource then set extraOpts to extraOpts & " --redact-letterhead-images"
 	if wantDebug then set extraOpts to extraOpts & " --debug"
 
+	-- Review and non-Review share one path: no Terminal.app.
+	-- Review opens the Tk review window inside this do shell script call.
 	if wantReview then
 		display notification "Review window will open after analysis." with title "Anonymizer" subtitle "Review"
-		-- Helper shows a native osascript summary when ANONYMIZER_SHOW_SUMMARY=1.
-		-- Do not exec bash — that leaves Terminal asking to "terminate" on close.
-		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; export ANONYMIZER_SHOW_SUMMARY=1; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
-		-- $ec is expanded by the shell inside Terminal, not by AppleScript
-		set termCmd to shellLine & "; ec=$?; echo; echo '--- Finished. Summary is printed above (and a dialog may appear). You can close this Terminal window. ---'; exit $ec"
-		tell application "Terminal"
-			activate
-			do script termCmd
-		end tell
-		return
+		set reviewFlag to " --review"
+	else
+		display notification "Working on " & (nFiles as text) & " file" & pluralS(nFiles) & "…" with title "Anonymizer"
+		set reviewFlag to ""
 	end if
 
-	display notification "Working on " & (nFiles as text) & " file" & pluralS(nFiles) & "…" with title "Anonymizer"
-
-	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & extraOpts & " " & modeArg & " " & fileArgs
+	-- Keep OPEN=0 here; we open files ourselves after success so order is: review → open → summary.
+	set shellCmd to "export ANONYMIZER_OPEN=0; bash " & quoted form of helper & reviewFlag & extraOpts & " " & modeArg & " " & fileArgs
 	set exitCode to 0
 	set shellOut to ""
 	try
@@ -707,7 +702,6 @@ on processFiles(theFiles)
 	set nOut to count of outPaths
 	set summaryPath to parseSummaryLine(shellOut)
 
-	-- Open result files when the user asked for that, then show the run summary.
 	if wantOpen then
 		if nOut > 0 then
 			repeat with p in outPaths
@@ -721,61 +715,22 @@ on processFiles(theFiles)
 		end if
 	end if
 
-	-- Native summary dialog (Tk via do shell script is unreliable / invisible).
+	-- Detached polished Tk summary (survives droplet finishing).
 	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
 	if summaryPath is not "" then
-		set plainSum to ""
 		try
-			set plainSum to do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --print"
-		end try
-		if plainSum is "" then
-			set plainSum to "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths))
-		else
-			-- display dialog has a practical length limit
-			if length of plainSum > 1800 then
-				set plainSum to (text 1 thru 1700 of plainSum) & return & return & "… (full summary via Save summary…)"
-			end if
-		end if
-		set dialogBtns to {"OK"}
-		if nOut > 0 then set dialogBtns to {"Show in Finder", "OK"}
-		set dialogBtns to {"Save summary…"} & dialogBtns
-		try
-			set doneBtn to button returned of (display dialog plainSum ¬
-				buttons dialogBtns default button "OK" with title "Anonymizer — run summary")
-		on error number errNum
-			if errNum is -128 then
+			-- Background so do shell script returns immediately; --ephemeral deletes the temp JSON after load.
+			do shell script pathExport & "nohup anonymize show-summary " & quoted form of summaryPath & " --ephemeral >/dev/null 2>&1 &"
+		on error errMsg
+			-- Fallback: blocking summary if detach fails
+			try
+				do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --ephemeral"
+			on error
+				display dialog "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths)) buttons {"OK"} default button 1 with title "Anonymizer"
 				try
 					do shell script "rm -f " & quoted form of summaryPath
 				end try
-				return
-			end if
-			error
-		end try
-		if doneBtn is "Save summary…" then
-			set defaultName to "anonymizer-summary.json"
-			try
-				if nOut > 0 then
-					set defaultName to (do shell script "basename " & quoted form of (item 1 of outPaths) & " | sed 's/\\.[^.]*$//'") & ".anonymizer-summary.json"
-				end if
 			end try
-			try
-				set saveTarget to choose file name with prompt "Save run summary" default name defaultName
-				set savePosix to POSIX path of saveTarget
-				do shell script "cp " & quoted form of summaryPath & " " & quoted form of savePosix & " && chmod 600 " & quoted form of savePosix
-			on error number errNum
-				if errNum is -128 then
-					-- user cancelled Save
-				else
-					display dialog "Could not save summary:" & return & return & "Error " & errNum buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
-				end if
-			end try
-		else if doneBtn is "Show in Finder" and nOut > 0 then
-			try
-				do shell script "open -R " & quoted form of (item 1 of outPaths)
-			end try
-		end if
-		try
-			do shell script "rm -f " & quoted form of summaryPath
 		end try
 		return
 	end if

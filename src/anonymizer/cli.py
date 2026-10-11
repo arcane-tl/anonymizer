@@ -1453,15 +1453,21 @@ def cmd_show_summary(rest: list[str] | None = None) -> None:
 
         anonymize show-summary PATH.json
         anonymize show-summary PATH.json --print
+        anonymize show-summary PATH.json --ephemeral
     """
     rest = rest or []
     print_only = False
+    ephemeral = False
     path: str | None = None
     i = 0
     while i < len(rest):
         tok = rest[i]
         if tok in {"--print", "-p"}:
             print_only = True
+            i += 1
+            continue
+        if tok == "--ephemeral":
+            ephemeral = True
             i += 1
             continue
         if tok.startswith("-"):
@@ -1472,7 +1478,8 @@ def cmd_show_summary(rest: list[str] | None = None) -> None:
         i += 1
     if not path:
         console.print(
-            "[red]Usage:[/red] anonymize show-summary PATH.json [--print]"
+            "[red]Usage:[/red] anonymize show-summary PATH.json "
+            "[--print] [--ephemeral]"
         )
         raise SystemExit(2)
 
@@ -1482,24 +1489,19 @@ def cmd_show_summary(rest: list[str] | None = None) -> None:
     )
 
     summaries = load_summaries(path)
+    if ephemeral:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
     if print_only:
         sys.stdout.write(format_summaries_plain(summaries))
         return
 
-    import tkinter as tk
-
     from anonymizer.gui.summary_dialog import show_run_summary_dialog
 
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        show_run_summary_dialog(root, summaries)
-    finally:
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
-
+    # Standalone window (survives parent droplet / Terminal exit).
+    show_run_summary_dialog(None, summaries)
 
 def cmd_templates_ui(rest: list[str] | None = None) -> None:
     """Open the shared Tk Templates dialog (Mac droplet / desktop)."""
