@@ -678,7 +678,7 @@ on processFiles(theFiles)
 		-- Do not exec bash — that leaves Terminal asking to "terminate" on close.
 		set shellLine to "export ANONYMIZER_OPEN=" & openEnv & "; export ANONYMIZER_SHOW_SUMMARY=1; bash " & quoted form of helper & " --review" & extraOpts & " " & modeArg & " " & fileArgs
 		-- $ec is expanded by the shell inside Terminal, not by AppleScript
-		set termCmd to shellLine & "; ec=$?; echo; echo '--- Finished. You can close this Terminal window. ---'; exit $ec"
+		set termCmd to shellLine & "; ec=$?; echo; echo '--- Finished. Summary is printed above (and a dialog may appear). You can close this Terminal window. ---'; exit $ec"
 		tell application "Terminal"
 			activate
 			do script termCmd

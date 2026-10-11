@@ -621,20 +621,14 @@ if [[ ${#outputs[@]} -gt 0 ]]; then
   esac
 fi
 
-# Native macOS summary dialog for the Terminal --review path.
-# Text is loaded via temp file + `do shell script "cat …"` so we never embed
-# Unicode/bullets into a fragile quoted AppleScript string (that yielded blank dialogs).
-_show_summary_osascript() {
-  local summary_json="$1"
-  local plain first_out="" save_default="anonymizer-summary.json"
-  local txt_file as_file rc=0 btn_list
-  if ! command -v osascript >/dev/null 2>&1; then
-    return 1
+# Build plain summary text for Terminal banner / dialog (never empty).
+_build_summary_plain() {
+  local summary_json="${1:-}"
+  local plain=""
+  if [[ -n "$summary_json" && -f "$summary_json" && -s "$summary_json" ]]; then
+    plain=$("$BIN" show-summary "$summary_json" --print 2>/dev/null) || plain=""
   fi
-
-  plain=$("$BIN" show-summary "$summary_json" --print 2>/dev/null) || plain=""
   if [[ -z "${plain//[$' \t\r\n']/}" ]]; then
-    echo "warning: show-summary --print empty (json=$(wc -c <"$summary_json" | tr -d ' ') bytes)" >&2
     plain="Done. ${ok} file(s) ok (mode=${MODE})."
     if [[ ${#outputs[@]} -gt 0 ]]; then
       plain+=$'\n\nCreated:'
@@ -642,11 +636,31 @@ _show_summary_osascript() {
       for p in "${outputs[@]}"; do
         plain+=$'\n'"$(basename -- "$p")"
       done
+    else
+      plain+=$'\n\n(No output paths recorded.)'
+    fi
+    if [[ -n "$summary_json" && -f "$summary_json" ]]; then
+      plain+=$'\n\n(Summary JSON was empty or unreadable.)'
     fi
   fi
-  # display dialog practical limit
   if [[ ${#plain} -gt 1700 ]]; then
-    plain="${plain:0:1700}"$'\n\n… (truncated; use Save summary… for the full JSON)'
+    plain="${plain:0:1700}"$'\n\n... (truncated; use Save summary... for the full JSON)'
+  fi
+  printf '%s' "$plain"
+}
+
+# Native macOS summary dialog for the Terminal --review path.
+# Body text comes from a temp UTF-8 file (no fragile string embedding).
+_show_summary_osascript() {
+  local summary_json="${1:-}"
+  local plain="$2"
+  local first_out="" save_default="anonymizer-summary.json"
+  local txt_file as_file err_file rc=0 btn_list
+  if ! command -v osascript >/dev/null 2>&1; then
+    return 1
+  fi
+  if [[ -z "${plain//[$' \t\r\n']/}" ]]; then
+    return 1
   fi
 
   if [[ ${#outputs[@]} -gt 0 ]]; then
@@ -654,27 +668,32 @@ _show_summary_osascript() {
     save_default="$(basename -- "$first_out")"
     save_default="${save_default%.*}.anonymizer-summary.json"
   fi
+  # ASCII-only button labels (Unicode ellipsis broke some osascript compiles).
   if [[ -n "$first_out" ]]; then
-    btn_list='"Save summary…", "Show in Finder", "OK"'
+    btn_list='"Save summary...", "Show in Finder", "OK"'
   else
-    btn_list='"Save summary…", "OK"'
+    btn_list='"Save summary...", "OK"'
   fi
 
   txt_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-body.XXXXXX.txt")"
   as_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-dialog.XXXXXX.applescript")"
+  err_file="${TMPDIR:-/tmp}/anonymizer-summary-osascript.log"
   printf '%s' "$plain" >"$txt_file"
 
   cat >"$as_file" <<EOF
+try
+  tell application "Terminal" to activate
+end try
+delay 0.2
 set txtPath to "$(printf '%s' "$txt_file" | sed 's/\\/\\\\/g; s/"/\\"/g')"
--- Read UTF-8 file directly (do shell script "cat" collapses newlines).
 set plainSum to read (POSIX file txtPath) as «class utf8»
 try
-  set doneBtn to button returned of (display dialog plainSum buttons {${btn_list}} default button "OK" with title "Anonymizer — run summary")
+  set doneBtn to button returned of (display dialog plainSum buttons {${btn_list}} default button "OK" with title "Anonymizer run summary")
 on error number errNum
   if errNum is -128 then return "cancel"
   error
 end try
-if doneBtn is "Save summary…" then
+if doneBtn is "Save summary..." then
   try
     set saveTarget to choose file name with prompt "Save run summary" default name "$(printf '%s' "$save_default" | sed 's/\\/\\\\/g; s/"/\\"/g')"
     set savePosix to POSIX path of saveTarget
@@ -692,22 +711,36 @@ end if
 return doneBtn
 EOF
 
-  osascript "$as_file" >/dev/null 2>&1 || rc=$?
+  if osascript "$as_file" 2>"$err_file"; then
+    rc=0
+  else
+    rc=$?
+    echo "warning: summary dialog failed (osascript exit $rc). See $err_file" >&2
+    if [[ -s "$err_file" ]]; then
+      echo "--- osascript error ---" >&2
+      cat "$err_file" >&2 || true
+    fi
+  fi
   rm -f "$as_file" "$txt_file"
   return "$rc"
 }
 
-# Terminal --review path: native osascript dialog (Tk show-summary is unreliable here).
+# Terminal --review path: always print a banner; try native dialog too.
 case "$(printf '%s' "${ANONYMIZER_SHOW_SUMMARY:-}" | tr '[:upper:]' '[:lower:]')" in
   1|y|yes)
-    if [[ -f "$SUMMARY_JSON" && -s "$SUMMARY_JSON" ]]; then
-      if ! _show_summary_osascript "$SUMMARY_JSON"; then
-        echo "--- Run summary ---" >&2
-        "$BIN" show-summary "$SUMMARY_JSON" --print 2>/dev/null >&2 || true
-      fi
-      if [[ "$SUMMARY_OWNED" -eq 1 ]]; then
-        rm -f "$SUMMARY_JSON"
-      fi
+    _sum_plain="$(_build_summary_plain "${SUMMARY_JSON:-}")"
+    echo "" >&2
+    echo "======== Anonymizer run summary ========" >&2
+    printf '%s\n' "$_sum_plain" >&2
+    echo "========================================" >&2
+    echo "(A dialog should also appear. You can close this Terminal window when done.)" >&2
+    echo "" >&2
+    if command -v osascript >/dev/null 2>&1; then
+      osascript -e 'display notification "Anonymizer finished — see run summary." with title "Anonymizer"' 2>/dev/null || true
+    fi
+    _show_summary_osascript "${SUMMARY_JSON:-}" "$_sum_plain" || true
+    if [[ "${SUMMARY_OWNED:-0}" -eq 1 && -n "${SUMMARY_JSON:-}" ]]; then
+      rm -f "$SUMMARY_JSON"
     fi
     ;;
 esac
