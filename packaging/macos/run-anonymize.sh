@@ -621,39 +621,20 @@ if [[ ${#outputs[@]} -gt 0 ]]; then
   esac
 fi
 
-# Escape text for an AppleScript double-quoted string (newlines → return).
-_as_escape() {
-  # Prefer the same Python the CLI uses; fall back to /usr/bin/python3.
-  local py=""
-  if command -v python3 >/dev/null 2>&1; then
-    py=python3
-  elif [[ -x "${BIN%/*}/python" ]]; then
-    py="${BIN%/*}/python"
-  else
-    py=/usr/bin/python3
-  fi
-  "$py" -c '
-import sys
-t = sys.stdin.read()
-if len(t) > 1700:
-    t = t[:1700] + "\n\n… (truncated; use Save summary… for the full JSON)"
-t = t.replace("\\", "\\\\").replace("\"", "\\\"")
-t = t.replace("\r\n", "\n").replace("\r", "\n")
-t = t.replace("\n", "\" & return & \"")
-sys.stdout.write(t)
-'
-}
-
 # Native macOS summary dialog for the Terminal --review path.
+# Text is loaded via temp file + `do shell script "cat …"` so we never embed
+# Unicode/bullets into a fragile quoted AppleScript string (that yielded blank dialogs).
 _show_summary_osascript() {
   local summary_json="$1"
-  local plain escaped btn_list first_out="" save_default="anonymizer-summary.json"
-  local as_file rc=0
+  local plain first_out="" save_default="anonymizer-summary.json"
+  local txt_file as_file rc=0 btn_list
   if ! command -v osascript >/dev/null 2>&1; then
     return 1
   fi
+
   plain=$("$BIN" show-summary "$summary_json" --print 2>/dev/null) || plain=""
-  if [[ -z "$plain" ]]; then
+  if [[ -z "${plain//[$' \t\r\n']/}" ]]; then
+    echo "warning: show-summary --print empty (json=$(wc -c <"$summary_json" | tr -d ' ') bytes)" >&2
     plain="Done. ${ok} file(s) ok (mode=${MODE})."
     if [[ ${#outputs[@]} -gt 0 ]]; then
       plain+=$'\n\nCreated:'
@@ -663,7 +644,11 @@ _show_summary_osascript() {
       done
     fi
   fi
-  escaped=$(_as_escape <<<"$plain") || return 1
+  # display dialog practical limit
+  if [[ ${#plain} -gt 1700 ]]; then
+    plain="${plain:0:1700}"$'\n\n… (truncated; use Save summary… for the full JSON)'
+  fi
+
   if [[ ${#outputs[@]} -gt 0 ]]; then
     first_out="${outputs[0]}"
     save_default="$(basename -- "$first_out")"
@@ -674,10 +659,15 @@ _show_summary_osascript() {
   else
     btn_list='"Save summary…", "OK"'
   fi
+
+  txt_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-body.XXXXXX.txt")"
   as_file="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary-dialog.XXXXXX.applescript")"
-  # shellcheck disable=SC2086
+  printf '%s' "$plain" >"$txt_file"
+
   cat >"$as_file" <<EOF
-set plainSum to "${escaped}"
+set txtPath to "$(printf '%s' "$txt_file" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+-- Read UTF-8 file directly (do shell script "cat" collapses newlines).
+set plainSum to read (POSIX file txtPath) as «class utf8»
 try
   set doneBtn to button returned of (display dialog plainSum buttons {${btn_list}} default button "OK" with title "Anonymizer — run summary")
 on error number errNum
@@ -701,8 +691,9 @@ else if doneBtn is "Show in Finder" then
 end if
 return doneBtn
 EOF
+
   osascript "$as_file" >/dev/null 2>&1 || rc=$?
-  rm -f "$as_file"
+  rm -f "$as_file" "$txt_file"
   return "$rc"
 }
 
