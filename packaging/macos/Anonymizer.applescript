@@ -719,36 +719,59 @@ on processFiles(theFiles)
 		end if
 	end if
 
-	-- Prefer the shared Tk summary (entity counts, native_clean, Save…).
+	-- Native summary dialog (Tk via do shell script is unreliable / invisible).
 	set pathExport to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
 	if summaryPath is not "" then
+		set plainSum to ""
 		try
-			do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath
-		on error errMsg
-			-- Fallback: plain-text AppleScript dialog if Tk/CLI unavailable
-			set plainSum to ""
+			set plainSum to do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --print"
+		end try
+		if plainSum is "" then
+			set plainSum to "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths))
+		else
+			-- display dialog has a practical length limit
+			if length of plainSum > 1800 then
+				set plainSum to (text 1 thru 1700 of plainSum) & return & return & "… (full summary via Save summary…)"
+			end if
+		end if
+		set dialogBtns to {"OK"}
+		if nOut > 0 then set dialogBtns to {"Show in Finder", "OK"}
+		set dialogBtns to {"Save summary…"} & dialogBtns
+		try
+			set doneBtn to button returned of (display dialog plainSum ¬
+				buttons dialogBtns default button "OK" with title "Anonymizer — run summary")
+		on error number errNum
+			if errNum is -128 then
+				try
+					do shell script "rm -f " & quoted form of summaryPath
+				end try
+				return
+			end if
+			error
+		end try
+		if doneBtn is "Save summary…" then
+			set defaultName to "anonymizer-summary.json"
 			try
-				set plainSum to do shell script pathExport & "anonymize show-summary " & quoted form of summaryPath & " --print"
+				if nOut > 0 then
+					set defaultName to (do shell script "basename " & quoted form of (item 1 of outPaths) & " | sed 's/\\.[^.]*$//'") & ".anonymizer-summary.json"
+				end if
 			end try
-			if plainSum is "" then set plainSum to "Done." & return & return & "Created:" & return & fileListSummary(basenameList(outPaths))
 			try
-				set doneBtn to button returned of (display dialog plainSum ¬
-					buttons {"Show in Finder", "OK"} default button "OK" with title "Anonymizer")
+				set saveTarget to choose file name with prompt "Save run summary" default name defaultName
+				set savePosix to POSIX path of saveTarget
+				do shell script "cp " & quoted form of summaryPath & " " & quoted form of savePosix & " && chmod 600 " & quoted form of savePosix
 			on error number errNum
 				if errNum is -128 then
-					try
-						do shell script "rm -f " & quoted form of summaryPath
-					end try
-					return
+					-- user cancelled Save
+				else
+					display dialog "Could not save summary:" & return & return & "Error " & errNum buttons {"OK"} default button 1 with icon stop with title "Anonymizer"
 				end if
-				error
 			end try
-			if doneBtn is "Show in Finder" and nOut > 0 then
-				try
-					do shell script "open -R " & quoted form of (item 1 of outPaths)
-				end try
-			end if
-		end try
+		else if doneBtn is "Show in Finder" and nOut > 0 then
+			try
+				do shell script "open -R " & quoted form of (item 1 of outPaths)
+			end try
+		end if
 		try
 			do shell script "rm -f " & quoted form of summaryPath
 		end try

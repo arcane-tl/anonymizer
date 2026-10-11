@@ -94,6 +94,47 @@ _KEEP_HYPHEN_PREFIXES = frozenset(
     }
 )
 
+# Title-case product/tool stems that keep a real hyphen (Jira-tiketin).
+# Plain Title-case name syllables (Eli-salla) are *not* listed — those join.
+_KEEP_TITLE_LEFT = frozenset(
+    {
+        "jira",
+        "teams",
+        "salesforce",
+        "sharepoint",
+        "confluence",
+        "slack",
+        "github",
+        "gitlab",
+        "azure",
+        "aws",
+        "excel",
+        "outlook",
+        "powerpoint",
+        "powerbi",
+        "tableau",
+        "notion",
+        "trello",
+        "asana",
+        "zendesk",
+        "hubspot",
+        "linkedin",
+        "dropbox",
+        "onedrive",
+        "servicenow",
+        "snowflake",
+        "databricks",
+        "kubernetes",
+        "docker",
+        "jenkins",
+        "figma",
+        "miro",
+        "zoom",
+        "skype",
+        "whatsapp",
+    }
+)
+
 # English (and a few FI) right-hand compound parts — keep the hyphen.
 _KEEP_HYPHEN_RIGHTS = frozenset(
     {
@@ -184,11 +225,18 @@ def should_keep_compound_hyphen(left: str, right: str) -> bool:
         return True
     if low_r in _KEEP_HYPHEN_RIGHTS:
         return True
+    # Known tools/products: Jira-tiketin (not name syllables like Eli-salla)
+    if low_l in _KEEP_TITLE_LEFT:
+        return True
     # Short ALLCAPS / acronym left: ETA-maat, EU-maat, IT-ala
     if left.isupper() and 1 <= len(left) <= 4:
         return True
-    # Title-case / mixed proper noun: Jira-tiketin, SharePoint-x
-    if left[0].isupper() and not left.isupper() and any(c.islower() for c in left):
+    # Internal CamelCase product stem: SharePoint-…, GitHub-…
+    if (
+        left[0].isupper()
+        and not left.isupper()
+        and any(c.isupper() for c in left[1:])
+    ):
         return True
     # Right starts with uppercase → keep
     if right[0].isupper():
@@ -200,12 +248,26 @@ def should_join_soft_hyphen(left: str, right: str) -> bool:
     """True when a hyphen is a syllable / line-wrap break to drop.
 
     Prefer missing a join over destroying real compounds or domain labels
-    (``nordic-widgets.example.com``).
+    (``nordic-widgets.example.com``). Title-case name syllables such as
+    ``Eli-salla`` join so ORG/PERSON NER sees one surface.
     """
     if should_keep_compound_hyphen(left, right):
         return False
     if not right or not right[0].islower():
         return False
+
+    # Title-case left + lowercase right: Eli-salla → Elisalla (not Jira-…)
+    title_syllable = (
+        left[0].isupper()
+        and not left.isupper()
+        and not any(c.isupper() for c in left[1:])
+        and right.islower()
+        and len(left) >= 2
+        and len(right) >= 3
+    )
+    if title_syllable:
+        return True
+
     if not left.islower() or not right.islower():
         return False
     joined = left + right

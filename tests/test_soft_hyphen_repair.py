@@ -18,6 +18,13 @@ def test_join_finnish_syllable_breaks():
     )
 
 
+def test_join_title_case_name_syllables():
+    """Word wrap in names/companies: Eli-salla → Elisalla for ORG/PERSON NER."""
+    assert not should_keep_compound_hyphen("Eli", "salla")
+    assert should_join_soft_hyphen("Eli", "salla")
+    assert repair_soft_hyphens("Asiakas Eli-salla Oy") == "Asiakas Elisalla Oy"
+
+
 def test_keep_real_compounds():
     assert should_keep_compound_hyphen("pre", "sales")
     assert should_keep_compound_hyphen("Jira", "tiketin")
@@ -53,3 +60,18 @@ def test_does_not_break_hyphenated_domains_or_emails():
     assert repair_soft_hyphens(email) == email
     assert repair_soft_hyphens(url) == url
     assert repair_text_artifacts(email) == email
+
+
+def test_elisalla_org_after_hyphen_repair():
+    from anonymizer.anonymize.config import AnonymizerConfig
+    from anonymizer.anonymize.engine import DocumentAnonymizer
+
+    cfg = AnonymizerConfig(mode="strict", lang="fi", use_llm=False)
+    cfg.apply_mode()
+    r = DocumentAnonymizer(cfg).anonymize_text(
+        "Sopimusosapuoli Eli-salla Oy toimittaa palvelun.",
+        lang_flag="fi",
+    )
+    assert "Eli-salla" not in r.anonymized_text
+    assert "Elisalla" not in r.anonymized_text
+    assert "[ORG_" in r.anonymized_text

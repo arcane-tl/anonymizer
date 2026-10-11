@@ -81,9 +81,10 @@ Windows Tk options/templates share the same product logic.
 **Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
 3. Click **Start** (or Cancel). Start requires at least one file.
 4. When finished (no review path):
-   - **Open** checked → files open, then a **run summary** dialog (entity counts, native status, **Save summary…**)
-   - **Open** unchecked → the same **run summary** dialog (includes **Show in folder**)
-   - Markdown outputs stay **body-only**; use **Save summary…** if you need a sidecar report
+   - **Open** checked → files open, then a **native run summary** dialog (entity counts, native status)
+   - **Open** unchecked → the same dialog (**Save summary…**, **Show in Finder**, **OK**)
+   - Markdown outputs stay **body-only**; use **Save summary…** for a JSON sidecar
+   - (Tk `show-summary` is for the Windows/Options GUI; the Mac droplet uses AppleScript `display dialog`)
 
 ```text
 Open app or drop files → [ Options window ] → work → [ Run summary ]
