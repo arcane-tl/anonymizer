@@ -120,3 +120,43 @@ class EntityMap:
         for (label, _), _ in self._forward.items():
             counts[label] = counts.get(label, 0) + 1
         return counts
+
+
+_PLACEHOLDER_RE = re.compile(r"^\[([A-Z][A-Z0-9_]*)_(\d+)\]$")
+
+
+def extend_mapping_with_phones(
+    mapping: dict[str, str],
+    phones: list[str],
+) -> dict[str, str]:
+    """Add phone surfaces to *mapping* for native scrub (no body rewrite).
+
+    Used when PDF footer chrome containing ``Puh: …`` was stripped from the
+    Markdown extract but must still be redacted in the native PDF/DOCX.
+    """
+    if not phones:
+        return mapping
+    out = dict(mapping)
+    seen_norm = {normalize_entity_text(v) for v in out.values()}
+    # Also match by digits-only so "09 478…" and "09478…" collide
+    seen_digits = {re.sub(r"\D", "", v) for v in out.values() if re.search(r"\d", v)}
+    max_n = 0
+    for ph in out:
+        m = _PLACEHOLDER_RE.match(ph)
+        if m and m.group(1) == "PHONE":
+            max_n = max(max_n, int(m.group(2)))
+    for raw in phones:
+        surface = (raw or "").strip()
+        if not surface:
+            continue
+        key = normalize_entity_text(surface)
+        digits = re.sub(r"\D", "", surface)
+        if key in seen_norm or (digits and digits in seen_digits):
+            continue
+        max_n += 1
+        ph = f"[PHONE_{max_n}]"
+        out[ph] = surface
+        seen_norm.add(key)
+        if digits:
+            seen_digits.add(digits)
+    return out

@@ -1,0 +1,55 @@
+"""Soft-hyphen / syllable repair (extract path)."""
+
+from __future__ import annotations
+
+from anonymizer.extract.text_repair import (
+    repair_soft_hyphens,
+    repair_text_artifacts,
+    should_join_soft_hyphen,
+    should_keep_compound_hyphen,
+)
+
+
+def test_join_finnish_syllable_breaks():
+    assert should_join_soft_hyphen("työ", "kokemus")
+    assert should_join_soft_hyphen("kon", "sultointiin")
+    assert repair_soft_hyphens("vahvaa työ-kokemus ja kon-sultointiin.") == (
+        "vahvaa työkokemus ja konsultointiin."
+    )
+
+
+def test_keep_real_compounds():
+    assert should_keep_compound_hyphen("pre", "sales")
+    assert should_keep_compound_hyphen("Jira", "tiketin")
+    assert should_keep_compound_hyphen("ETA", "maat")
+    assert not should_join_soft_hyphen("pre", "sales")
+    assert not should_join_soft_hyphen("Jira", "tiketin")
+    assert not should_join_soft_hyphen("ETA", "maat")
+    text = "pre-sales Jira-tiketin ETA-maat e-mail full-stack"
+    assert repair_soft_hyphens(text) == text
+
+
+def test_strips_unicode_soft_hyphen():
+    # U+00AD between syllables
+    raw = "työ\u00adkokemus"
+    assert repair_soft_hyphens(raw) == "työkokemus"
+
+
+def test_repair_text_artifacts_runs_without_newline():
+    # Previously bailed when no \\n — Word leftovers live in one paragraph
+    assert "työkokemus" in repair_text_artifacts("työ-kokemus")
+    assert "pre-sales" in repair_text_artifacts("pre-sales")
+
+
+def test_idempotent():
+    once = repair_soft_hyphens("työ-kokemus pre-sales")
+    twice = repair_soft_hyphens(once)
+    assert once == twice == "työkokemus pre-sales"
+
+
+def test_does_not_break_hyphenated_domains_or_emails():
+    email = "jordan.blake@nordic-widgets.example.com"
+    url = "https://www.nordic-widgets.example.fi/palvelut"
+    assert repair_soft_hyphens(email) == email
+    assert repair_soft_hyphens(url) == url
+    assert repair_text_artifacts(email) == email

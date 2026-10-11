@@ -18,14 +18,16 @@ _CHROME_FIELD = re.compile(
     r"(?i)^\s*("
     r"sopimusnumero|luottopäätösnumero|luottopaatosnumero|"
     r"y-tunnus|alv-numero|alv\s*numero|"
-    r"puh\.?|puhelin|phone|tel\.?"
+    r"puhelinnumero|matkapuhelin|puhelin|telephone|telefax|"
+    r"phone|faksi|fax|gsm|tel\.?|puh\.?"
     r")\b"
 )
 _ONLY_URLS = re.compile(
     r"(?i)^(?:\s*(?:https?://|www\.)\S+\s*)+$"
 )
 _ONLY_PHONE = re.compile(
-    r"(?i)^(?:puh\.?|puhelin|phone|tel\.?)?\s*[:：]?\s*"
+    r"(?i)^(?:puhelinnumero|matkapuhelin|puhelin|telephone|telefax|"
+    r"phone|faksi|fax|gsm|tel\.?|puh\.?)?\s*[:：]?\s*"
     r"[\d\s\-./()+]+\s*$"
 )
 
@@ -74,12 +76,35 @@ def _looks_like_page_chrome(text: str) -> bool:
     return False
 
 
+def harvest_phones_from_text(text: str) -> list[str]:
+    """Return Finnish phone surfaces found in *text* (for native scrub seeding)."""
+    try:
+        from anonymizer.anonymize.recognizers.fi_phone import find_fi_phones
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for _s, _e, value in find_fi_phones(text):
+        key = _norm(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(value.strip())
+    return out
+
+
 def filter_running_headers(
     blocks: list[TextBlock],
     *,
     keep_headers: bool = False,
+    harvest_phones: list[str] | None = None,
 ) -> list[TextBlock]:
-    """Drop page marks, doc stamps, letterheads, and repeated footer chrome."""
+    """Drop page marks, doc stamps, letterheads, and repeated footer chrome.
+
+    When *harvest_phones* is provided, phone numbers found in dropped chrome
+    lines are appended (deduped) so native PDF/DOCX redaction can still scrub
+    them even though Markdown omits the footer.
+    """
     if keep_headers or not blocks:
         return blocks
 
@@ -121,12 +146,23 @@ def filter_running_headers(
             continue
 
     kept: list[TextBlock] = []
+    phone_seen: set[str] = set()
+    if harvest_phones is not None:
+        for p in harvest_phones:
+            phone_seen.add(_norm(p))
+
     for b in blocks:
         t = b.text.strip()
         if not t:
             kept.append(b)
             continue
         if _norm(t) in drop_norms:
+            if harvest_phones is not None:
+                for surface in harvest_phones_from_text(t):
+                    key = _norm(surface)
+                    if key and key not in phone_seen:
+                        phone_seen.add(key)
+                        harvest_phones.append(surface)
             continue
         if _PAGE_MARK.match(t) or _DOC_STAMP.match(t):
             continue

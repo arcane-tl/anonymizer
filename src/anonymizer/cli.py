@@ -826,6 +826,23 @@ def _run_pipeline(
         # Snapshot mapping before any further changes — native redaction uses
         # cleartext originals from the (post-review) map.
         native_mapping = dict(result.mapping)
+        # Phones harvested from stripped PDF footer chrome (not in MD body).
+        chrome_phones = list(
+            (doc.extra or {}).get("dropped_chrome_phones") or []
+        )
+        if chrome_phones and cfg.mode != "extract":
+            from anonymizer.anonymize.mapping import extend_mapping_with_phones
+
+            before = len(native_mapping)
+            native_mapping = extend_mapping_with_phones(
+                native_mapping, chrome_phones
+            )
+            added = len(native_mapping) - before
+            if added and not quiet:
+                console.print(
+                    f"[dim]Native scrub:[/dim] {added} phone(s) from "
+                    "stripped header/footer chrome"
+                )
 
         written_out: Path | None = None
         written_map: Path | None = None

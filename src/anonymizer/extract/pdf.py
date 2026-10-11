@@ -13,7 +13,10 @@ from anonymizer.extract.pdf_structure import (
     classify_pdf_block,
     page_median_font_size,
 )
-from anonymizer.extract.text_repair import repair_text_artifacts
+from anonymizer.extract.text_repair import (
+    repair_text_artifacts,
+    should_join_soft_hyphen,
+)
 from anonymizer.models import BlockKind, ExtractedDoc, TextBlock
 
 logger = logging.getLogger(__name__)
@@ -96,9 +99,22 @@ def _join_pdf_lines(lines: list[str]) -> str:
             parts.append(nxt)
             continue
 
-        # Soft hyphenation at end of line
+        # Soft hyphenation at end of line: drop syllable breaks, keep compounds
         if prev.endswith("-") and nxt and nxt[0].isalpha():
-            parts[-1] = prev + nxt  # keep hyphen: ETA- + maat
+            # Left = last run of letters before trailing '-'
+            i = len(prev) - 2
+            while i >= 0 and prev[i].isalpha():
+                i -= 1
+            left = prev[i + 1 : -1]
+            # Right = leading letters of next line
+            j = 0
+            while j < len(nxt) and nxt[j].isalpha():
+                j += 1
+            right = nxt[:j]
+            if left and right and should_join_soft_hyphen(left, right):
+                parts[-1] = prev[:-1] + nxt  # työ- + kokemus → työkokemus
+            else:
+                parts[-1] = prev + nxt  # ETA- + maat → ETA-maat
             continue
 
         # Default body soft-wrap → space
@@ -294,7 +310,12 @@ def extract_pdf(
                 ocr_path.unlink(missing_ok=True)
 
     n_before = len(blocks)
-    blocks = filter_running_headers(blocks, keep_headers=keep_headers)
+    dropped_phones: list[str] = []
+    blocks = filter_running_headers(
+        blocks,
+        keep_headers=keep_headers,
+        harvest_phones=None if keep_headers else dropped_phones,
+    )
     if not keep_headers and len(blocks) < n_before:
         _p(f"Stripped {n_before - len(blocks)} header/footer block(s)")
 
@@ -305,6 +326,8 @@ def extract_pdf(
     extra: dict = {}
     if ocr_extra:
         extra["ocr"] = ocr_extra
+    if dropped_phones:
+        extra["dropped_chrome_phones"] = list(dropped_phones)
     return ExtractedDoc(
         source_path=str(path),
         blocks=blocks,
