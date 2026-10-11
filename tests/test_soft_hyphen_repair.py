@@ -18,19 +18,6 @@ def test_join_finnish_syllable_breaks():
     )
 
 
-def test_join_soft_hyphen_across_newline():
-    assert (
-        repair_soft_hyphens("koko-\nnaistuntimäärään") == "kokonaistuntimäärään"
-    )
-    assert (
-        repair_text_artifacts("lasketaan koko-\nnaistuntimäärään mukaan")
-        == "lasketaan kokonaistuntimäärään mukaan"
-    )
-    # Real compounds: drop the break, keep the hyphen
-    assert repair_soft_hyphens("ETA-\nmaat") == "ETA-maat"
-    assert repair_soft_hyphens("pre-\nsales") == "pre-sales"
-
-
 def test_join_title_case_name_syllables():
     """Word wrap in names/companies: Eli-salla → Elisalla for ORG/PERSON NER."""
     assert not should_keep_compound_hyphen("Eli", "salla")

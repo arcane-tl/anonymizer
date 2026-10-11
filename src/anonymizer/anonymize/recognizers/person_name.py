@@ -50,9 +50,6 @@ def _looks_like_person_pair(last: str, first: str) -> bool:
         return False
     if first.casefold() in {"intent", "understanding", "majeure", "card"}:
         return False
-    # Tool/product inflections: "Jira-tikettejä, Confluence-sivuja" (not names)
-    if re.search(r"-[a-zåäö]{3,}$", last) or re.search(r"-[a-zåäö]{3,}$", first):
-        return False
     return True
 
 
