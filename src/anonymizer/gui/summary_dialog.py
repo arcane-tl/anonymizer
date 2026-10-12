@@ -199,9 +199,18 @@ def show_run_summary_dialog(
         )
         return
 
-    own_root = parent is None
+    # On Windows the summary must not be a child of the options window.
+    # Withdrawing that window would hide the child, and leaving it mapped
+    # shows the file list behind the summary.
+    own_root = parent is None or sys.platform == "win32"
     win: tk.Misc
-    if parent is not None:
+    if sys.platform == "win32" and parent is not None:
+        try:
+            parent.withdraw()
+        except tk.TclError:
+            pass
+        win = tk.Tk()
+    elif parent is not None:
         win = tk.Toplevel(parent)
         try:
             win.transient(parent)  # type: ignore[arg-type]
@@ -443,7 +452,10 @@ def show_run_summary_dialog(
         win.after(30, _center)
         win.lift()
         win.attributes("-topmost", True)
-        win.after(250, lambda: win.attributes("-topmost", False))
+        # Dropping topmost after a moment lets the options window cover the
+        # summary on Windows. Keep it in front until the user closes it.
+        if sys.platform != "win32":
+            win.after(250, lambda: win.attributes("-topmost", False))
         win.focus_force()
     except Exception:  # noqa: BLE001
         pass

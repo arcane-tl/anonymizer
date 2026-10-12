@@ -15,9 +15,9 @@ class Anonymizer < Formula
   license "MIT"
 
   # update-for-release.sh rewrites url / sha256 / version at publish time.
-  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.4.6.tar.gz"
-  sha256 "012fb40f00649d13c70938a2ce674a11affe0c2c104f94f7f683d731df793b9f"
-  version "1.4.6"
+  url "https://github.com/arcane-tl/anonymizer/archive/refs/tags/v1.5.0.tar.gz"
+  sha256 "38bdd9516d0edad9f5433d3a5389ae983cd8f4277cfaa7880bfa48dca3823259"
+  version "1.5.0"
 
   head "https://github.com/arcane-tl/anonymizer.git", branch: "main"
 

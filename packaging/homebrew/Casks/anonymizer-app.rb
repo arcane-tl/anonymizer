@@ -11,8 +11,8 @@
 
 cask "anonymizer-app" do
   # update-for-release.sh rewrites version/sha256 at publish time.
-  version "1.4.6"
-  sha256 "cf7b67be05411463aa50e08bb5f5d683839bae4d732845c1b233a4e6679ca81c"
+  version "1.5.0"
+  sha256 "a96977df3311fa948c3b538a988702c2066fb4e6177e03a230233d836a8eab78"
 
   url "https://github.com/arcane-tl/anonymizer/releases/download/v#{version}/Anonymizer-#{version}.zip"
   name "Anonymizer"
