@@ -25,6 +25,7 @@ class Anonymizer < Formula
   # (load commands do not fit) and prints "Failed to fix install linkage".
   preserve_rpath
 
+  depends_on "libvoikko"
   depends_on "python@3.12"
   # Required for --review-window / desktop app review (Homebrew python has no _tkinter alone)
   depends_on "python-tk@3.12"

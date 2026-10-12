@@ -194,17 +194,26 @@ function Setup-PythonEnv {
         Pop-Location
     }
 
-    & $pyVenv -m anonymizer.install_models --check --langs en,fi 2>$null | Out-Null
+    Write-Info "Installing Voikko (native library + Finnish dictionary)..."
+    & $pyVenv -m anonymizer.install_voikko
+    if ($LASTEXITCODE -ne 0) { Die "Voikko install failed" }
+    $voikkoDetail = & $pyVenv -c "from anonymizer.anonymize.voikko_fi import voikko_install_check; ok, detail = voikko_install_check(); print(detail); raise SystemExit(0 if ok else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        Die "Voikko cannot analyze Finnish: $voikkoDetail"
+    }
+    Write-Ok "Voikko: $voikkoDetail"
+
+    & $pyVenv -m anonymizer.install_models --check --langs en,fi --size $Models --no-fallback 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Ok "spaCy models already ready (EN+FI); skipping download"
+        Write-Ok "spaCy $Models models already ready (EN+FI); skipping download"
     } else {
         Write-Info "Installing spaCy models (en+fi, size=$Models; may take several minutes)..."
         & $pyVenv -m anonymizer.install_models --langs en,fi --size $Models --fallback
-        & $pyVenv -m anonymizer.install_models --check --langs en,fi 2>$null | Out-Null
+        & $pyVenv -m anonymizer.install_models --check --langs en,fi --size $Models --no-fallback 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            Write-Ok "spaCy EN+FI models ready"
+            Write-Ok "spaCy EN+FI $Models models ready"
         } else {
-            Write-Warn "Required spaCy models not loadable yet (CLI is installed)."
+            Write-Warn "Large spaCy models are not loaded. A smaller model may be installed; redactions can differ from a large-model install."
             Write-Warn "  Fix (not a reinstall): & `"$pyVenv`" -m anonymizer.install_models --langs en,fi --size $Models --fallback"
             Write-Warn "  Then: anonymize doctor  *  docs/models.md"
         }

@@ -102,9 +102,11 @@ _NAT_SERVICE_PAREN = re.compile(
 )
 
 # After an explicit phone label, accept broader digit runs (PDF often drops
-# trunk 0 or uses NBSP): e.g. Puhelinnumero: 108324500
+# trunk 0 or uses NBSP): e.g. Puhelinnumero: 108324500 / Puh: 09 478 44 501
+# Longer labels first so "puhelinnumero" wins over "puhelin" / "puh".
 _LABELED = re.compile(
-    r"(?i)(?:puhelinnumero|puhelin|phone|tel\.?|puh\.?)\s*[:：]?\s*"
+    r"(?i)(?:puhelinnumero|matkapuhelin|puhelin|telephone|telefax|"
+    r"phone|faksi|fax|gsm|tel\.?|puh\.?)\s*[:：]?\s*"
     r"("
     r"\+?358[\s\-./\u00a0()]*\d(?:[\s\-./\u00a0()]*\d){6,12}"
     r"|"

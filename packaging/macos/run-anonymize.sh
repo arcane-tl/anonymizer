@@ -23,9 +23,13 @@
 #   OUTPUT:/absolute/path/to/file.md
 #   OUTPUT:/absolute/path/to/file.anonymized.pdf       (native source)
 #   OUTPUT:/absolute/path/to/file.anonymized.text.pdf  (reflow Text PDF)
+#   SUMMARY:/absolute/path/to/run-summary.json         (machine-readable run report)
 #
-# --review opens the document review window (--review-window). Prefer
-# Terminal.app / a desktop session so the GUI can display.
+# Shareable Markdown is body-only (no YAML run report). GUIs read SUMMARY: and
+# open `anonymize show-summary` (polished Tk window, optional --ephemeral).
+#
+# --review opens the document review window (--review-window). The Mac droplet
+# runs this via do shell script (no Terminal.app).
 #
 # PATH resolution (first hit wins):
 #   1. $ANONYMIZER_BIN
@@ -58,12 +62,15 @@ Usage: run-anonymize.sh [options] [mode] file [file ...]
   mode                  strict (default) | standard | extract
   file                  PDF, DOCX, or text path(s)
 
-Stdout (success): one OUTPUT:/abs/path line per written file (MD / native / Text PDF).
+Stdout (success): OUTPUT:/abs/path lines, then SUMMARY:/abs/path.json when written.
 --templates-ui stdout: ENABLED:id1,id2  or  CANCEL
 
 Environment:
-  ANONYMIZER_BIN   Absolute path to the anonymize executable
-  ANONYMIZER_OPEN  If set to 1/y/yes, open output files after success (TTY only)
+  ANONYMIZER_BIN            Absolute path to the anonymize executable
+  ANONYMIZER_OPEN           If set to 1/y/yes, open output files after success (TTY only)
+  ANONYMIZER_SHOW_SUMMARY   Legacy: if 1/y/yes, print summary text to stderr
+  ANONYMIZER_WRITE_SUMMARY_JSON  Override path for the summary JSON array (testing)
+  ANONYMIZER_PROGRESS_FILE  Status JSON for the quiet progress strip (GUI/Mac)
 EOF
 }
 
@@ -479,16 +486,75 @@ if [[ -n "$OUT_DIR" ]]; then
   mkdir -p "$OUT_DIR"
   EXTRA_ARGS+=(--out-dir "$OUT_DIR")
 fi
+
+# Per-batch machine-readable summary for GUIs (not embedded in Markdown).
+SUMMARY_OWNED=0
+if [[ -n "${ANONYMIZER_WRITE_SUMMARY_JSON:-}" ]]; then
+  SUMMARY_JSON="$ANONYMIZER_WRITE_SUMMARY_JSON"
+  mkdir -p "$(dirname -- "$SUMMARY_JSON")"
+  : >"$SUMMARY_JSON"
+else
+  # macOS mktemp requires the XXXXXX suffix at the end of the template.
+  SUMMARY_JSON="$(mktemp "${TMPDIR:-/tmp}/anonymizer-summary.XXXXXX")"
+  SUMMARY_OWNED=1
+  export ANONYMIZER_WRITE_SUMMARY_JSON="$SUMMARY_JSON"
+  : >"$SUMMARY_JSON"
+fi
+
 cleanup_config() {
   if [[ -n "${MERGED_CONFIG:-}" && -f "$MERGED_CONFIG" ]]; then
     rm -f "$MERGED_CONFIG"
   fi
 }
-trap cleanup_config EXIT
+
+# One JSON object, replaced atomically. Same shape as write_progress_status.
+write_progress() {
+  local state="$1" phase="$2" index="$3" total="$4" file_name="$5" fraction="$6"
+  [[ -n "${ANONYMIZER_PROGRESS_FILE:-}" ]] || return 0
+  PROGRESS_DEST="$ANONYMIZER_PROGRESS_FILE" \
+  PROGRESS_STATE="$state" \
+  PROGRESS_PHASE="$phase" \
+  PROGRESS_INDEX="$index" \
+  PROGRESS_TOTAL="$total" \
+  PROGRESS_NAME="$file_name" \
+  PROGRESS_FRACTION="$fraction" \
+  python3 - <<'PY' || true
+import json, os
+from pathlib import Path
+dest = Path(os.environ["PROGRESS_DEST"])
+payload = {
+    "state": os.environ.get("PROGRESS_STATE") or "running",
+    "phase": os.environ.get("PROGRESS_PHASE") or "",
+    "index": int(os.environ.get("PROGRESS_INDEX") or 0),
+    "total": int(os.environ.get("PROGRESS_TOTAL") or 0),
+    "file": os.environ.get("PROGRESS_NAME") or "",
+    "fraction": max(0.0, min(1.0, float(os.environ.get("PROGRESS_FRACTION") or 0))),
+}
+dest.parent.mkdir(parents=True, exist_ok=True)
+tmp = dest.with_name(dest.name + ".tmp")
+tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+os.replace(tmp, dest)
+PY
+}
+
+on_exit() {
+  local ec=$?
+  if [[ -n "${ANONYMIZER_PROGRESS_FILE:-}" ]]; then
+    local st="done"
+    if [[ "$ec" -ne 0 || "${fail:-0}" -gt 0 ]]; then
+      st="error"
+    fi
+    write_progress "$st" "" "${file_i:-0}" "${total_files:-0}" "" "1"
+  fi
+  cleanup_config
+}
+trap on_exit EXIT
 
 ok=0
 fail=0
 outputs=()
+total_files=$#
+file_i=0
 
 for f in "$@"; do
   if [[ ! -e "$f" ]]; then
@@ -501,6 +567,15 @@ for f in "$@"; do
   else
     f_abs=$(cd "$(dirname -- "$f")" && pwd)/$(basename -- "$f")
   fi
+
+  file_i=$((file_i + 1))
+  export ANONYMIZER_PROGRESS_INDEX="$file_i"
+  export ANONYMIZER_PROGRESS_TOTAL="$total_files"
+  start_frac="0"
+  if [[ "$total_files" -gt 0 ]]; then
+    start_frac=$(python3 -c "print(round(($file_i - 1) / $total_files, 4))")
+  fi
+  write_progress "running" "Starting" "$file_i" "$total_files" "$(basename -- "$f_abs")" "$start_frac"
 
   emit_outputs() {
     local f_abs="$1" mode="$2" fmt="${3:-md}"
@@ -555,8 +630,22 @@ for f in "$@"; do
   fi
 done
 
+if [[ -f "$SUMMARY_JSON" ]] && [[ -s "$SUMMARY_JSON" ]]; then
+  # Absolute path for AppleScript / GUIs
+  if command -v realpath >/dev/null 2>&1; then
+    sum_abs=$(realpath "$SUMMARY_JSON")
+  else
+    sum_abs=$(cd "$(dirname -- "$SUMMARY_JSON")" && pwd)/$(basename -- "$SUMMARY_JSON")
+  fi
+  printf 'SUMMARY:%s\n' "$sum_abs"
+fi
+
 if [[ "$fail" -gt 0 ]]; then
   echo "done: $ok ok, $fail failed (mode=$MODE)" >&2
+  # Leave SUMMARY file for the caller when they own the path; drop ours on failure.
+  if [[ "$SUMMARY_OWNED" -eq 1 ]]; then
+    rm -f "$SUMMARY_JSON"
+  fi
   exit 1
 fi
 echo "done: $ok file(s) ok (mode=$MODE)" >&2
@@ -584,5 +673,17 @@ if [[ ${#outputs[@]} -gt 0 ]]; then
       ;;
   esac
 fi
+
+# GUIs (Mac droplet / Tk) read SUMMARY: and launch `anonymize show-summary`
+# themselves. ANONYMIZER_SHOW_SUMMARY is obsolete for dialogs; leave the JSON
+# for the caller (do not delete when owned — droplet uses --ephemeral).
+case "$(printf '%s' "${ANONYMIZER_SHOW_SUMMARY:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|y|yes)
+    # Legacy: print plain text for scripts that still set the env.
+    if [[ -f "${SUMMARY_JSON:-}" && -s "${SUMMARY_JSON:-}" ]]; then
+      "$BIN" show-summary "$SUMMARY_JSON" --print >&2 || true
+    fi
+    ;;
+esac
 
 exit 0

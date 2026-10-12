@@ -174,7 +174,7 @@ Nothing leaves the machine by default. Review is transparent: see every tag, un-
 1. Add file(s). Mode + **Save as** as needed.
 2. Keep **Review findings before saving** checked (default).
 3. **Start** → document review window: toggle findings, add spans, optionally **teach** a template.
-4. Save; optionally **Open result when finished**.
+4. Save. The run summary lists each output with **Open** and **Reveal** — files are not opened automatically.
 
 **CLI**
 
@@ -187,6 +187,8 @@ anonymize contract.pdf --reject ORG_1,PHONE_2   # non-interactive keep-clear
 ### 6. Shareable native PDF or Word (layout preserved)
 
 Black-box redaction of the **original** PDF/DOCX (not a reflow). Pair with **More options** for letterhead logos and a hard fail if text-layer hits are missed.
+
+**Markdown** and **text PDF** are **rebuilds** — original container metadata / outline / tracked changes do **not** carry over. Shareable Markdown is **body only** (no run-report YAML). **Native** keeps the source file shape and scrubs known channels best-effort. The completion window lists the files; `native_clean` and residuals stay in the optional **Save summary…** JSON and in the CLI log. Detailed detector logs: `--debug`. Full comparison: [docs/output-formats.md](docs/output-formats.md).
 
 **GUI**
 
@@ -427,7 +429,7 @@ anonymize --help
 | **Output folder** | Default: same folder as source; or Choose… (`--out-dir`) |
 | **Active templates** / **Templates…** | Allow/deny packs for this run |
 | **Review findings** | Always visible (default on) → document review window |
-| **Open result when finished** | Always visible |
+| **Run summary** | After Start: dark summary with per-output **Open** / **Reveal** (no auto-open) |
 | **More options** | Collapsed: output style, fail-on-native-miss, letterhead wipe |
 
 See [Use cases](#use-cases) for step-by-step scenarios.
@@ -481,7 +483,7 @@ Dates are off by default (`--include-dates` to enable).
 
 ### How detection works (short)
 
-Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **templates** (named allow/deny packs). Soft spaCy ORG/LOCATION/CITY hits auto-redact only when corroborated (pattern / denylist / dual-lang); uncorroborated soft hits are Review proposals (`spacy_auto_redact`, default `corroborated`). Finnish `PRODUCT→ORG` is opt-in. Optional **Voikko** (`pip install 'anonymizer[fi]'`, plus system `libvoikko` / `voikko-fi`) further drops common-word FI ORG/PERSON noise when installed; missing Voikko is skipped. Review keep-clear decisions log to `anonymize fp-stats`. The app does **not** ship a list of real-world companies or people — builtin templates are field labels and legal *boilerplate* only. Create user packs for client-specific names; teach them after `--review` with `--learn-to`. See `config.example.yaml` and `anonymize templates`. Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
+Patterns (IDs, emails, legal-form companies) + heuristics + **spaCy NER** (EN/FI, optional **SV**) + domain false-positive filters (contract roles, legal collocations, form labels) + optional **LLM** proposals + **templates** (named allow/deny packs). Soft spaCy ORG/LOCATION/CITY hits auto-redact only when corroborated (pattern / denylist / dual-lang); uncorroborated soft hits are Review proposals (`spacy_auto_redact`, default `corroborated`). Finnish `PRODUCT→ORG` is opt-in. **Voikko** is installed by the Mac and Windows installers (Homebrew `libvoikko` on macOS; native library + Finnish dictionary on Windows) and drops common-word FI ORG/PERSON noise. If Voikko is missing, those checks are skipped. Review keep-clear decisions log to `anonymize fp-stats`. The app does **not** ship a list of real-world companies or people — builtin templates are field labels and legal *boilerplate* only. Create user packs for client-specific names; teach them after `--review` with `--learn-to`. See `config.example.yaml` and `anonymize templates`. Add domain IDs via YAML **custom recognizers** (`recognizers:`) — see [docs/plugins.md](docs/plugins.md).
 
 ---
 

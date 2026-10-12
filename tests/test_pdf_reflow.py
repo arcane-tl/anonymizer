@@ -20,11 +20,20 @@ def test_join_reflows_body_soft_wrap():
     assert "myyjän kanssa" in out
 
 
-def test_join_dehyphenates_soft_hyphen():
+def test_join_keeps_real_compound_hyphen():
     lines = ["ulkomailla sallittu (ETA-", "maat) green card"]
     out = _join_pdf_lines(lines)
     assert "ETA-maat" in out
     assert "ETA-\n" not in out
+
+
+def test_join_drops_syllable_wrap_hyphen():
+    lines = ["vahvaa työ-", "kokemusosaamista sekä kon-", "sultointiin"]
+    out = _join_pdf_lines(lines)
+    assert "työkokemusosaamista" in out
+    assert "konsultointiin" in out
+    assert "työ-" not in out
+    assert "kon-" not in out
 
 
 def test_join_section_header_kept():

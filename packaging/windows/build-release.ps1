@@ -354,6 +354,14 @@ Write-Info "Installing anonymizer wheel into runtime..."
 & $PyEmbed -m pip install --no-warn-script-location $wheel.FullName
 if ($LASTEXITCODE -ne 0) { Die "pip install anonymizer wheel failed" }
 
+$VoikkoDir = Join-Path $Runtime "voikko"
+Write-Info "Installing Voikko into runtime ($VoikkoDir)..."
+& $PyEmbed -m anonymizer.install_voikko --dest $VoikkoDir
+if ($LASTEXITCODE -ne 0) { Die "Voikko install failed" }
+$voikkoDetail = & $PyEmbed -c "from anonymizer.anonymize.voikko_fi import voikko_install_check; ok, detail = voikko_install_check(); print(detail); raise SystemExit(0 if ok else 1)"
+if ($LASTEXITCODE -ne 0) { Die "Voikko cannot analyze Finnish: $voikkoDetail" }
+Write-Ok "Voikko: $voikkoDetail"
+
 $enCandidates = switch ($Models) {
     "lg" { @("en_core_web_lg", "en_core_web_md", "en_core_web_sm") }
     "md" { @("en_core_web_md", "en_core_web_sm") }

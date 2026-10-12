@@ -41,7 +41,8 @@ from anonymizer.anonymize.review import (
     strip_placeholders_in_blocks,
 )
 from anonymizer.extract import extract_document
-from anonymizer.output.markdown import render_from_extracted
+from anonymizer.output.markdown import output_descriptor, render_from_extracted
+from anonymizer.output.run_summary import RunSummary, write_summary_if_requested
 from anonymizer.output.md_pdf import write_pdf_from_markdown
 from anonymizer.output.native import (
     default_native_output_path,
@@ -102,7 +103,15 @@ _VERB_TO_MODE: dict[str, str] = {
     "full": "strict",
 }
 _META_COMMANDS = frozenset(
-    {"doctor", "examples", "templates", "templates-ui", "fp-stats"}
+    {
+        "doctor",
+        "examples",
+        "templates",
+        "templates-ui",
+        "fp-stats",
+        "show-summary",
+        "show-progress",
+    }
 )
 
 # Options that take a following value (for argv rewrite)
@@ -648,18 +657,19 @@ def _run_pipeline(
         # Front matter / result should reflect the user's chosen final style
         result.redact_style = final_redact_style
 
+        debug_log_path: Path | None = None
         if cfg.debug:
             from anonymizer.anonymize.debug_log import write_run_debug_log
             from anonymizer import __version__ as _ver
 
-            log_path = write_run_debug_log(
+            debug_log_path = write_run_debug_log(
                 result, source_file=input_path, version=_ver
             )
-            if log_path is not None and not quiet:
+            if debug_log_path is not None and not quiet:
                 summ = getattr(result, "entity_counts", {}) or {}
                 props = len(getattr(result, "proposals", None) or {})
                 console.print(
-                    f"[dim]Debug log[/dim] {log_path} "
+                    f"[dim]Debug log[/dim] {debug_log_path} "
                     f"[dim](auto={len(result.mapping)} proposals={props} "
                     f"types={dict(summ)})[/dim]"
                 )
@@ -817,6 +827,23 @@ def _run_pipeline(
         # Snapshot mapping before any further changes — native redaction uses
         # cleartext originals from the (post-review) map.
         native_mapping = dict(result.mapping)
+        # Phones harvested from stripped PDF footer chrome (not in MD body).
+        chrome_phones = list(
+            (doc.extra or {}).get("dropped_chrome_phones") or []
+        )
+        if chrome_phones and cfg.mode != "extract":
+            from anonymizer.anonymize.mapping import extend_mapping_with_phones
+
+            before = len(native_mapping)
+            native_mapping = extend_mapping_with_phones(
+                native_mapping, chrome_phones
+            )
+            added = len(native_mapping) - before
+            if added and not quiet:
+                console.print(
+                    f"[dim]Native scrub:[/dim] {added} phone(s) from "
+                    "stripped header/footer chrome"
+                )
 
         written_out: Path | None = None
         written_map: Path | None = None
@@ -834,6 +861,10 @@ def _run_pipeline(
             else:
                 explicit_md_out = output
 
+        # Artifact class list for front matter (filled as we write)
+        output_descs: list[dict] = []
+        native_stats_for_fm: dict | None = None
+
         if need_md_render:
             progress.substep("Rendering Markdown…")
             md = render_from_extracted(
@@ -847,6 +878,14 @@ def _run_pipeline(
                     if not md.endswith("\n"):
                         sys.stdout.write("\n")
                     wrote_stdout = True
+                    output_descs.append(
+                        output_descriptor(
+                            "markdown",
+                            "-",
+                            source_metadata_carried=False,
+                            note="New text file. Original document details are not included.",
+                        )
+                    )
                 else:
                     if explicit_md_out is not None:
                         out_path = explicit_md_out
@@ -858,6 +897,14 @@ def _run_pipeline(
                     progress.substep(f"Writing {out_path}…")
                     out_path.write_text(md, encoding="utf-8")
                     written_out = out_path
+                    output_descs.append(
+                        output_descriptor(
+                            "markdown",
+                            out_path,
+                            source_metadata_carried=False,
+                            note="New text file. Original document details are not included.",
+                        )
+                    )
 
         # Reflow PDF from anonymized Markdown (any input type; not native black-box)
         if write_text_pdf:
@@ -879,6 +926,14 @@ def _run_pipeline(
                 try:
                     write_pdf_from_markdown(md, text_pdf_path)
                     written_text_pdf = text_pdf_path
+                    output_descs.append(
+                        output_descriptor(
+                            "text_pdf",
+                            text_pdf_path,
+                            source_metadata_carried=False,
+                            note="New PDF from the text. Not the original page layout.",
+                        )
+                    )
                 except Exception as exc:  # noqa: BLE001
                     console.print(
                         f"[yellow]Warning:[/yellow] text PDF write failed "
@@ -922,6 +977,20 @@ def _run_pipeline(
                 raise typer.Exit(1) from exc
             if stats is not None:
                 written_native = native_path
+                native_stats_for_fm = stats.front_matter_fields()
+                kind = (
+                    "native_pdf"
+                    if native_path.suffix.lower() == ".pdf"
+                    else "native_docx"
+                )
+                output_descs.append(
+                    output_descriptor(
+                        kind,
+                        native_path,
+                        source_metadata_carried=True,
+                        note="Original layout kept.",
+                    )
+                )
                 if not quiet:
                     console.print(f"[dim]{stats.summary()}[/dim]")
                     if stats.residual_image_risk and not cfg.redact_letterhead_images:
@@ -958,10 +1027,23 @@ def _run_pipeline(
                             else ""
                         )
                         console.print(
-                            f"[yellow]Warning:[/yellow] "
-                            f"{stats.residuals_found} residual cleartext "
-                            f"match(es) after native redaction: "
-                            f"{preview}{more}"
+                            f"[bold yellow]Warning:[/bold yellow] "
+                            f"native file may still contain cleartext "
+                            f"({stats.residuals_found} residual match(es) in "
+                            f"covered channels): {preview}{more}. "
+                            f"Prefer Markdown/text-PDF when you need a rebuild "
+                            f"without source container metadata — see docs/"
+                            f"output-formats.md."
+                        )
+                    if stats.scrub_errors:
+                        console.print(
+                            f"[bold yellow]Warning:[/bold yellow] "
+                            f"{stats.scrub_errors} native scrub step(s) failed "
+                            f"(counted as not clean). Samples: "
+                            + ", ".join(
+                                repr(s[:60])
+                                for s in (stats.scrub_error_samples or [])[:3]
+                            )
                         )
                 gate_fail = False
                 if cfg.fail_on_native_miss and not stats.is_clean:
@@ -982,6 +1064,40 @@ def _run_pipeline(
                     if multi:
                         continue
                     raise typer.Exit(1)
+
+        # Optional machine-readable summary for GUIs (ANONYMIZER_WRITE_SUMMARY_JSON).
+        # Not embedded in the shareable Markdown body.
+        detector_sources = None
+        if cfg.debug and result.mapping:
+            from anonymizer.anonymize.debug_log import count_source_families
+
+            detector_sources = count_source_families(
+                result.mapping,
+                getattr(result, "hit_meta", None),
+                hits=getattr(result, "hits", None),
+            ) or None
+        ocr_info = None
+        if doc.used_ocr:
+            ocr_meta = (doc.extra or {}).get("ocr") or {}
+            ocr_info = {
+                "residual_image_risk": bool(ocr_meta.get("residual_image_risk", True)),
+                "reason": ocr_meta.get("reason"),
+                "low_coverage_pages": list(ocr_meta.get("low_coverage_pages") or []),
+            }
+        run_summary = RunSummary(
+            source=str(input_path),
+            mode=str(result.mode),
+            entity_counts=dict(result.entity_counts or {}),
+            outputs=list(output_descs),
+            native=dict(native_stats_for_fm) if native_stats_for_fm else None,
+            debug_log_path=str(debug_log_path) if debug_log_path else None,
+            used_ocr=bool(doc.used_ocr),
+            ocr=ocr_info,
+            detector_sources=detector_sources,
+            lang_mode=getattr(result.language, "mode", None),
+            detected_languages=list(getattr(result.language, "detected", None) or []),
+        )
+        write_summary_if_requested(run_summary)
 
         if map_path is not None and cfg.mode != "extract":
             if multi:
@@ -1232,20 +1348,17 @@ def cmd_doctor() -> None:
     except Exception as exc:
         rows.append(("Review window (tk)", f"unavailable ({exc})", False))
 
-    # Optional Finnish morphology (single-token PERSON/ORG gate)
+    # Finnish morphology. Installers require this; a miss fails doctor.
     try:
-        from anonymizer.anonymize.voikko_fi import voikko_available
+        from anonymizer.anonymize.voikko_fi import voikko_install_check
 
-        vok, detail = voikko_available()
-        rows.append(
-            (
-                "Voikko (FI)",
-                detail if vok else f"optional — {detail}",
-                True,
-            )
-        )
+        vok, detail = voikko_install_check()
+        rows.append(("Voikko (FI)", detail, vok))
+        if not vok:
+            ok_all = False
     except Exception as exc:
-        rows.append(("Voikko (FI)", f"optional — {exc}", True))
+        rows.append(("Voikko (FI)", f"check failed: {exc}", False))
+        ok_all = False
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Check")
@@ -1273,6 +1386,10 @@ def cmd_doctor() -> None:
     console.print(
         "  3. Models:  [bold]python -m anonymizer.install_models "
         "--langs en,fi --size lg --fallback[/bold]"
+    )
+    console.print(
+        "  4. Voikko:  macOS [bold]brew install libvoikko[/bold]  ·  "
+        "Windows [bold]python -m anonymizer.install_voikko[/bold]"
     )
     raise SystemExit(1)
 
@@ -1323,6 +1440,93 @@ Templates (allow/deny packs)
         + "\n"
     )
 
+
+def cmd_show_progress(rest: list[str] | None = None) -> None:
+    """Show the quiet progress strip until STATUS.json says the job finished.
+
+    Internal meta-command used by the Mac droplet and Windows GUI. Not a
+    public flag.
+
+    Usage::
+
+        anonymize show-progress STATUS.json
+    """
+    rest = rest or []
+    path: str | None = None
+    for tok in rest:
+        if tok.startswith("-"):
+            console.print(f"[red]Unknown option for show-progress:[/red] {tok}")
+            raise SystemExit(2)
+        if path is None:
+            path = tok
+    if not path:
+        console.print("[red]Usage:[/red] anonymize show-progress STATUS.json")
+        raise SystemExit(2)
+    from anonymizer.gui.progress_window import show_progress_window
+
+    show_progress_window(path)
+
+
+def cmd_show_summary(rest: list[str] | None = None) -> None:
+    """Show a post-run summary dialog (GUI/Mac helper), or print plain text.
+
+    Internal meta-command used by the Tk GUI and Mac droplet. Not a public
+    ``--summary`` flag — shareable Markdown stays body-only; detailed detector
+    logs remain under ``--debug``.
+
+    Usage::
+
+        anonymize show-summary PATH.json
+        anonymize show-summary PATH.json --print
+        anonymize show-summary PATH.json --ephemeral
+    """
+    rest = rest or []
+    print_only = False
+    ephemeral = False
+    path: str | None = None
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok in {"--print", "-p"}:
+            print_only = True
+            i += 1
+            continue
+        if tok == "--ephemeral":
+            ephemeral = True
+            i += 1
+            continue
+        if tok.startswith("-"):
+            console.print(f"[red]Unknown option for show-summary:[/red] {tok}")
+            raise SystemExit(2)
+        if path is None:
+            path = tok
+        i += 1
+    if not path:
+        console.print(
+            "[red]Usage:[/red] anonymize show-summary PATH.json "
+            "[--print] [--ephemeral]"
+        )
+        raise SystemExit(2)
+
+    from anonymizer.output.run_summary import (
+        format_summaries_plain,
+        load_summaries,
+    )
+
+    summaries = load_summaries(path)
+    if ephemeral:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    if print_only:
+        sys.stdout.write(format_summaries_plain(summaries))
+        return
+
+    from anonymizer.gui.summary_dialog import show_run_summary_dialog
+
+    # Standalone window (survives parent droplet / Terminal exit).
+    show_run_summary_dialog(None, summaries)
 
 def cmd_templates_ui(rest: list[str] | None = None) -> None:
     """Open the shared Tk Templates dialog (Mac droplet / desktop)."""
@@ -1916,6 +2120,10 @@ def _preprocess_argv(argv: list[str]) -> list[str] | None:
             cmd_templates(args[idx + 1 :])
         elif low == "templates-ui":
             cmd_templates_ui(args[idx + 1 :])
+        elif low == "show-summary":
+            cmd_show_summary(args[idx + 1 :])
+        elif low == "show-progress":
+            cmd_show_progress(args[idx + 1 :])
         else:
             cmd_examples()
         return None

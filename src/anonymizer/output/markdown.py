@@ -1,13 +1,9 @@
-"""Render anonymized content as Markdown with YAML front matter."""
+"""Render anonymized content as Markdown (body only — no run-report front matter)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
-from anonymizer import __version__
 from anonymizer.models import AnonymizeResult, BlockKind, ExtractedDoc, TextBlock
 
 
@@ -93,43 +89,38 @@ def render_markdown(
     used_ocr: bool = False,
     ocr_meta: dict | None = None,
     debug: bool = False,
+    outputs: list[dict] | None = None,
+    extra_front_matter: dict | None = None,
 ) -> str:
-    fm: dict = {
-        "source": str(source),
-        "anonymized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "tool": "anonymizer",
-        "tool_version": __version__,
-        "mode": result.mode,
-        "redact_style": result.redact_style,
-        "lang_mode": result.language.mode,
-        "detected_languages": result.language.detected,
-        "nlp_passes": result.language.nlp_passes,
-        "entity_counts": result.entity_counts,
-        "used_ocr": used_ocr,
-    }
-    if used_ocr and ocr_meta:
-        fm["ocr_residual_image_risk"] = bool(
-            ocr_meta.get("residual_image_risk", True)
-        )
-        if ocr_meta.get("reason"):
-            fm["ocr_reason"] = ocr_meta["reason"]
-        low = ocr_meta.get("low_coverage_pages") or []
-        if low:
-            fm["ocr_low_coverage_pages"] = list(low)
-    if debug and result.mapping:
-        from anonymizer.anonymize.debug_log import count_source_families
+    """Render shareable Markdown **body only**.
 
-        sources = count_source_families(
-            result.mapping,
-            getattr(result, "hit_meta", None),
-            hits=getattr(result, "hits", None),
-        )
-        if sources:
-            fm["detector_sources"] = sources
-    # sort_keys for stable output in tests
-    yaml_body = yaml.safe_dump(fm, sort_keys=True, allow_unicode=True).strip()
+    Run metadata (entity counts, native_clean, detector_sources, …) belongs in
+    the GUI/CLI summary or an optional saved summary file — not in the document
+    customers share. Extra kwargs are accepted for call-site compatibility and
+    ignored.
+    """
+    _ = (source, result, used_ocr, ocr_meta, debug, outputs, extra_front_matter)
     body = blocks_to_markdown_body(blocks)
-    return f"---\n{yaml_body}\n---\n\n{body}\n"
+    return f"{body}\n" if body and not body.endswith("\n") else (body or "")
+
+
+def output_descriptor(
+    kind: str,
+    path: str | Path | None = None,
+    *,
+    source_metadata_carried: bool,
+    note: str | None = None,
+) -> dict:
+    """Machine-readable artifact class for run summaries (not MD front matter)."""
+    d: dict = {
+        "kind": kind,
+        "source_metadata_carried": source_metadata_carried,
+    }
+    if path is not None:
+        d["path"] = str(path)
+    if note:
+        d["note"] = note
+    return d
 
 
 def render_from_extracted(
@@ -138,18 +129,20 @@ def render_from_extracted(
     result: AnonymizeResult,
     *,
     debug: bool = False,
+    outputs: list[dict] | None = None,
+    extra_front_matter: dict | None = None,
 ) -> str:
     new_blocks: list[TextBlock] = []
     for orig, text in zip(doc.blocks, anon_block_texts, strict=True):
         new_blocks.append(
             TextBlock(text=text, kind=orig.kind, level=orig.level)
         )
-    ocr_meta = (doc.extra or {}).get("ocr") if doc.used_ocr else None
     return render_markdown(
         doc.source_path,
         new_blocks,
         result,
         used_ocr=doc.used_ocr,
-        ocr_meta=ocr_meta if isinstance(ocr_meta, dict) else None,
         debug=debug,
+        outputs=outputs,
+        extra_front_matter=extra_front_matter,
     )

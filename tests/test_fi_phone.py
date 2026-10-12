@@ -67,6 +67,62 @@ def test_end_to_end_placeholder():
     assert "[PHONE_2]" in out or out.count("[PHONE_") >= 1
 
 
+def test_labeled_puh_landline_redacted():
+    """Common FI print form: Puh: 09 478 44 501 (label stays, number redacts)."""
+    from anonymizer.anonymize.config import AnonymizerConfig
+    from anonymizer.anonymize.engine import DocumentAnonymizer
+
+    samples = [
+        "Puh: 09 478 44 501",
+        "puh. 09 478 44 501",
+        "Gsm: 040 123 4567",
+        "Matkapuhelin: 050 987 6543",
+    ]
+    cfg = AnonymizerConfig(mode="strict", lang="fi", use_llm=False)
+    cfg.apply_mode()
+    eng = DocumentAnonymizer(cfg)
+    for text in samples:
+        r = eng.anonymize_text(f"Yhteys. {text}", lang_flag="fi")
+        assert "09 478 44 501" not in r.anonymized_text, text
+        assert "040 123 4567" not in r.anonymized_text, text
+        assert "050 987 6543" not in r.anonymized_text, text
+        assert "[PHONE_" in r.anonymized_text, (text, r.anonymized_text)
+        # Label cue remains visible next to the placeholder when present
+        if text.lower().startswith("puh"):
+            assert "Puh:" in r.anonymized_text or "puh." in r.anonymized_text
+
+
+def test_chrome_footer_phones_harvested_for_native_map():
+    """Multi-page Puh: footer is stripped from MD extract but phones harvested."""
+    from anonymizer.extract.headers import filter_running_headers
+    from anonymizer.anonymize.mapping import extend_mapping_with_phones
+    from anonymizer.models import BlockKind, TextBlock
+
+    blocks = []
+    for page in (1, 2, 3):
+        blocks.append(
+            TextBlock(
+                text="Puh: 09 478 44 501",
+                kind=BlockKind.PARAGRAPH,
+                page=page,
+            )
+        )
+        blocks.append(
+            TextBlock(
+                text="Sopimuksen sisältö sivulla.",
+                kind=BlockKind.PARAGRAPH,
+                page=page,
+            )
+        )
+    harvested: list[str] = []
+    kept = filter_running_headers(blocks, harvest_phones=harvested)
+    assert not any("Puh:" in b.text for b in kept)
+    assert any("09" in p and "478" in p for p in harvested)
+    mapping = extend_mapping_with_phones({}, harvested)
+    assert any(v.replace(" ", "").startswith("09478") for v in mapping.values())
+    assert any(k.startswith("[PHONE_") for k in mapping)
+
+
 def test_parenthetical_area_and_mobile():
     """Common FI print forms: (040) 123 4567, (09) 1234 567."""
     samples = [

@@ -25,7 +25,7 @@ def test_ocr_coverage_flags_thin_pages() -> None:
     assert report["page_chars"][2] == 6
 
 
-def test_markdown_front_matter_includes_ocr_risk() -> None:
+def test_markdown_body_omits_ocr_front_matter() -> None:
     result = AnonymizeResult(
         anonymized_text="hi",
         entity_counts={},
@@ -43,7 +43,6 @@ def test_markdown_front_matter_includes_ocr_risk() -> None:
             "low_coverage_pages": [1, 3],
         },
     )
-    assert "used_ocr: true" in md
-    assert "ocr_residual_image_risk: true" in md
-    assert "ocr_reason: forced" in md
-    assert "ocr_low_coverage_pages:" in md
+    assert md.strip() == "Hello"
+    assert "used_ocr" not in md
+    assert "ocr_residual_image_risk" not in md

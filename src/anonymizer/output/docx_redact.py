@@ -8,12 +8,14 @@ from pathlib import Path
 
 from anonymizer.anonymize.surfaces import (
     RedactSurface,
-    surface_appears_in_text,
     surface_search_variants,
 )
 from anonymizer.output.native_stats import NativeRedactStats
+from anonymizer.output.native_verify import verify_docx_package
 
 logger = logging.getLogger(__name__)
+
+_AUTHOR_ATTRS = ("author", "initials", "date")
 
 
 def _find_match_spans(full: str, clear: str) -> list[tuple[int, int]]:
@@ -226,6 +228,222 @@ def _iter_all_paragraphs(doc):
         logger.debug("textbox iteration failed: %s", exc)
 
 
+def _iter_package_xml_roots(doc) -> list:
+    """Yield oxml roots for main document + related WordprocessingML parts."""
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    roots = [doc.element]
+    seen: set[int] = {id(doc.element)}
+    for rel in doc.part.rels.values():
+        if rel.reltype not in (
+            RT.FOOTNOTES,
+            RT.ENDNOTES,
+            RT.COMMENTS,
+            RT.HEADER,
+            RT.FOOTER,
+        ):
+            continue
+        try:
+            part = rel.target_part
+            el = part.element
+        except Exception:  # noqa: BLE001
+            continue
+        if id(el) in seen:
+            continue
+        seen.add(id(el))
+        roots.append(el)
+    return roots
+
+
+def accept_tracked_changes(root) -> None:
+    """Promote ``w:ins`` children and drop ``w:del`` / ``w:delText`` subtrees.
+
+    After this, ``paragraph.text`` and run walks see the same insertions Word
+    shows, and deleted revision text no longer survives in the package.
+    """
+    from docx.oxml.ns import qn
+
+    # Drop deletions first (including nested)
+    for el in list(root.iter(qn("w:del"))):
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+    for el in list(root.iter(qn("w:delText"))):
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+
+    # Unwrap insertions: move children up, remove the w:ins wrapper
+    for el in list(root.iter(qn("w:ins"))):
+        parent = el.getparent()
+        if parent is None:
+            continue
+        idx = list(parent).index(el)
+        for i, child in enumerate(list(el)):
+            parent.insert(idx + i, child)
+        parent.remove(el)
+
+
+def scrub_revision_authors(root) -> None:
+    """Blank w:author / w:initials / w:date on revision and comment marks."""
+    from docx.oxml.ns import qn
+
+    tags = (
+        qn("w:ins"),
+        qn("w:del"),
+        qn("w:comment"),
+        qn("w:commentRangeStart"),
+        qn("w:commentRangeEnd"),
+        qn("w:commentReference"),
+    )
+    for el in root.iter():
+        if el.tag not in tags and not el.tag.endswith("}cellIns") and not el.tag.endswith(
+            "}cellDel"
+        ):
+            # Also scrub any element that carries w:author
+            if qn("w:author") not in el.attrib and qn("w:initials") not in el.attrib:
+                continue
+        for attr in _AUTHOR_ATTRS:
+            key = qn(f"w:{attr}")
+            if key in el.attrib:
+                el.attrib[key] = ""
+
+
+def scrub_hyperlink_targets(doc, surfaces: list[RedactSurface]) -> int:
+    """Rewrite relationship Targets that contain a clear surface → about:blank.
+
+    Returns number of targets rewritten.
+    """
+    n = 0
+    clears = [s.clear for s in surfaces if s.clear]
+    if not clears:
+        return 0
+    parts = [doc.part]
+    try:
+        for rel in doc.part.rels.values():
+            try:
+                parts.append(rel.target_part)
+            except Exception:  # noqa: BLE001
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    seen: set[int] = set()
+    for part in parts:
+        if id(part) in seen:
+            continue
+        seen.add(id(part))
+        try:
+            rels = part.rels
+        except Exception:  # noqa: BLE001
+            continue
+        for rel in rels.values():
+            try:
+                target = rel._target  # noqa: SLF001 — Relationship API
+            except Exception:  # noqa: BLE001
+                try:
+                    target = rel.target_ref
+                except Exception:  # noqa: BLE001
+                    continue
+            if not isinstance(target, str):
+                continue
+            if not any(c in target for c in clears):
+                # casefold check for mailto names
+                tcf = target.casefold()
+                if not any(c.casefold() in tcf for c in clears):
+                    continue
+            try:
+                rel._target = "about:blank"  # noqa: SLF001
+                n += 1
+            except Exception:  # noqa: BLE001
+                try:
+                    # Fallback: some python-docx builds use target_ref property
+                    rel.target_ref = "about:blank"
+                    n += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("hyperlink target scrub failed: %s", exc)
+    return n
+
+
+def _scrub_xml_blob_part(part, *, blank_locals: set[str] | None = None) -> bool:
+    """Parse *part.blob* as XML, blank matching localnames / authorish attrs."""
+    from xml.etree import ElementTree as ET
+
+    blank_locals = blank_locals or set()
+    try:
+        root = ET.fromstring(part.blob)
+    except Exception:  # noqa: BLE001
+        return False
+    changed = False
+    for el in root.iter():
+        local = el.tag.rsplit("}", 1)[-1]
+        if local in blank_locals and (el.text or "").strip():
+            el.text = ""
+            changed = True
+        for attr in list(el.attrib):
+            al = attr.rsplit("}", 1)[-1].casefold()
+            if al in {"author", "initials", "name", "displayname"} and el.attrib[attr]:
+                el.attrib[attr] = ""
+                changed = True
+            if blank_locals and any(c.casefold() in (el.attrib[attr] or "").casefold() for c in blank_locals):
+                # don't use blank_locals as surface list — skip
+                pass
+    if changed:
+        part._blob = ET.tostring(root, encoding="utf-8", xml_declaration=True)  # noqa: SLF001
+    return changed
+
+
+def scrub_app_properties(doc) -> list[str]:
+    """Blank Company/Manager (and similar) in docProps/app.xml."""
+    errors: list[str] = []
+    try:
+        pkg = doc.part.package
+        for part in pkg.parts:
+            try:
+                name = str(part.partname)
+            except Exception:  # noqa: BLE001
+                continue
+            if "docProps" in name and name.endswith("app.xml"):
+                _scrub_xml_blob_part(
+                    part, blank_locals={"Company", "Manager", "HyperlinkBase"}
+                )
+                break
+    except Exception as exc:  # noqa: BLE001
+        msg = f"app.xml scrub failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
+    return errors
+
+
+def scrub_people_part(doc) -> None:
+    """Best-effort: blank authorish attributes inside people.xml when present."""
+    try:
+        pkg = doc.part.package
+        for part in pkg.parts:
+            try:
+                name = str(part.partname)
+            except Exception:  # noqa: BLE001
+                continue
+            if name.endswith("people.xml"):
+                _scrub_xml_blob_part(part, blank_locals=set())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("people.xml scrub skipped: %s", exc)
+
+
+def prepare_docx_for_redaction(doc) -> list[str]:
+    """Accept revisions + scrub authorship on all WordprocessingML roots."""
+    errors: list[str] = []
+    try:
+        for root in _iter_package_xml_roots(doc):
+            accept_tracked_changes(root)
+            scrub_revision_authors(root)
+    except Exception as exc:  # noqa: BLE001
+        msg = f"revision accept/scrub failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
+    scrub_people_part(doc)
+    return errors
+
+
 def redact_docx(
     source: Path,
     surfaces: list[RedactSurface],
@@ -236,32 +454,36 @@ def redact_docx(
     """Copy *source* to *dest* with cleartext replaced per *style*.
 
     *style* ``placeholder`` inserts ``[TYPE_n]`` tags; ``remove`` deletes text.
-    Cross-run matches keep unaffected run formatting; the replacement is placed
-    in the first affected run. Also walks headers/footers, nested tables,
-    comments, footnotes/endnotes, and text boxes.
+    Accepts tracked changes first, walks headers/footers/tables/notes/comments/
+    text boxes, scrubs core/app properties and matching hyperlink targets, then
+    verifies via an independent zip scan.
     """
     from docx import Document
 
     source = Path(source)
     dest = Path(dest)
     stats = NativeRedactStats(format="docx", surfaces_total=len(surfaces))
+    scrub_errs: list[str] = []
     if style not in ("placeholder", "remove"):
         style = "placeholder"
 
     doc = Document(str(source))
+    scrub_errs.extend(prepare_docx_for_redaction(doc))
+
     if not surfaces:
         dest.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(dest))
         stats.output_path = str(dest)
         stats.verified = True
+        stats.scrub_errors = len(scrub_errs)
+        stats.scrub_error_samples = scrub_errs[:8]
         return stats
 
     found: set[str] = set()
-    # Deduplicate paragraph elements (headers may be linked; oxml iter may overlap)
     seen_p: set[int] = set()
     for paragraph in _iter_all_paragraphs(doc):
         try:
-            key = id(paragraph._element)  # noqa: SLF001 — stable identity
+            key = id(paragraph._element)  # noqa: SLF001
         except Exception:  # noqa: BLE001
             key = id(paragraph)
         if key in seen_p:
@@ -279,7 +501,6 @@ def redact_docx(
             stats.surfaces_missed += 1
             stats.missed.append(surface.clear)
 
-    # Best-effort document property scrub (Author, Title, …)
     try:
         props = doc.core_properties
         for attr in (
@@ -301,23 +522,38 @@ def redact_docx(
                 except (AttributeError, ValueError, TypeError):
                     pass
     except Exception as exc:  # noqa: BLE001
-        logger.debug("core_properties scrub failed: %s", exc)
+        msg = f"core_properties scrub failed: {exc}"
+        logger.warning("%s", msg)
+        scrub_errs.append(msg)
 
-    # Post-redaction verification
-    haystack = "\n".join(p.text for p in _iter_all_paragraphs(doc) if p.text)
-    residuals: list[str] = []
-    seen_res: set[str] = set()
-    for surface in surfaces:
-        if surface.clear in seen_res:
-            continue
-        if surface_appears_in_text(haystack, surface.clear):
-            residuals.append(surface.clear)
-            seen_res.add(surface.clear)
-    stats.verified = True
-    stats.residuals_found = len(residuals)
-    stats.residuals = residuals
+    scrub_errs.extend(scrub_app_properties(doc))
+    try:
+        scrub_hyperlink_targets(doc, surfaces)
+    except Exception as exc:  # noqa: BLE001
+        msg = f"hyperlink scrub failed: {exc}"
+        logger.warning("%s", msg)
+        scrub_errs.append(msg)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest))
     stats.output_path = str(dest)
+
+    residuals = verify_docx_package(dest, surfaces)
+    stats.verified = True
+    stats.residuals_found = len(residuals)
+    stats.residuals = residuals
+    # Surfaces destroyed via accept-revisions / package scrub (not paragraph hits)
+    # should not count as layout misses when the independent verify is clean.
+    if stats.missed:
+        residual_set = set(residuals)
+        still_missed: list[str] = []
+        for clear in stats.missed:
+            if clear in residual_set:
+                still_missed.append(clear)
+            else:
+                stats.surfaces_found += 1
+                stats.surfaces_missed = max(0, stats.surfaces_missed - 1)
+        stats.missed = still_missed
+    stats.scrub_errors = len(scrub_errs)
+    stats.scrub_error_samples = scrub_errs[:8]
     return stats

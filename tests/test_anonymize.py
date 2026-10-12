@@ -87,7 +87,7 @@ def test_hetu_in_text_via_recognizer():
     assert "[FI_HETU_1]" in out
 
 
-def test_render_markdown_front_matter():
+def test_render_markdown_body_only_no_front_matter():
     result = AnonymizeResult(
         anonymized_text="Hello [PERSON_1]",
         entity_counts={"PERSON": 1},
@@ -101,7 +101,7 @@ def test_render_markdown_front_matter():
         [TextBlock(text="Hello [PERSON_1]", kind=BlockKind.PARAGRAPH)],
         result,
     )
-    assert md.startswith("---\n")
-    assert "lang_mode: auto" in md
-    assert "redact_style: placeholder" in md
+    assert not md.lstrip().startswith("---")
+    assert "lang_mode:" not in md
+    assert "entity_counts:" not in md
     assert "Hello [PERSON_1]" in md

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from anonymizer.anonymize.surfaces import (
     RedactSurface,
-    surface_appears_in_text,
     surface_search_variants,
 )
 from anonymizer.output.native_stats import NativeRedactStats
@@ -59,13 +58,14 @@ def _scrub_uri_links(doc, *, fill: tuple[float, float, float]) -> int:
     return n
 
 
-def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
+def _scrub_annotations_and_forms(doc) -> tuple[int, int, list[str]]:
     """Remove form widgets and non-redact annotations (comments, free text, …).
 
-    Returns ``(annotations_scrubbed, widgets_scrubbed)``.
+    Returns ``(annotations_scrubbed, widgets_scrubbed, error_samples)``.
     """
     ann_count = 0
     widget_count = 0
+    errors: list[str] = []
     for page in doc:
         try:
             widgets = list(page.widgets() or [])
@@ -81,7 +81,9 @@ def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
                     widget.update()
                     widget_count += 1
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("widget scrub failed: %s", exc)
+                    msg = f"widget scrub failed: {exc}"
+                    logger.warning("%s", msg)
+                    errors.append(msg)
 
         try:
             annots = list(page.annots() or [])
@@ -100,13 +102,19 @@ def _scrub_annotations_and_forms(doc) -> tuple[int, int]:
                 page.delete_annot(annot)
                 ann_count += 1
             except Exception as exc:  # noqa: BLE001
-                logger.debug("annot scrub failed: %s", exc)
+                msg = f"annot scrub failed: {exc}"
+                logger.warning("%s", msg)
+                errors.append(msg)
 
-    return ann_count, widget_count
+    return ann_count, widget_count, errors
 
 
-def _scrub_metadata(doc) -> None:
-    """Best-effort document info / XML metadata / embedded-file wipe."""
+def _scrub_metadata(doc) -> list[str]:
+    """Best-effort document info / XML metadata / embedded-file wipe.
+
+    Returns error sample strings (empty on full success).
+    """
+    errors: list[str] = []
     try:
         doc.set_metadata(
             {
@@ -119,19 +127,48 @@ def _scrub_metadata(doc) -> None:
             }
         )
     except Exception as exc:  # noqa: BLE001
-        logger.debug("set_metadata failed: %s", exc)
+        msg = f"set_metadata failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
     try:
         doc.del_xml_metadata()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        msg = f"del_xml_metadata failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
     try:
         for name in list(doc.embfile_names()):  # type: ignore[attr-defined]
             try:
                 doc.embfile_del(name)  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception:  # noqa: BLE001
-        pass
+            except Exception as exc:  # noqa: BLE001
+                msg = f"embfile_del failed: {exc}"
+                logger.warning("%s", msg)
+                errors.append(msg)
+    except Exception as exc:  # noqa: BLE001
+        msg = f"embfile scrub failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
+    return errors
+
+
+def _clear_outline(doc) -> list[str]:
+    """Remove bookmarks / outline entries (common silent PII channel)."""
+    errors: list[str] = []
+    try:
+        doc.set_toc([])
+    except Exception as exc:  # noqa: BLE001
+        msg = f"set_toc failed: {exc}"
+        logger.warning("%s", msg)
+        errors.append(msg)
+        return errors
+    try:
+        # Named destinations (best-effort; API varies by PyMuPDF version)
+        if hasattr(doc, "set_destinations"):
+            doc.set_destinations([])  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001
+        msg = f"set_destinations failed: {exc}"
+        logger.debug("%s", msg)
+    return errors
 
 
 def _inventory_images(doc) -> tuple[int, list[int]]:
@@ -234,26 +271,6 @@ def _redact_letterhead_images(
     return n
 
 
-def _verify_residuals(doc, surfaces: list[RedactSurface]) -> list[str]:
-    """Re-extract page text and return clears that still appear."""
-    chunks: list[str] = []
-    for page in doc:
-        try:
-            chunks.append(page.get_text() or "")
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("get_text failed during verify: %s", exc)
-    haystack = "\n".join(chunks)
-    residual: list[str] = []
-    seen: set[str] = set()
-    for surface in surfaces:
-        if surface.clear in seen:
-            continue
-        if surface_appears_in_text(haystack, surface.clear):
-            residual.append(surface.clear)
-            seen.add(surface.clear)
-    return residual
-
-
 def redact_pdf(
     source: Path,
     surfaces: list[RedactSurface],
@@ -267,9 +284,10 @@ def redact_pdf(
     Uses PyMuPDF ``search_for`` + ``add_redact_annot`` / ``apply_redactions`` so
     text is removed from the content stream (not merely covered).
 
-    After redaction: scrub form widgets and annotations, wipe metadata, then
-    re-extract text to populate residual stats. Soft-wrapped mid-glyph splits
-    and image-only text may still miss — check ``stats.residuals`` / ``is_clean``.
+    After redaction: clear outline/bookmarks, scrub forms/annotations, wipe
+    metadata, then run an **independent** residual check (text + TOC + xrefs).
+    Soft-wrapped mid-glyph splits and image-only text may still miss — check
+    ``stats.residuals`` / ``is_clean``.
 
     When *redact_letterhead_images* is True, images in header/footer bands
     (especially page 1) are blacked out as well.
@@ -279,6 +297,7 @@ def redact_pdf(
     source = Path(source)
     dest = Path(dest)
     stats = NativeRedactStats(format="pdf", surfaces_total=len(surfaces))
+    scrub_errs: list[str] = []
 
     doc = fitz.open(source)
     try:
@@ -301,7 +320,10 @@ def redact_pdf(
         extra_clears = [
             RedactSurface(clear=uri, placeholder=f"[URL_LINK_{i}]")
             for i, uri in enumerate(link_uris, start=1)
-            if not any(uri == s.clear or uri.rstrip("/") == s.clear.rstrip("/") for s in surfaces)
+            if not any(
+                uri == s.clear or uri.rstrip("/") == s.clear.rstrip("/")
+                for s in surfaces
+            )
         ]
         all_surfaces = list(surfaces) + extra_clears
 
@@ -323,7 +345,6 @@ def redact_pdf(
                         stats.hit_count += 1
                 if page_hits:
                     found_surfaces.add(surface.clear)
-                    # Also count mapping surfaces that match without trailing slash
                     for s in surfaces:
                         if s.clear.rstrip("/") == surface.clear.rstrip("/"):
                             found_surfaces.add(s.clear)
@@ -346,7 +367,6 @@ def redact_pdf(
             if clear in found_surfaces:
                 stats.surfaces_found += 1
                 continue
-            # URI was wiped via link annotation even if text-layer search missed
             cnorm = clear.rstrip("/").casefold()
             if cnorm in link_norm or any(
                 cnorm in u.rstrip("/").casefold() or u.rstrip("/").casefold() in cnorm
@@ -357,15 +377,12 @@ def redact_pdf(
             stats.surfaces_missed += 1
             stats.missed.append(clear)
 
-        ann_n, widget_n = _scrub_annotations_and_forms(doc)
+        ann_n, widget_n, ann_errs = _scrub_annotations_and_forms(doc)
         stats.annotations_scrubbed = ann_n
         stats.widgets_scrubbed = widget_n
-        _scrub_metadata(doc)
-
-        residuals = _verify_residuals(doc, surfaces) if surfaces else []
-        stats.verified = True
-        stats.residuals_found = len(residuals)
-        stats.residuals = residuals
+        scrub_errs.extend(ann_errs)
+        scrub_errs.extend(_scrub_metadata(doc))
+        scrub_errs.extend(_clear_outline(doc))
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         doc.save(dest, garbage=4, deflate=True, encryption=fitz.PDF_ENCRYPT_NONE)
@@ -373,4 +390,13 @@ def redact_pdf(
     finally:
         doc.close()
 
+    # Verify the written file (garbage rewrite may drop xref leftovers)
+    from anonymizer.output.native_verify import verify_pdf_file
+
+    residuals = verify_pdf_file(dest, surfaces) if surfaces else []
+    stats.verified = True
+    stats.residuals_found = len(residuals)
+    stats.residuals = residuals
+    stats.scrub_errors = len(scrub_errs)
+    stats.scrub_error_samples = scrub_errs[:8]
     return stats

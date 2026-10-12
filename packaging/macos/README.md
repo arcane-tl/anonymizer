@@ -69,7 +69,6 @@ sharp custom square and breaks size/shape next to other apps.
    - **Output folder** — default *same folder as source file*, or **Choose…** (`--out-dir`)  
    - **Active templates** / **Templates…** — native AppKit pack editor; enable packs for this run  
    - ☑ **Review findings before saving** (default on) — always visible  
-   - ☑ **Open result when finished** — always visible  
    - **More options** — collapsed disclosure: Output style, fail-on-native-miss, letterhead wipe  
    - Action bar: **Templates…** left · **Cancel** + **Start** right  
 
@@ -80,13 +79,16 @@ Selection is stored as `templates_enabled` in `~/.config/anonymizer/config.yaml`
 Windows Tk options/templates share the same product logic.  
 **Teach** keep-clear / new adds into a user pack from the review window (not the options panel).
 3. Click **Start** (or Cancel). Start requires at least one file.
-4. When finished (no review path):
-   - **Open** checked → file opens; no extra Finder/OK popup (notification only)
-   - **Open** unchecked → one **Done** dialog with **Show in Finder**
+4. When finished (Review or not):
+   - A **dark Tk run summary** opens (same visual language as Review). Each output row has **Open** and **Reveal**. Files are not opened automatically.
+   - **No Terminal.app** — Review uses the document review window via the droplet
+   - Markdown stays **body-only**; use **Save summary…** for a JSON/MD sidecar
 
 ```text
-Open app or drop files → [ Options window ] → work → [ Done ]
+Open app or drop files → [ Options ] → [ progress strip ] → [ Review window? ] → [ Run summary ]
 ```
+
+A short progress strip sits at the bottom of the screen from Start until the summary opens. It does not take focus, so Review stays in front. It closes itself when the job finishes.
 
 ### Modes (pop-up)
 
@@ -98,7 +100,9 @@ Open app or drop files → [ Options window ] → work → [ Done ]
 
 ### Review
 
-When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`): toggle false positives, add redactions, teach templates. Opening results follows the **Open result when finished** checkbox (no second prompt).
+When **Review findings before saving** is checked, Start runs analysis then opens the **document review window** (`--review-window`) inside the app flow — **no Terminal**. Toggle false positives, add redactions, teach templates.
+
+After Review (or a non-Review run), a detached **run summary** window appears (Review dark theme): entity chips, one row per output with **Open** / **Reveal**, plus Save summary… / Done.
 
 ## How it works
 

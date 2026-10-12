@@ -2253,7 +2253,6 @@ class OptionsApp(tk.Tk):
         self.fail_native_var = tk.BooleanVar(value=False)
         self.letterhead_var = tk.BooleanVar(value=False)
         self.debug_var = tk.BooleanVar(value=False)
-        self.open_var = tk.BooleanVar(value=True)
 
         pad = 24
         root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
@@ -2389,12 +2388,6 @@ class OptionsApp(tk.Tk):
             "Review findings before saving",
             variable=self.review_var,
             pady=(18, 4),
-        )
-        _dark_check(
-            root,
-            "Open result when finished",
-            variable=self.open_var,
-            pady=(2, 2),
         )
 
         # More options (collapsed): output style + native shareability gates
@@ -2759,7 +2752,6 @@ class OptionsApp(tk.Tk):
             return
         out_fmt = ",".join(kinds)
         want_review = self.review_var.get() and mode != "extract"
-        want_open = self.open_var.get()
         out_dir = self.out_dir
 
         cfg_path = self._write_temp_config(style, self.enabled_template_ids)
@@ -2799,7 +2791,6 @@ class OptionsApp(tk.Tk):
             try:
                 self._run_review_batch(
                     cmds,
-                    want_open,
                     files=list(self.files),
                     mode=mode,
                     out_fmt=out_fmt,
@@ -2824,13 +2815,23 @@ class OptionsApp(tk.Tk):
         self.update_idletasks()
         outputs: list[str] = []
         errors: list[str] = []
+        summary_path = Path(
+            tempfile.mkstemp(suffix=".json", prefix="anonymizer-summary-")[1]
+        )
+        env = os.environ.copy()
+        env["ANONYMIZER_WRITE_SUMMARY_JSON"] = str(summary_path)
+        progress_path = _begin_job_progress(cli, list(self.files))
+        if progress_path is not None:
+            env["ANONYMIZER_PROGRESS_FILE"] = str(progress_path)
+            env["ANONYMIZER_PROGRESS_TOTAL"] = str(len(self.files))
         try:
-            for fpath in self.files:
+            for i, fpath in enumerate(self.files, start=1):
+                env["ANONYMIZER_PROGRESS_INDEX"] = str(i)
                 cmd = [*cli, mode, str(fpath), *common_flags]
                 _log(f"RUN: {cli[0] if cli else '?'} {mode} <file>")
-                proc = subprocess.run(cmd, capture_output=True, text=True)
+                proc = _run_cli(cmd, env)
                 if proc.returncode != 0:
-                    err = (proc.stderr or proc.stdout or "error").strip()
+                    err = (proc.stdout or "error").strip()
                     errors.append(f"{fpath.name}: {err}")
                     _log(f"FAIL {fpath.name}: exit {proc.returncode}")
                     continue
@@ -2849,6 +2850,7 @@ class OptionsApp(tk.Tk):
             except OSError:
                 pass
             self._set_working(False)
+            _end_job_progress(progress_path, error=bool(errors and not outputs))
 
         if errors and not outputs:
             messagebox.showerror(
@@ -2856,36 +2858,13 @@ class OptionsApp(tk.Tk):
                 "Something went wrong:\n\n" + "\n\n".join(errors[:3]),
                 parent=self,
             )
+            try:
+                summary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             return
 
-        if want_open and outputs:
-            _open_result_paths(outputs)
-            _log("OptionsApp done (open results) → destroy")
-            self.destroy()
-            return
-
-        msg = "Done.\n\n"
-        if outputs:
-            msg += "Created:\n" + "\n".join(f"• {Path(o).name}" for o in outputs)
-        else:
-            msg += (
-                "Finished. Check next to your original files for Markdown "
-                "and/or redacted source output."
-            )
-        if errors:
-            msg += "\n\nSome files failed:\n" + "\n".join(errors[:5])
-        if outputs and messagebox.askyesno(
-            "Anonymizer", msg + "\n\nShow in folder?", parent=self
-        ):
-            folder = str(out_dir) if out_dir is not None else str(Path(outputs[0]).parent)
-            if sys.platform == "darwin":
-                subprocess.run(["open", folder], check=False)
-            elif sys.platform == "win32":
-                subprocess.run(["explorer", folder], check=False)
-            else:
-                subprocess.run(["xdg-open", folder], check=False)
-        else:
-            messagebox.showinfo("Anonymizer", msg, parent=self)
+        _open_summary(cli, summary_path, errors=errors or None)
         _log("OptionsApp done → destroy")
         self.destroy()
 
@@ -2924,7 +2903,6 @@ class OptionsApp(tk.Tk):
     def _run_review_batch(
         self,
         cmds: list[list[str]],
-        want_open: bool,
         *,
         files: list[Path] | None = None,
         mode: str = "strict",
@@ -2933,15 +2911,19 @@ class OptionsApp(tk.Tk):
     ) -> None:
         """Run CLI with --review-window; wait for each job and surface errors.
 
-        On success: optionally open outputs (Open checkbox); **no** Done dialog.
-        ANONYMIZER_OPEN is not honored by the Python CLI — GUI opens after exit.
+        On success: show the run summary (Open/Reveal per output). Never auto-open files.
         """
         src_files = list(files or self.files)
         env = os.environ.copy()
-        if want_open:
-            env["ANONYMIZER_OPEN"] = "1"
+        env["ANONYMIZER_OPEN"] = "0"
+        summary_path = Path(
+            tempfile.mkstemp(suffix=".json", prefix="anonymizer-summary-")[1]
+        )
+        env["ANONYMIZER_WRITE_SUMMARY_JSON"] = str(summary_path)
 
         if sys.platform == "darwin":
+            # Mac droplet uses AppleScript for the main path; Terminal review
+            # chain still gets the summary env for CLI JSON (dialog via droplet).
             chain = " ; ".join(" ".join(shlex_quote(c) for c in cmd) for cmd in cmds)
             chain += '; echo; echo "--- Finished. You can close this window. ---"'
             chain_esc = chain.replace("\\", "\\\\").replace('"', '\\"')
@@ -2953,25 +2935,25 @@ class OptionsApp(tk.Tk):
         errors: list[str] = []
         cancelled = 0
         outputs: list[str] = []
+        progress_path = _begin_job_progress(_cli_prefix(cmds[0] if cmds else []), src_files)
+        if progress_path is not None:
+            env["ANONYMIZER_PROGRESS_FILE"] = str(progress_path)
+            env["ANONYMIZER_PROGRESS_TOTAL"] = str(len(src_files))
         try:
             self.withdraw()
         except tk.TclError:
             pass
 
         for i, cmd in enumerate(cmds):
+            env["ANONYMIZER_PROGRESS_INDEX"] = str(i + 1)
             fpath = src_files[i] if i < len(src_files) else None
             _log(f"REVIEW RUN: {' '.join(cmd[:6])}…")
             try:
                 # Capture stderr so CLI errors are visible in the dialog.
                 # Review window is still a separate Tk UI from the CLI process.
-                proc = subprocess.run(
-                    cmd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
+                # Do not pipe stdout/stderr. A full pipe blocks the review
+                # window, the parent waits forever, and the summary never opens.
+                proc = _run_cli(cmd, env)
             except OSError as exc:
                 errors.append(str(exc))
                 _log(f"REVIEW FAIL spawn: {exc}")
@@ -2994,7 +2976,7 @@ class OptionsApp(tk.Tk):
                 cancelled += 1
                 _log("REVIEW cancelled (130)")
                 continue
-            detail = (proc.stderr or proc.stdout or "").strip()
+            detail = (proc.stdout or "").strip()
             if detail:
                 _log(f"REVIEW FAIL exit={code} stderr:\n{detail[:2000]}")
                 short = "\n".join(detail.splitlines()[:8])
@@ -3012,6 +2994,11 @@ class OptionsApp(tk.Tk):
         except tk.TclError:
             pass
 
+        _end_job_progress(
+            progress_path,
+            error=bool(errors and not outputs),
+        )
+
         if errors and not cancelled:
             messagebox.showerror(
                 "Anonymizer",
@@ -3027,15 +3014,12 @@ class OptionsApp(tk.Tk):
                 parent=self if self.winfo_exists() else None,
             )
         elif not errors:
-            # Success: open outputs if requested; never show a Done alert.
-            if want_open and outputs:
-                _open_result_paths(outputs)
-                _log(f"REVIEW done open=1 n_out={len(outputs)}")
-            else:
-                _log(
-                    f"REVIEW done open=0 n_out={len(outputs)} "
-                    f"(no success dialog)"
-                )
+            _open_summary(
+                _cli_prefix(cmds[0] if cmds else []),
+                summary_path,
+                errors=None,
+            )
+            _log(f"REVIEW done summary n_out={len(outputs)}")
 
 
 def shlex_quote(s: str) -> str:
@@ -3044,6 +3028,151 @@ def shlex_quote(s: str) -> str:
     import shlex
 
     return shlex.quote(s)
+
+
+def _cli_prefix(cmd: list[str]) -> list[str]:
+    """Argv up to but not including the mode verb."""
+    for i, part in enumerate(cmd):
+        if part in {"strict", "standard", "extract"}:
+            return cmd[:i] or cmd[:1]
+    return cmd[:1]
+
+
+def _begin_job_progress(cli: list[str], files: list[Path]) -> Path | None:
+    """Launch the quiet progress strip. Returns the status file, or None."""
+    from anonymizer.util.progress import write_progress_status
+
+    try:
+        fd, name = tempfile.mkstemp(prefix="anonymizer-progress-", suffix=".json")
+        os.close(fd)
+        path = Path(name)
+        first = files[0].name if files else ""
+        write_progress_status(
+            path,
+            state="running",
+            phase="Starting",
+            index=0,
+            total=len(files),
+            file=first,
+            fraction=0.0,
+        )
+        flags = 0
+        if sys.platform == "win32":
+            flags = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+        subprocess.Popen(
+            [*cli, "show-progress", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            creationflags=flags,
+        )
+        return path
+    except OSError as exc:
+        _log(f"progress strip failed: {exc}")
+        return None
+
+
+def _end_job_progress(path: Path | None, *, error: bool = False) -> None:
+    if path is None:
+        return
+    from anonymizer.util.progress import write_progress_status
+
+    try:
+        write_progress_status(
+            path,
+            state="error" if error else "done",
+            phase="",
+            fraction=1.0,
+        )
+    except OSError:
+        pass
+
+
+def _run_cli(cmd: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the CLI without piping stdout or stderr.
+
+    A captured pipe fills during a long run or Review and blocks the child.
+    The parent then waits forever, so the summary never opens.
+    """
+    fd, name = tempfile.mkstemp(prefix="anonymizer-cli-", suffix=".log")
+    os.close(fd)
+    log_path = Path(name)
+    text = ""
+    code = 1
+    try:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            code = int(proc.returncode or 0)
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        text = str(exc)
+        code = 1
+    finally:
+        try:
+            log_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return subprocess.CompletedProcess(cmd, code, text, "")
+
+
+def _open_summary(
+    cli: list[str],
+    summary_path: Path,
+    errors: list[str] | None = None,
+) -> None:
+    """Open the run summary in its own process so it cannot grab the desktop."""
+    if not summary_path.is_file():
+        _log(f"summary file missing: {summary_path}")
+        return
+    if errors:
+        from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+        show_summary_from_json_file(None, summary_path, errors=errors)
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    flags = 0
+    if sys.platform == "win32":
+        flags = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+        )
+    try:
+        subprocess.Popen(
+            [*cli, "show-summary", str(summary_path), "--ephemeral"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            creationflags=flags,
+        )
+        _log(f"summary launched {summary_path}")
+    except OSError as exc:
+        _log(f"summary spawn failed: {exc}")
+        from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+        show_summary_from_json_file(None, summary_path)
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _parse_outputs(stdout: str, stderr: str) -> list[str]:
@@ -3055,21 +3184,6 @@ def _parse_outputs(stdout: str, stderr: str) -> list[str]:
                 if p:
                     out.append(p)
     return out
-
-
-def _open_result_paths(paths: list[str]) -> None:
-    """Open output files in the OS default app (Open-result checkbox)."""
-    for out in paths:
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["open", out], check=False)
-            elif sys.platform == "win32":
-                os.startfile(out)  # type: ignore[attr-defined]
-            else:
-                subprocess.run(["xdg-open", out], check=False)
-            _log(f"opened result: {out}")
-        except OSError as exc:
-            _log(f"open result failed {out}: {exc}")
 
 
 def _guess_outputs(

@@ -73,6 +73,31 @@ def test_form_label_not_org_end_to_end():
     assert "ACME Testi Oy" not in result.anonymized_text
 
 
+def test_voikko_install_check_requires_kissa(monkeypatch):
+    import anonymizer.anonymize.voikko_fi as v
+
+    monkeypatch.setattr(v, "voikko_available", lambda: (False, "libvoikko Python package not installed"))
+    ok, detail = v.voikko_install_check()
+    assert ok is False
+    assert "not installed" in detail
+
+    monkeypatch.setattr(v, "voikko_available", lambda: (True, "libvoikko fi ok"))
+    monkeypatch.setattr(v, "is_common_finnish_word", lambda _word: True)
+    ok, detail = v.voikko_install_check()
+    assert ok is True
+    assert "kissa" in detail
+
+    monkeypatch.setattr(v, "is_common_finnish_word", lambda _word: None)
+    ok, detail = v.voikko_install_check()
+    assert ok is False
+    assert "kissa" in detail
+
+    monkeypatch.setattr(v, "is_common_finnish_word", lambda _word: False)
+    ok, detail = v.voikko_install_check()
+    assert ok is False
+    assert "kissa" in detail
+
+
 def test_voikko_helpers_without_lib_return_none():
     ok, _ = voikko_available()
     if ok:
