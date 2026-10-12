@@ -2987,17 +2987,18 @@ class OptionsApp(tk.Tk):
                 errors.append(f"exit {code}")
                 _log(f"REVIEW FAIL exit={code}")
 
-        try:
-            if self.winfo_exists():
-                self.deiconify()
-                self.lift()
-        except tk.TclError:
-            pass
-
         _end_job_progress(
             progress_path,
             error=bool(errors and not outputs),
         )
+
+        if errors or cancelled:
+            try:
+                if self.winfo_exists():
+                    self.deiconify()
+                    self.lift()
+            except tk.TclError:
+                pass
 
         if errors and not cancelled:
             messagebox.showerror(
