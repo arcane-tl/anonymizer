@@ -43,6 +43,8 @@ def _dictionary_path() -> str | None:
         candidates.append(Path(sys.executable).resolve().parent / "voikko")
         for folder in candidates:
             if (folder / "libvoikko-1.dll").is_file():
+                if hasattr(os, "add_dll_directory"):
+                    os.add_dll_directory(str(folder))
                 libvoikko.Voikko.setLibrarySearchPath(str(folder))
                 if (folder / "5").is_dir():
                     return str(folder)

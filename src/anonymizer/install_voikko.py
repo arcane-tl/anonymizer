@@ -56,12 +56,25 @@ def _download(url: str, dest: Path) -> None:
 
 
 def _machine() -> str:
+    """Architecture of this Python process, not the host PC.
+
+    An x64 interpreter emulated on Windows ARM still reports the host as
+    ARM64 from ``platform.machine()``. ``PROCESSOR_ARCHITECTURE`` matches
+    the process, so the x64 installer gets the official x64 DLL.
+    """
+    if sys.maxsize <= 2**32:
+        return "x86"
+    arch = os.environ.get("PROCESSOR_ARCHITECTURE", "").casefold()
+    if arch == "amd64" or arch == "x86_64":
+        return "amd64"
+    if arch in {"arm64", "aarch64"}:
+        return "arm64"
     machine = platform.machine().casefold()
     if machine in {"amd64", "x86_64"}:
         return "amd64"
     if machine in {"arm64", "aarch64"}:
         return "arm64"
-    return "x86"
+    return "amd64"
 
 
 def install_windows_voikko(dest: Path | None = None) -> Path:
