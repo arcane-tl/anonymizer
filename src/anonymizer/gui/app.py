@@ -2829,11 +2829,9 @@ class OptionsApp(tk.Tk):
                 env["ANONYMIZER_PROGRESS_INDEX"] = str(i)
                 cmd = [*cli, mode, str(fpath), *common_flags]
                 _log(f"RUN: {cli[0] if cli else '?'} {mode} <file>")
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True, env=env
-                )
+                proc = _run_cli(cmd, env)
                 if proc.returncode != 0:
-                    err = (proc.stderr or proc.stdout or "error").strip()
+                    err = (proc.stdout or "error").strip()
                     errors.append(f"{fpath.name}: {err}")
                     _log(f"FAIL {fpath.name}: exit {proc.returncode}")
                     continue
@@ -2866,13 +2864,7 @@ class OptionsApp(tk.Tk):
                 pass
             return
 
-        from anonymizer.gui.summary_dialog import show_summary_from_json_file
-
-        show_summary_from_json_file(self, summary_path, errors=errors or None)
-        try:
-            summary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _open_summary(cli, summary_path, errors=errors or None)
         _log("OptionsApp done → destroy")
         self.destroy()
 
@@ -2959,14 +2951,9 @@ class OptionsApp(tk.Tk):
             try:
                 # Capture stderr so CLI errors are visible in the dialog.
                 # Review window is still a separate Tk UI from the CLI process.
-                proc = subprocess.run(
-                    cmd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
+                # Do not pipe stdout/stderr. A full pipe blocks the review
+                # window, the parent waits forever, and the summary never opens.
+                proc = _run_cli(cmd, env)
             except OSError as exc:
                 errors.append(str(exc))
                 _log(f"REVIEW FAIL spawn: {exc}")
@@ -2989,7 +2976,7 @@ class OptionsApp(tk.Tk):
                 cancelled += 1
                 _log("REVIEW cancelled (130)")
                 continue
-            detail = (proc.stderr or proc.stdout or "").strip()
+            detail = (proc.stdout or "").strip()
             if detail:
                 _log(f"REVIEW FAIL exit={code} stderr:\n{detail[:2000]}")
                 short = "\n".join(detail.splitlines()[:8])
@@ -3027,18 +3014,12 @@ class OptionsApp(tk.Tk):
                 parent=self if self.winfo_exists() else None,
             )
         elif not errors:
-            from anonymizer.gui.summary_dialog import show_summary_from_json_file
-
-            show_summary_from_json_file(
-                self if self.winfo_exists() else None,
+            _open_summary(
+                _cli_prefix(cmds[0] if cmds else []),
                 summary_path,
                 errors=None,
             )
             _log(f"REVIEW done summary n_out={len(outputs)}")
-        try:
-            summary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def shlex_quote(s: str) -> str:
@@ -3075,11 +3056,21 @@ def _begin_job_progress(cli: list[str], files: list[Path]) -> Path | None:
             file=first,
             fraction=0.0,
         )
+        flags = 0
+        if sys.platform == "win32":
+            flags = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
         subprocess.Popen(
             [*cli, "show-progress", str(path)],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            close_fds=True,
+            creationflags=flags,
         )
         return path
     except OSError as exc:
@@ -3101,6 +3092,87 @@ def _end_job_progress(path: Path | None, *, error: bool = False) -> None:
         )
     except OSError:
         pass
+
+
+def _run_cli(cmd: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the CLI without piping stdout or stderr.
+
+    A captured pipe fills during a long run or Review and blocks the child.
+    The parent then waits forever, so the summary never opens.
+    """
+    fd, name = tempfile.mkstemp(prefix="anonymizer-cli-", suffix=".log")
+    os.close(fd)
+    log_path = Path(name)
+    text = ""
+    code = 1
+    try:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            code = int(proc.returncode or 0)
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        text = str(exc)
+        code = 1
+    finally:
+        try:
+            log_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return subprocess.CompletedProcess(cmd, code, text, "")
+
+
+def _open_summary(
+    cli: list[str],
+    summary_path: Path,
+    errors: list[str] | None = None,
+) -> None:
+    """Open the run summary in its own process so it cannot grab the desktop."""
+    if not summary_path.is_file():
+        _log(f"summary file missing: {summary_path}")
+        return
+    if errors:
+        from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+        show_summary_from_json_file(None, summary_path, errors=errors)
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    flags = 0
+    if sys.platform == "win32":
+        flags = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+        )
+    try:
+        subprocess.Popen(
+            [*cli, "show-summary", str(summary_path), "--ephemeral"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            creationflags=flags,
+        )
+        _log(f"summary launched {summary_path}")
+    except OSError as exc:
+        _log(f"summary spawn failed: {exc}")
+        from anonymizer.gui.summary_dialog import show_summary_from_json_file
+
+        show_summary_from_json_file(None, summary_path)
+        try:
+            summary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _parse_outputs(stdout: str, stderr: str) -> list[str]:

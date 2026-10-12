@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anonymizer"
-version = "1.4.7"
+version = "1.5.0"
 description = "Local CLI to anonymize PDF/DOCX/text documents to Markdown (EN + FI)"
 readme = "README.md"
 license = "MIT"
@@ -31,6 +31,7 @@ dependencies = [
   "questionary>=2.0.0",
   "pyyaml>=6.0",
   "lingua-language-detector>=2.0.0",
+  "libvoikko>=4.3",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +42,9 @@ dev = [
 llm = [
   "openai>=1.40.0",
 ]
-# Finnish morphology FP gates (macOS: brew install libvoikko + voikko-fi)
+# Kept so older docs (`pip install 'anonymizer[fi]'`) still work.
+# libvoikko is also a default dependency. Native library + fi dictionary
+# come from the Mac/Windows installers.
 fi = [
   "libvoikko>=4.3",
 ]

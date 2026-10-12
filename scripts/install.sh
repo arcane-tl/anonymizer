@@ -178,6 +178,23 @@ ok "Python: $PY ($("$PY" -c 'import sys; print(sys.version.split()[0])'))"
 # ---------------------------------------------------------------------------
 # Optional OCR system packages (macOS Homebrew)
 # ---------------------------------------------------------------------------
+install_voikko() {
+  # Native library + Finnish dictionary. The Python binding is a normal dependency.
+  if [[ "$OS" != "Darwin" ]]; then
+    return 0
+  fi
+  if ! command -v brew >/dev/null 2>&1; then
+    warn "Homebrew not found — Voikko not installed. Install from https://brew.sh then: brew install libvoikko"
+    return 0
+  fi
+  info "Installing Voikko (libvoikko, includes the Finnish dictionary)…"
+  if brew list libvoikko >/dev/null 2>&1; then
+    ok "libvoikko already installed"
+  else
+    brew install libvoikko
+  fi
+}
+
 install_ocr() {
   if [[ "$WITH_OCR" -eq 0 ]]; then
     warn "Skipping OCR system packages (--no-ocr)"
@@ -284,16 +301,15 @@ setup_python_env() {
     pip install -e "${INSTALL_ROOT}"
   fi
 
-  if python -m anonymizer.install_models --check --langs en,fi >/dev/null 2>&1; then
-    ok "spaCy models already ready (EN+FI); skipping download"
+  if python -m anonymizer.install_models --check --langs en,fi --size "$MODELS" --no-fallback >/dev/null 2>&1; then
+    ok "spaCy $MODELS models already ready (EN+FI); skipping download"
   else
     info "Installing spaCy models (en+fi, size=$MODELS; may take several minutes)…"
-    if python -m anonymizer.install_models --langs en,fi --size "$MODELS" --fallback; then
-      ok "spaCy EN+FI models ready"
-    elif python -m anonymizer.install_models --check --langs en,fi >/dev/null 2>&1; then
-      ok "spaCy models ready"
+    python -m anonymizer.install_models --langs en,fi --size "$MODELS" --fallback || true
+    if python -m anonymizer.install_models --check --langs en,fi --size "$MODELS" --no-fallback >/dev/null 2>&1; then
+      ok "spaCy EN+FI $MODELS models ready"
     else
-      warn "Required spaCy models not loadable yet (CLI is installed)."
+      warn "Large spaCy models are not loaded. A smaller model may be installed; redactions can differ from a large-model install."
       warn "  Fix (not a reinstall): $venv/bin/python -m anonymizer.install_models --langs en,fi --size $MODELS --fallback"
       warn "  Then: anonymize doctor  ·  docs/models.md"
     fi
@@ -387,7 +403,13 @@ EOF
 verify_install() {
   info "Verifying install…"
   local cli="$BIN_DIR/anonymize"
+  local py="$INSTALL_ROOT/.venv/bin/python"
   "$cli" --version
+  local voikko_detail
+  if ! voikko_detail="$("$py" -c 'from anonymizer.anonymize.voikko_fi import voikko_install_check; ok, detail = voikko_install_check(); print(detail); raise SystemExit(0 if ok else 1)')"; then
+    die "Voikko cannot analyze Finnish${voikko_detail:+: $voikko_detail}. Re-run the installer, or: brew install libvoikko"
+  fi
+  ok "Voikko: $voikko_detail"
   if "$cli" doctor >/dev/null 2>&1; then
     ok "anonymize doctor passed"
   else
@@ -448,6 +470,7 @@ EOF
 # ---------------------------------------------------------------------------
 main() {
   install_ocr
+  install_voikko
   ensure_source
   setup_python_env
   install_launcher

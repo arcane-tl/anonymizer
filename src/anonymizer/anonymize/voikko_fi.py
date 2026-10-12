@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from functools import lru_cache
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,51 @@ _NAME_CLASSES = frozenset(
 )
 
 
+def _dictionary_path() -> str | None:
+    """Point the Python binding at a known library and return a dictionary root.
+
+    The root is the directory that contains ``5/mor-standard``. ``None`` lets
+    libvoikko use its default search (Homebrew on macOS).
+    """
+    try:
+        import libvoikko  # type: ignore
+    except ImportError:
+        return None
+
+    explicit = (os.environ.get("ANONYMIZER_VOIKKO_DIR") or "").strip()
+    if sys.platform == "win32":
+        candidates: list[Path] = []
+        if explicit:
+            candidates.append(Path(explicit))
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            candidates.append(Path(local) / "voikko")
+        candidates.append(Path(sys.executable).resolve().parent / "voikko")
+        for folder in candidates:
+            if (folder / "libvoikko-1.dll").is_file():
+                libvoikko.Voikko.setLibrarySearchPath(str(folder))
+                if (folder / "5").is_dir():
+                    return str(folder)
+                return None
+        return None
+
+    if sys.platform == "darwin":
+        for libdir in (explicit, "/opt/homebrew/lib", "/usr/local/lib"):
+            if not libdir:
+                continue
+            if (Path(libdir) / "libvoikko.1.dylib").is_file():
+                libvoikko.Voikko.setLibrarySearchPath(libdir)
+                break
+        for folder in (
+            Path("/opt/homebrew/lib/voikko"),
+            Path("/usr/local/lib/voikko"),
+            Path.home() / ".voikko",
+        ):
+            if (folder / "5").is_dir():
+                return str(folder)
+    return None
+
+
 @lru_cache(maxsize=1)
 def voikko_available() -> tuple[bool, str]:
     """Return (ok, detail) for doctor / soft-skip."""
@@ -26,7 +74,7 @@ def voikko_available() -> tuple[bool, str]:
     except ImportError:
         return False, "libvoikko Python package not installed"
     try:
-        v = libvoikko.Voikko("fi")
+        v = libvoikko.Voikko("fi", _dictionary_path())
     except Exception as exc:  # pragma: no cover - depends on system dicts
         return False, f"Voikko fi dictionary unavailable: {exc}"
     try:
@@ -36,11 +84,26 @@ def voikko_available() -> tuple[bool, str]:
     return True, "libvoikko fi ok"
 
 
+def voikko_install_check() -> tuple[bool, str]:
+    """Installer and doctor gate.
+
+    Passes only when Voikko loads and the common Finnish word ``kissa``
+    analyzes as a non-name. The detail says which part failed.
+    """
+    ok, detail = voikko_available()
+    if not ok:
+        return False, detail
+    result = is_common_finnish_word("kissa")
+    if result is True:
+        return True, "kissa analyzes as a Finnish word"
+    return False, f"kissa did not analyze as a Finnish word ({result!r})"
+
+
 @lru_cache(maxsize=1)
 def _voikko():
     import libvoikko  # type: ignore
 
-    return libvoikko.Voikko("fi")
+    return libvoikko.Voikko("fi", _dictionary_path())
 
 
 def is_common_finnish_word(surface: str) -> bool | None:

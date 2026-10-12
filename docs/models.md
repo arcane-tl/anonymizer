@@ -52,13 +52,13 @@ brew postinstall anonymizer
 **Windows** (user install from `install.ps1`):
 
 ```powershell
-& "$env:LOCALAPPDATA\Anonymizer\.venv\Scripts\python.exe" -m anonymizer.install_models --langs en,fi --size sm
+& "$env:LOCALAPPDATA\Anonymizer\.venv\Scripts\python.exe" -m anonymizer.install_models --langs en,fi --size lg --fallback
 ```
 
 **Windows Setup / portable** (embedded runtime):
 
 ```powershell
-& ".\runtime\python.exe" -m anonymizer.install_models --langs en,fi --size sm
+& ".\runtime\python.exe" -m anonymizer.install_models --langs en,fi --size lg --fallback
 ```
 
 You do **not** need to reinstall the app. Installing a smaller model does not remove a larger one; the app prefers the largest available unless you override config (below).

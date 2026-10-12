@@ -184,20 +184,21 @@ def install_langs(
 ) -> dict[str, str | None]:
     """Install models for each language. Returns lang → package or None.
 
-    Precheck: if every requested language already has a loadable model, skip
-    all downloads and return those packages.
+    Skip the download only when the preferred size is already loadable.
+    A smaller model does not count. ``fallback`` applies only after the
+    preferred download fails.
     """
     langs_clean = [x.lower().strip() for x in langs if x.strip()]
-    pre = precheck_langs(langs_clean, size, fallback=fallback)
+    preferred = precheck_langs(langs_clean, size, fallback=False)
 
-    if langs_clean and all(pre.get(lang) for lang in langs_clean):
+    if langs_clean and all(preferred.get(lang) for lang in langs_clean):
         if not quiet:
-            ready = " ".join(f"{k}={pre[k]}" for k in langs_clean)
+            ready = " ".join(f"{k}={preferred[k]}" for k in langs_clean)
             print(f"spaCy models already ready: {ready}")
             print(f"Summary: {ready} (ok)")
-        return pre
+        return preferred
 
-    results: dict[str, str | None] = dict(pre)
+    results: dict[str, str | None] = dict(preferred)
     for lang in langs_clean:
         if results.get(lang):
             if not quiet:
@@ -236,14 +237,23 @@ def install_langs(
     return final
 
 
-def check_langs(langs: Iterable[str], size: str = "lg") -> dict[str, bool]:
-    """Return whether each lang has any loadable model (lg→md→sm)."""
+def check_langs(
+    langs: Iterable[str],
+    size: str = "lg",
+    *,
+    fallback: bool = True,
+) -> dict[str, bool]:
+    """Return whether each language has a loadable model.
+
+    With ``fallback=False``, only the requested size counts. A small model
+    does not satisfy a large-model install check.
+    """
     out: dict[str, bool] = {}
     for lang in langs:
         lang = lang.lower().strip()
         if not lang:
             continue
-        out[lang] = first_loadable(lang, size, fallback=True) is not None
+        out[lang] = first_loadable(lang, size, fallback=fallback) is not None
     return out
 
 
@@ -283,9 +293,9 @@ def main(argv: list[str] | None = None) -> int:
     langs = [x.strip() for x in args.langs.split(",") if x.strip()]
 
     if args.check:
-        status = check_langs(langs, args.size)
+        status = check_langs(langs, args.size, fallback=args.fallback)
         for lang, ok in status.items():
-            pkg = first_loadable(lang, args.size, fallback=True)
+            pkg = first_loadable(lang, args.size, fallback=args.fallback)
             if ok and pkg:
                 print(f"{lang}: OK ({pkg})")
             else:

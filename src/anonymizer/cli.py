@@ -1348,20 +1348,17 @@ def cmd_doctor() -> None:
     except Exception as exc:
         rows.append(("Review window (tk)", f"unavailable ({exc})", False))
 
-    # Optional Finnish morphology (single-token PERSON/ORG gate)
+    # Finnish morphology. Installers require this; a miss fails doctor.
     try:
-        from anonymizer.anonymize.voikko_fi import voikko_available
+        from anonymizer.anonymize.voikko_fi import voikko_install_check
 
-        vok, detail = voikko_available()
-        rows.append(
-            (
-                "Voikko (FI)",
-                detail if vok else f"optional — {detail}",
-                True,
-            )
-        )
+        vok, detail = voikko_install_check()
+        rows.append(("Voikko (FI)", detail, vok))
+        if not vok:
+            ok_all = False
     except Exception as exc:
-        rows.append(("Voikko (FI)", f"optional — {exc}", True))
+        rows.append(("Voikko (FI)", f"check failed: {exc}", False))
+        ok_all = False
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Check")
@@ -1389,6 +1386,10 @@ def cmd_doctor() -> None:
     console.print(
         "  3. Models:  [bold]python -m anonymizer.install_models "
         "--langs en,fi --size lg --fallback[/bold]"
+    )
+    console.print(
+        "  4. Voikko:  macOS [bold]brew install libvoikko[/bold]  ·  "
+        "Windows [bold]python -m anonymizer.install_voikko[/bold]"
     )
     raise SystemExit(1)
 

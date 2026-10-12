@@ -58,10 +58,32 @@ def test_model_loadable_false_for_garbage() -> None:
     assert model_loadable("this_model_does_not_exist_xyz") is False
 
 
+def test_check_langs_no_fallback_ignores_small_model() -> None:
+    with patch.object(im, "model_loadable", side_effect=lambda n: n.endswith("_sm")):
+        assert check_langs(["en"], "lg", fallback=False)["en"] is False
+        assert check_langs(["en"], "lg", fallback=True)["en"] is True
+
+
 def test_check_langs_returns_bools() -> None:
     status = check_langs(["en"], "lg")
     assert "en" in status
     assert isinstance(status["en"], bool)
+
+
+def test_small_model_does_not_skip_large_download() -> None:
+    calls: list[str] = []
+
+    def install_one(name: str, *, quiet: bool = False) -> bool:
+        calls.append(name)
+        return name.endswith("_lg")
+
+    with (
+        patch.object(im, "model_loadable", side_effect=lambda n: n.endswith("_sm") or n.endswith("_lg") and n in calls),
+        patch.object(im, "install_one", side_effect=install_one),
+    ):
+        result = im.install_langs(["en"], "lg", fallback=True, quiet=True)
+    assert calls == ["en_core_web_lg"]
+    assert result["en"] == "en_core_web_lg"
 
 
 def test_precheck_short_circuits_without_pip() -> None:

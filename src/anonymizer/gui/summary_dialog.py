@@ -451,7 +451,12 @@ def show_run_summary_dialog(
     if own_root:
         win.mainloop()
     else:
-        win.grab_set()
+        # A grab on Windows freezes the session when the window is not visible.
+        if sys.platform != "win32":
+            try:
+                win.grab_set()
+            except tk.TclError:
+                pass
         win.wait_window()
 
 
