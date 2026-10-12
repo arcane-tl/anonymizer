@@ -2864,7 +2864,7 @@ class OptionsApp(tk.Tk):
                 pass
             return
 
-        _open_summary(cli, summary_path, errors=errors or None)
+        _open_summary(cli, summary_path, parent=self, errors=errors or None)
         _log("OptionsApp done → destroy")
         self.destroy()
 
@@ -3017,6 +3017,7 @@ class OptionsApp(tk.Tk):
             _open_summary(
                 _cli_prefix(cmds[0] if cmds else []),
                 summary_path,
+                parent=self if self.winfo_exists() else None,
                 errors=None,
             )
             _log(f"REVIEW done summary n_out={len(outputs)}")
@@ -3131,28 +3132,29 @@ def _run_cli(cmd: list[str], env: dict[str, str]) -> subprocess.CompletedProcess
 def _open_summary(
     cli: list[str],
     summary_path: Path,
+    *,
+    parent: tk.Misc | None = None,
     errors: list[str] | None = None,
 ) -> None:
-    """Open the run summary in its own process so it cannot grab the desktop."""
+    """Show the run summary.
+
+    On Windows the installed app is a windowed exe. A detached ``python.exe``
+    child is closed when that exe exits, so the summary must be shown here
+    before the options window is destroyed.
+    """
     if not summary_path.is_file():
         _log(f"summary file missing: {summary_path}")
         return
-    if errors:
+    if sys.platform == "win32" or errors:
         from anonymizer.gui.summary_dialog import show_summary_from_json_file
 
-        show_summary_from_json_file(None, summary_path, errors=errors)
+        show_summary_from_json_file(parent, summary_path, errors=errors)
         try:
             summary_path.unlink(missing_ok=True)
         except OSError:
             pass
         return
     flags = 0
-    if sys.platform == "win32":
-        flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
     try:
         subprocess.Popen(
             [*cli, "show-summary", str(summary_path), "--ephemeral"],
@@ -3168,7 +3170,7 @@ def _open_summary(
         _log(f"summary spawn failed: {exc}")
         from anonymizer.gui.summary_dialog import show_summary_from_json_file
 
-        show_summary_from_json_file(None, summary_path)
+        show_summary_from_json_file(parent, summary_path)
         try:
             summary_path.unlink(missing_ok=True)
         except OSError:
