@@ -7,10 +7,12 @@ Dark charcoal chrome + app icon matches the Mac ASObjC options panel.
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 from pathlib import Path
 
@@ -44,6 +46,11 @@ from anonymizer.util.files import (
     SUPPORTED_TYPES_HUMAN,
     SUPPORTED_TYPES_README_URL,
     unsupported_type_notice,
+)
+from anonymizer.util.update_check import (
+    UpdateNotice,
+    check_for_update,
+    update_check_disabled,
 )
 
 MODE_LABELS = [
@@ -2490,6 +2497,7 @@ class OptionsApp(tk.Tk):
             pass
         # Enable Return → Start only after focus has settled
         self.after(500, self._enable_return_shortcut)
+        self._start_update_check()
         _log(
             f"OptionsApp ready files={len(self.files)} "
             f"geom={self.geometry()!r} viewable={self.winfo_viewable()}"
@@ -2498,6 +2506,100 @@ class OptionsApp(tk.Tk):
             f"Options window ready\n{len(self.files)} file(s)\n{self.geometry()}\n"
             f"Log: {_log_path()}"
         )
+
+    def _start_update_check(self) -> None:
+        """Look for a newer release off the UI thread. Failures stay invisible."""
+        if update_check_disabled():
+            return
+        self._update_queue: queue.Queue[UpdateNotice | None] = queue.Queue(maxsize=1)
+        self._update_polls = 0
+        self._update_banner: tk.Frame | None = None
+        self._update_url = ""
+        current = __version__
+
+        def work() -> None:
+            notice: UpdateNotice | None = None
+            try:
+                notice = check_for_update(current)
+            finally:
+                try:
+                    self._update_queue.put_nowait(notice)
+                except queue.Full:
+                    pass
+
+        threading.Thread(
+            target=work,
+            name="anonymizer-update-check",
+            daemon=True,
+        ).start()
+        self.after(200, self._poll_update_notice)
+
+    def _poll_update_notice(self) -> None:
+        try:
+            notice = self._update_queue.get_nowait()
+        except queue.Empty:
+            self._update_polls += 1
+            if self._update_polls < 40:
+                try:
+                    self.after(200, self._poll_update_notice)
+                except tk.TclError:
+                    return
+            return
+        except tk.TclError:
+            return
+        if notice is not None:
+            self._show_update_banner(notice)
+
+    def _show_update_banner(self, notice: UpdateNotice) -> None:
+        if self._update_banner is not None:
+            return
+        if tk is None:
+            return
+        banner = tk.Frame(self, bg=_BG_WELL)
+        banner.pack(before=self._root_frm, fill=tk.X)
+        row = tk.Frame(banner, bg=_BG_WELL)
+        row.pack(fill=tk.X, padx=24, pady=6)
+        tk.Label(
+            row,
+            text="Update available: Anonymizer ",
+            bg=_BG_WELL,
+            fg=_TEXT,
+            font=_FONT_SMALL,
+            anchor=tk.W,
+        ).pack(side=tk.LEFT)
+        link_font = (_FONT_SMALL[0], _FONT_SMALL[1], "underline")
+        link = tk.Label(
+            row,
+            text=notice.version,
+            bg=_BG_WELL,
+            fg="#6CB6FF",
+            font=link_font,
+            cursor="hand2",
+            anchor=tk.W,
+        )
+        link.pack(side=tk.LEFT)
+        self._update_url = notice.html_url
+        link.bind("<Button-1>", self._open_update_url)
+        self._update_banner = banner
+        self.update_idletasks()
+        try:
+            self.geometry(
+                f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
+                f"+{self.winfo_x()}+{self.winfo_y()}"
+            )
+        except tk.TclError:
+            pass
+
+    def _open_update_url(self, _event: object = None) -> None:
+        url = self._update_url
+        if not url:
+            return
+        import webbrowser
+
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            return
 
     def _clear_topmost_soon(self) -> None:
         self._safe_topmost(False)

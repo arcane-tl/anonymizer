@@ -53,6 +53,16 @@ property templatesExtraEnableId : ""
 -- Options session: full POSIX paths (mutable add/remove) + optional out dir
 property optionsFilePaths : {}
 property optionsOutDir : ""
+-- Update banner. The release check runs once per process, off the modal thread.
+property optionsUpdateStarted : false
+property optionsUpdateVersion : ""
+property optionsUpdateURL : ""
+property optionsPanelRef : missing value
+property optionsBannerApplied : false
+property optionsContentHeight : 0
+property optionsPanelWidth : 500
+property optionsUpdateTask : missing value
+property optionsUpdateReadHandle : missing value
 
 on clickOptionsStart_(sender)
 	if (count of optionsFilePaths) is 0 then
@@ -430,6 +440,7 @@ on windowShouldClose_(sender)
 		set templatesModalCode to 0
 	else
 		set optionsModalCode to 0
+		set optionsPanelRef to missing value
 	end if
 	current application's NSApp's stopModal()
 	return true
@@ -1786,6 +1797,171 @@ end textViewContents
 
 -- Main options panel: clear hierarchy, breathing room, HIG action bar
 -- Uses session properties optionsFilePaths / optionsOutDir (mutable across rebuilds).
+on updateCheckDisabled()
+	try
+		set raw to system attribute "ANONYMIZER_DISABLE_UPDATE_CHECK"
+		if raw is missing value or raw is "" then return false
+		set low to do shell script "printf '%s' " & quoted form of (raw as text) & " | tr '[:upper:]' '[:lower:]'"
+		return low is "1" or low is "true" or low is "yes" or low is "on"
+	on error
+		return false
+	end try
+end updateCheckDisabled
+
+on pythonForUpdateCheck()
+	try
+		set cmd to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; bin=$(command -v anonymize) || exit 0; f=$bin; n=0; py=; while [ \"$n\" -lt 2 ] && [ -f \"$f\" ]; do line=$(head -n 1 \"$f\" | tr -d '\\r'); case \"$line\" in \\#!*python*) interp=${line#\\#!}; interp=${interp#\"${interp%%[![:space:]]*}\"}; case \"$interp\" in /usr/bin/env\\ *) py=$(command -v \"${interp#/usr/bin/env }\" || true);; *) py=$interp;; esac; break;; \\#!*bash*|\\#!*sh) target=$(sed -n 's/^exec \"\\([^\"]*\\)\".*/\\1/p; s/^exec \\([^ ]*\\).*/\\1/p' \"$f\" | head -n 1); [ -n \"$target\" ] || exit 0; f=$target; n=$((n + 1));; *) exit 0;; esac; done; [ -n \"$py\" ] && [ -x \"$py\" ] && printf '%s' \"$py\""
+		return do shell script cmd
+	on error
+		return ""
+	end try
+end pythonForUpdateCheck
+
+on startUpdateCheck(thePanel)
+	if optionsUpdateStarted then return
+	set optionsPanelRef to thePanel
+	if updateCheckDisabled() then
+		set optionsUpdateStarted to true
+		return
+	end if
+	set py to pythonForUpdateCheck()
+	if py is "" then
+		set optionsUpdateStarted to true
+		return
+	end if
+	try
+		set task to current application's NSTask's alloc()'s init()
+		set pyURL to current application's NSURL's fileURLWithPath:py
+		task's setExecutableURL:pyURL
+		task's setArguments:{"-m", "anonymizer.util.update_check"}
+		set pipe to current application's NSPipe's pipe()
+		task's setStandardOutput:pipe
+		task's setStandardError:(current application's NSFileHandle's fileHandleWithNullDevice())
+		set fh to pipe's fileHandleForReading()
+		set optionsUpdateTask to task
+		set optionsUpdateReadHandle to fh
+		current application's NSNotificationCenter's defaultCenter()'s addObserver:me selector:"updateCheckFinished:" |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:fh
+		fh's readToEndOfFileInBackgroundAndNotify()
+		set optionsUpdateStarted to true
+		task's |launch|()
+	on error
+		set optionsUpdateStarted to true
+	end try
+end startUpdateCheck
+
+on updateCheckFinished_(notification)
+	try
+		set rawData to notification's userInfo()'s objectForKey:(current application's NSFileHandleNotificationDataItem)
+	on error
+		set rawData to missing value
+	end try
+	try
+		current application's NSNotificationCenter's defaultCenter()'s removeObserver:me |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:optionsUpdateReadHandle
+	end try
+	if rawData is missing value then return
+	try
+		if (rawData's |length|() as integer) is 0 then return
+	end try
+	set obj to missing value
+	try
+		set obj to current application's NSJSONSerialization's JSONObjectWithData:rawData options:0 |error|:(missing value)
+	end try
+	if obj is missing value then return
+	set ver to ""
+	set urlText to ""
+	try
+		set ver to (obj's objectForKey:"version") as text
+		set urlText to (obj's objectForKey:"html_url") as text
+	end try
+	if ver is "" or urlText is "" then return
+	if urlText does not start with "https://" and urlText does not start with "http://" then return
+	set optionsUpdateVersion to ver
+	set optionsUpdateURL to urlText
+	if optionsPanelRef is missing value then return
+	if optionsBannerApplied then return
+	try
+		insertUpdateBanner(optionsPanelRef)
+	end try
+end updateCheckFinished_
+
+on insertUpdateBanner(thePanel)
+	if thePanel is missing value then return
+	if optionsBannerApplied then return
+	set optionsBannerApplied to true
+	set content to thePanel's contentView()
+	set oldH to optionsContentHeight
+	set wide to optionsPanelWidth
+	set bannerH to 28
+	thePanel's setContentSize:(current application's NSMakeSize(wide, oldH + bannerH))
+	addUpdateBanner(content, 0, oldH, wide, bannerH, optionsUpdateVersion)
+	set optionsContentHeight to oldH + bannerH
+	set optionsBannerApplied to true
+end insertUpdateBanner
+
+on addUpdateBanner(parentView, x, y, w, h, versionText)
+	set strip to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(x, y, w, h))
+	strip's setWantsLayer:true
+	try
+		strip's layer()'s setBackgroundColor:((current application's NSColor's windowBackgroundColor())'s CGColor())
+	end try
+	set edge to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, w, 1))
+	edge's setWantsLayer:true
+	try
+		edge's layer()'s setBackgroundColor:((current application's NSColor's separatorColor())'s CGColor())
+	end try
+	strip's addSubview:edge
+
+	set prefix to "Update available: Anonymizer "
+	set label to current application's NSTextField's alloc()'s initWithFrame:(current application's NSMakeRect(24, 0, 10, 16))
+	label's setStringValue:prefix
+	label's setEditable:false
+	label's setBezeled:false
+	label's setDrawsBackground:false
+	label's setSelectable:false
+	label's setFont:(current application's NSFont's systemFontOfSize:13)
+	try
+		label's setTextColor:(current application's NSColor's labelColor())
+	end try
+	label's sizeToFit()
+	set labelW to current application's NSWidth(label's frame())
+	set labelH to current application's NSHeight(label's frame())
+	set textY to (h - labelH) / 2
+	label's setFrame:(current application's NSMakeRect(24, textY, labelW, labelH))
+	parentView's addSubview:strip
+	strip's addSubview:label
+
+	set titleStr to current application's NSString's stringWithString:(versionText as text)
+	set attrs to current application's NSMutableAttributedString's alloc()'s initWithString:titleStr
+	set fullRange to current application's NSMakeRange(0, titleStr's |length|())
+	attrs's addAttribute:(current application's NSFontAttributeName) value:(current application's NSFont's systemFontOfSize:13) range:fullRange
+	try
+		attrs's addAttribute:(current application's NSForegroundColorAttributeName) value:(current application's NSColor's linkColor()) range:fullRange
+	end try
+	attrs's addAttribute:(current application's NSUnderlineStyleAttributeName) value:(current application's NSUnderlineStyleSingle) range:fullRange
+	set btn to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(24 + labelW + 4, 0, 40, 16))
+	btn's setAttributedTitle:attrs
+	btn's setBordered:false
+	btn's setTarget:me
+	btn's setAction:"clickUpdateLink:"
+	btn's sizeToFit()
+	set btnW to current application's NSWidth(btn's frame())
+	set btnH to current application's NSHeight(btn's frame())
+	set btnY to (h - btnH) / 2
+	btn's setFrame:(current application's NSMakeRect(24 + labelW + 4, btnY, btnW, btnH))
+	strip's addSubview:btn
+	return strip
+end addUpdateBanner
+
+on clickUpdateLink_(sender)
+	if optionsUpdateURL is "" then return
+	if optionsUpdateURL does not start with "https://" and optionsUpdateURL does not start with "http://" then return
+	try
+		set u to current application's NSURL's URLWithString:optionsUpdateURL
+		if u is missing value then return
+		current application's NSWorkspace's sharedWorkspace()'s openURL:u
+	end try
+end clickUpdateLink_
+
 on showOptionsPanel()
 	set templateCSV to loadEnabledTemplatesCSV()
 
@@ -1853,6 +2029,8 @@ on showOptionsPanel()
 			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH + gapSm + checkH
 		end if
 		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
+		set bannerH to 28
+		if optionsUpdateVersion is not "" then set panelH to panelH + bannerH
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
 		set thePanel to (thePanel's initWithContentRect:panelRect styleMask:7 backing:2 defer:false)
@@ -1866,11 +2044,25 @@ on showOptionsPanel()
 		end try
 		thePanel's |center|()
 
+		set optionsBannerApplied to false
+		set optionsPanelRef to thePanel
+		set optionsContentHeight to panelH
+		set optionsPanelWidth to panelW
+
 		set content to thePanel's contentView()
 		set innerW to panelW - margin * 2
 
 		-- Top-down cursor (AppKit Y grows upward; y is BOTTOM of each block)
-		set y to panelH - margin - titleRowH
+		if optionsUpdateVersion is not "" then
+			set y to panelH - bannerH
+			try
+				addUpdateBanner(content, 0, y, panelW, bannerH, optionsUpdateVersion)
+				set optionsBannerApplied to true
+			end try
+			set y to y - margin - titleRowH
+		else
+			set y to panelH - margin - titleRowH
+		end if
 		addTitleRow(content, panelW, y)
 
 		set y to y - gapSm - subH
@@ -2060,6 +2252,7 @@ on showOptionsPanel()
 		content's addSubview:cancelBtn
 		content's addSubview:startBtn
 
+		startUpdateCheck(thePanel)
 		set optionsModalCode to -1
 		current application's NSApp's activateIgnoringOtherApps:true
 		thePanel's makeKeyAndOrderFront_(missing value)
@@ -2100,6 +2293,7 @@ on showOptionsPanel()
 
 		if response is 1 then
 			try
+				set optionsPanelRef to missing value
 				thePanel's orderOut_(missing value)
 				thePanel's setDelegate:(missing value)
 				-- |close| escapes AppleScript reserved word "close"
@@ -2128,6 +2322,7 @@ on showOptionsPanel()
 		else if response is 4 then
 			-- File list / out-dir changed — rebuild panel
 			try
+				set optionsPanelRef to missing value
 				thePanel's orderOut_(missing value)
 				thePanel's setDelegate:(missing value)
 				thePanel's |close|()
@@ -2139,6 +2334,7 @@ on showOptionsPanel()
 			end try
 			set newCSV to openTemplatesUI(templateCSV)
 			try
+				set optionsPanelRef to missing value
 				thePanel's orderOut_(missing value)
 				thePanel's setDelegate:(missing value)
 				thePanel's |close|()
@@ -2149,6 +2345,7 @@ on showOptionsPanel()
 			-- Next loop recreates panel at floating level 8 again
 		else
 			try
+				set optionsPanelRef to missing value
 				thePanel's orderOut_(missing value)
 				thePanel's setDelegate:(missing value)
 				thePanel's |close|()
