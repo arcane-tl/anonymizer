@@ -33,6 +33,7 @@ _DISABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _USER_AGENT = "anonymizer-update-check"
 _RELEASE_HOST = "github.com"
 _RELEASE_PATH_PREFIX = "/arcane-tl/anonymizer/releases/"
+_SETUP_NAME = "Anonymizer-Setup-{version}.exe"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class UpdateNotice:
 
     version: str
     html_url: str
+    setup_url: str = ""
 
 
 def parse_stable_version(raw: str) -> tuple[int, int, int] | None:
@@ -89,6 +91,30 @@ def is_allowed_release_url(url: str) -> bool:
     return True
 
 
+def is_allowed_setup_url(url: str, version: str) -> bool:
+    """True only for this repo's Windows Setup asset for *version*."""
+    if not is_allowed_release_url(url):
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    expected = f"/arcane-tl/anonymizer/releases/download/v{version}/Anonymizer-Setup-{version}.exe"
+    return parsed.path == expected
+
+
+def setup_download_url(payload: dict, version: str) -> str:
+    """Return the Windows Setup asset URL, or ``""``."""
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return ""
+    wanted = _SETUP_NAME.format(version=version)
+    for asset in assets:
+        if not isinstance(asset, dict) or asset.get("name") != wanted:
+            continue
+        url = asset.get("browser_download_url")
+        if isinstance(url, str) and is_allowed_setup_url(url, version):
+            return url
+    return ""
+
+
 def notice_from_payload(payload: object, current: str) -> UpdateNotice | None:
     """Build a notice from a GitHub release object, or ``None``."""
     if not isinstance(payload, dict):
@@ -105,7 +131,9 @@ def notice_from_payload(payload: object, current: str) -> UpdateNotice | None:
     if parts is None:
         return None
     major, minor, patch = parts
-    return UpdateNotice(version=f"{major}.{minor}.{patch}", html_url=url)
+    version = f"{major}.{minor}.{patch}"
+    setup = setup_download_url(payload, version) if isinstance(payload, dict) else ""
+    return UpdateNotice(version=version, html_url=url, setup_url=setup)
 
 
 def update_check_disabled() -> bool:
@@ -171,7 +199,14 @@ def main(argv: list[str] | None = None) -> int:
     notice = check_for_update(__version__)
     if notice is not None:
         sys.stdout.write(
-            json.dumps({"version": notice.version, "html_url": notice.html_url}) + "\n"
+            json.dumps(
+                {
+                    "version": notice.version,
+                    "html_url": notice.html_url,
+                    "setup_url": notice.setup_url,
+                }
+            )
+            + "\n"
         )
     return 0
 

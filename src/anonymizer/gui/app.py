@@ -2556,32 +2556,156 @@ class OptionsApp(tk.Tk):
         if tk is None:
             return
         try:
+            self._update_notice = notice
+            self._update_url = notice.html_url
             banner = tk.Frame(self, bg=_BG_WELL)
             banner.pack(before=self._root_frm, fill=tk.X)
             row = tk.Frame(banner, bg=_BG_WELL)
-            row.pack(fill=tk.X, padx=24, pady=6)
-            tk.Label(
+            row.pack(fill=tk.X, padx=24, pady=(8, 2))
+            self._update_status = tk.Label(
                 row,
-                text="Update available: Anonymizer ",
+                text=f"Update to version: {notice.version}",
                 bg=_BG_WELL,
                 fg=_TEXT,
                 font=_FONT_SMALL,
                 anchor=tk.W,
-            ).pack(side=tk.LEFT)
-            link_font = (_FONT_SMALL[0], _FONT_SMALL[1], "underline")
-            link = tk.Label(
+            )
+            self._update_status.pack(side=tk.LEFT)
+            self._update_button = tk.Button(
                 row,
-                text=notice.version,
+                text="Update",
+                command=self._start_update_apply,
+            )
+            self._update_button.pack(side=tk.LEFT, padx=(12, 0))
+            self._update_detail = tk.Label(
+                banner,
+                text="",
+                bg=_BG_WELL,
+                fg=_TEXT_MUTED,
+                font=_FONT_SMALL,
+                justify=tk.LEFT,
+                anchor=tk.W,
+                wraplength=520,
+            )
+            self._update_detail.pack(fill=tk.X, padx=24, pady=(0, 8))
+            self._update_link = tk.Label(
+                banner,
+                text="",
                 bg=_BG_WELL,
                 fg="#6CB6FF",
-                font=link_font,
+                font=(_FONT_SMALL[0], _FONT_SMALL[1], "underline"),
                 cursor="hand2",
                 anchor=tk.W,
             )
-            link.pack(side=tk.LEFT)
-            self._update_url = notice.html_url
-            link.bind("<Button-1>", self._open_update_url)
+            self._update_link.pack(fill=tk.X, padx=24, pady=(0, 4))
+            self._update_link.bind("<Button-1>", self._open_update_url)
             self._update_banner = banner
+            self.update_idletasks()
+            self.geometry(
+                f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
+                f"+{self.winfo_x()}+{self.winfo_y()}"
+            )
+        except tk.TclError:
+            return
+
+    def _start_update_apply(self) -> None:
+        try:
+            self._update_button.configure(state=tk.DISABLED, text="Updating…")
+            self._update_detail.configure(text="")
+            self._update_link.configure(text="")
+        except tk.TclError:
+            return
+        notice = getattr(self, "_update_notice", None)
+        if notice is None:
+            return
+
+        def work() -> None:
+            from anonymizer.util.update_apply import (
+                ApplyStatus,
+                apply_mac_update,
+                apply_windows_update,
+            )
+
+            try:
+                if sys.platform == "win32" and getattr(sys, "frozen", False):
+                    result = apply_windows_update(
+                        setup_url=notice.setup_url,
+                        version=notice.version,
+                        html_url=notice.html_url,
+                        app_dir=str(Path(sys.executable).resolve().parent),
+                    )
+                elif sys.platform == "darwin":
+                    result = apply_mac_update(
+                        "/Applications/Anonymizer.app",
+                        html_url=notice.html_url,
+                        version=notice.version,
+                    )
+                else:
+                    result = ApplyStatus(
+                        "open-release",
+                        html_url=notice.html_url,
+                        version=notice.version,
+                    )
+            except Exception:  # noqa: BLE001
+                from anonymizer.util.update_apply import windows_manual_steps
+
+                result = ApplyStatus(
+                    "fail",
+                    detail=windows_manual_steps(notice.version),
+                    html_url=notice.html_url,
+                    version=notice.version,
+                )
+            try:
+                self._update_queue.put_nowait(result)  # type: ignore[arg-type]
+            except queue.Full:
+                pass
+
+        self._update_queue = queue.Queue(maxsize=1)
+        threading.Thread(target=work, name="anonymizer-update-apply", daemon=True).start()
+        self.after(200, self._poll_update_apply)
+
+    def _poll_update_apply(self) -> None:
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self.after(200, self._poll_update_apply)
+            except tk.TclError:
+                return
+            return
+        except tk.TclError:
+            return
+        status = getattr(result, "status", "fail")
+        if status == "ok":
+            if sys.platform == "darwin":
+                try:
+                    subprocess.Popen(["open", "-a", "/Applications/Anonymizer.app"])
+                except OSError:
+                    pass
+            self.destroy()
+            return
+        if status == "open-release":
+            self._update_url = getattr(result, "html_url", "") or self._update_url
+            self._open_update_url()
+            self._show_update_failure(
+                "This copy was not installed with Homebrew. The release page is open."
+            )
+            return
+        detail = getattr(result, "detail", "") or "Update failed."
+        self._update_url = getattr(result, "html_url", "") or self._update_url
+        self._show_update_failure(detail)
+
+    def _show_update_failure(self, detail: str) -> None:
+        version = ""
+        notice = getattr(self, "_update_notice", None)
+        if notice is not None:
+            version = notice.version
+        try:
+            self._update_status.configure(text="Update failed")
+            self._update_detail.configure(text=detail)
+            if version:
+                self._update_link.configure(text=version)
+            self._update_button.configure(state=tk.NORMAL, text="Update")
             self.update_idletasks()
             self.geometry(
                 f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"

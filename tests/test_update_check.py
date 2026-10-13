@@ -64,6 +64,35 @@ def test_parse_stable_version() -> None:
     assert parse_stable_version("") is None
 
 
+def test_notice_includes_windows_setup_asset() -> None:
+    from anonymizer.util.update_check import is_allowed_setup_url
+
+    version = "9.9.9"
+    url = (
+        "https://github.com/arcane-tl/anonymizer/releases/download/"
+        f"v{version}/Anonymizer-Setup-{version}.exe"
+    )
+    assert is_allowed_setup_url(url, version)
+    assert not is_allowed_setup_url(url, "9.9.8")
+    assert not is_allowed_setup_url(
+        "https://github.com/arcane-tl/anonymizer/releases/download/v9.9.9/other.exe",
+        version,
+    )
+    notice = notice_from_payload(
+        {
+            "tag_name": "v9.9.9",
+            "html_url": _NEWER_URL,
+            "assets": [
+                {"name": "notes.txt", "browser_download_url": "https://example.com/x"},
+                {"name": "Anonymizer-Setup-9.9.9.exe", "browser_download_url": url},
+            ],
+        },
+        _CURRENT,
+    )
+    assert notice is not None
+    assert notice.setup_url == url
+
+
 def test_notice_from_payload_newer() -> None:
     notice = notice_from_payload(
         {"tag_name": "v9.9.9", "html_url": _NEWER_URL, "body": "ignored"},
@@ -283,7 +312,7 @@ def test_main_prints_notice(
     assert main([]) == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert payload == {"version": "9.9.9", "html_url": _NEWER_URL}
+    assert payload == {"version": "9.9.9", "html_url": _NEWER_URL, "setup_url": ""}
     assert captured.err == ""
 
 
