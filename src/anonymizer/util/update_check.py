@@ -31,6 +31,8 @@ ENV_DISABLE = "ANONYMIZER_DISABLE_UPDATE_CHECK"
 _STABLE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _DISABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _USER_AGENT = "anonymizer-update-check"
+_RELEASE_HOST = "github.com"
+_RELEASE_PATH_PREFIX = "/arcane-tl/anonymizer/releases/"
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,32 @@ def is_newer_stable(remote: str, current: str) -> bool:
     return remote_parts > current_parts
 
 
+def is_allowed_release_url(url: str) -> bool:
+    """True only for an https link to this repo's GitHub releases.
+
+    Host must be exactly ``github.com`` (no lookalike, no userinfo, no
+    non-default port). The path must sit under
+    ``/arcane-tl/anonymizer/releases/``.
+    """
+    if any(ch.isspace() for ch in url) or "\\" in url:
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https":
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.hostname != _RELEASE_HOST:
+        return False
+    if parsed.port not in (None, 443):
+        return False
+    path = parsed.path or ""
+    if not path.startswith(_RELEASE_PATH_PREFIX):
+        return False
+    if ".." in path.split("/"):
+        return False
+    return True
+
+
 def notice_from_payload(payload: object, current: str) -> UpdateNotice | None:
     """Build a notice from a GitHub release object, or ``None``."""
     if not isinstance(payload, dict):
@@ -71,10 +99,7 @@ def notice_from_payload(payload: object, current: str) -> UpdateNotice | None:
         return None
     if not is_newer_stable(tag, current):
         return None
-    if any(ch.isspace() for ch in url):
-        return None
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if not is_allowed_release_url(url):
         return None
     parts = parse_stable_version(tag)
     if parts is None:

@@ -36,6 +36,7 @@ Portable: **Anonymizer-X.Y.Z-windows.zip** (keep the `runtime\` folder next to `
 ## What's new
 
 - …
+- The desktop app checks for a newer release at startup: it contacts the GitHub releases API (`api.github.com`) for `arcane-tl/anonymizer`, sends no data beyond the request itself, and can be disabled by setting `ANONYMIZER_DISABLE_UPDATE_CHECK` (this is CLI/env only on macOS, because a Finder-launched app does not see environment variables).
 ```
 
 ## Checklist

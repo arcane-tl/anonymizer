@@ -460,6 +460,7 @@ Aliases: `text` → extract · `normal` / `pii` → standard · `scrub` / `full`
 | `--offline` | Blocks remote xAI and non-loopback Ollama |
 
 - **No telemetry** in this application  
+- The desktop app checks for a newer release at startup: it contacts the GitHub releases API (`api.github.com`) for `arcane-tl/anonymizer`, sends no data beyond the request itself, and can be disabled by setting `ANONYMIZER_DISABLE_UPDATE_CHECK` (this is CLI/env only on macOS, because a Finder-launched app does not see environment variables)  
 - **`--map`** writes placeholder → original JSON (**contains PII**; mode `0600` when possible)  
 - Install-time network: Homebrew / Setup download / spaCy models / optional LLM  
 - **Native PDF/DOCX** is hardened best-effort (variants + form/annot scrub + residual verify), not a forensic wipe

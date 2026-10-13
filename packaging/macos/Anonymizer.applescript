@@ -1801,7 +1801,7 @@ on updateCheckDisabled()
 	try
 		set raw to system attribute "ANONYMIZER_DISABLE_UPDATE_CHECK"
 		if raw is missing value or raw is "" then return false
-		set low to do shell script "printf '%s' " & quoted form of (raw as text) & " | tr '[:upper:]' '[:lower:]'"
+		set low to do shell script "printf '%s' " & quoted form of (raw as text) & " | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'"
 		return low is "1" or low is "true" or low is "yes" or low is "on"
 	on error
 		return false
@@ -1810,7 +1810,7 @@ end updateCheckDisabled
 
 on pythonForUpdateCheck()
 	try
-		set cmd to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; bin=$(command -v anonymize) || exit 0; f=$bin; n=0; py=; while [ \"$n\" -lt 2 ] && [ -f \"$f\" ]; do line=$(head -n 1 \"$f\" | tr -d '\\r'); case \"$line\" in \\#!*python*) interp=${line#\\#!}; interp=${interp#\"${interp%%[![:space:]]*}\"}; case \"$interp\" in /usr/bin/env\\ *) py=$(command -v \"${interp#/usr/bin/env }\" || true);; *) py=$interp;; esac; break;; \\#!*bash*|\\#!*sh) target=$(sed -n 's/^exec \"\\([^\"]*\\)\".*/\\1/p; s/^exec \\([^ ]*\\).*/\\1/p' \"$f\" | head -n 1); [ -n \"$target\" ] || exit 0; f=$target; n=$((n + 1));; *) exit 0;; esac; done; [ -n \"$py\" ] && [ -x \"$py\" ] && printf '%s' \"$py\""
+		set cmd to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; bin=$(command -v anonymize) || exit 0; f=$bin; n=0; py=; while [ \"$n\" -lt 2 ] && [ -f \"$f\" ]; do line=$(head -n 1 \"$f\" | tr -d '\\r'); case \"$line\" in \\#!*python*) interp=${line#\\#!}; interp=${interp#\"${interp%%[![:space:]]*}\"}; case \"$interp\" in /usr/bin/env\\ *) py=$(command -v \"${interp#/usr/bin/env }\" || true);; *) py=$interp;; esac; break;; \\#!*bash*|\\#!*sh) target=$(sed -n 's/^exec \"\\([^\"]*\\)\".*/\\1/p; s/^exec \\([^ ]*\\).*/\\1/p' \"$f\" | head -n 1); [ -n \"$target\" ] || exit 0; target=${target//\\$INSTALL_ROOT/$HOME/.local/share/anonymizer}; f=$target; n=$((n + 1));; *) exit 0;; esac; done; [ -n \"$py\" ] && [ -x \"$py\" ] && printf '%s' \"$py\""
 		return do shell script cmd
 	on error
 		return ""
@@ -1874,7 +1874,7 @@ on updateCheckFinished_(notification)
 		set urlText to (obj's objectForKey:"html_url") as text
 	end try
 	if ver is "" or urlText is "" then return
-	if urlText does not start with "https://" and urlText does not start with "http://" then return
+	if not releaseURLAllowed(urlText) then return
 	set optionsUpdateVersion to ver
 	set optionsUpdateURL to urlText
 	if optionsPanelRef is missing value then return
@@ -1952,9 +1952,42 @@ on addUpdateBanner(parentView, x, y, w, h, versionText)
 	return strip
 end addUpdateBanner
 
+on releaseURLAllowed(urlText)
+	try
+		if urlText is missing value or urlText is "" then return false
+		set rawURL to urlText as text
+		set u to current application's NSURL's |URLWithString|:rawURL
+		if u is missing value then return false
+		set schemeName to u's |scheme|()
+		if schemeName is missing value then return false
+		if (schemeName as text) is not "https" then return false
+		set userName to u's |user|()
+		if userName is not missing value then return false
+		set userPass to u's |password|()
+		if userPass is not missing value then return false
+		set hostName to u's |host|()
+		if hostName is missing value then return false
+		set hostStr to hostName as text
+		set hostLow to (current application's NSString's stringWithString:hostStr)'s lowercaseString() as text
+		if hostLow is not "github.com" then return false
+		set portVal to u's |port|()
+		if portVal is not missing value then
+			if (portVal as integer) is not 443 then return false
+		end if
+		set pathText to u's |path|()
+		if pathText is missing value then return false
+		set pathText to pathText as text
+		if pathText does not start with "/arcane-tl/anonymizer/releases/" then return false
+		if pathText contains "/../" or pathText ends with "/.." or pathText starts with "../" then return false
+		return true
+	on error
+		return false
+	end try
+end releaseURLAllowed
+
 on clickUpdateLink_(sender)
 	if optionsUpdateURL is "" then return
-	if optionsUpdateURL does not start with "https://" and optionsUpdateURL does not start with "http://" then return
+	if not releaseURLAllowed(optionsUpdateURL) then return
 	try
 		set u to current application's NSURL's URLWithString:optionsUpdateURL
 		if u is missing value then return

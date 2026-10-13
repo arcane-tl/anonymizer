@@ -18,6 +18,7 @@ from anonymizer.util.update_check import (
     UpdateNotice,
     check_for_update,
     fetch_latest_payload,
+    is_allowed_release_url,
     is_newer_stable,
     main,
     notice_from_payload,
@@ -100,6 +101,47 @@ def test_notice_from_payload_not_newer() -> None:
 )
 def test_notice_from_payload_rejects(payload: object) -> None:
     assert notice_from_payload(payload, _CURRENT) is None
+
+
+_GOOD_RELEASE_URLS = [
+    "https://github.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com/arcane-tl/anonymizer/releases/latest",
+    "https://github.com/arcane-tl/anonymizer/releases/tag/v1.5.2",
+    "https://GitHub.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com:443/arcane-tl/anonymizer/releases/tag/v9.9.9",
+]
+
+_BAD_RELEASE_URLS = [
+    "http://github.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://example.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com.evil.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://evilgithub.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com@evil.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://user@github.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://user:secret@github.com/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com:8443/arcane-tl/anonymizer/releases/tag/v9.9.9",
+    "https://github.com/other/anonymizer/releases/tag/v9.9.9",
+    "https://github.com/arcane-tl/anonymizer/issues/1",
+    "https://github.com/arcane-tl/anonymizer/releases-evil/tag/v9.9.9",
+    "https://github.com/arcane-tl/anonymizer/releases/../../../evil",
+]
+
+
+@pytest.mark.parametrize("url", _GOOD_RELEASE_URLS)
+def test_allowed_release_url(url: str) -> None:
+    assert is_allowed_release_url(url)
+    notice = notice_from_payload({"tag_name": "v9.9.9", "html_url": url}, _CURRENT)
+    assert notice is not None
+    assert notice.html_url == url
+
+
+@pytest.mark.parametrize("url", _BAD_RELEASE_URLS)
+def test_rejected_release_url(url: str) -> None:
+    assert not is_allowed_release_url(url)
+    assert notice_from_payload(
+        {"tag_name": "v9.9.9", "html_url": url},
+        _CURRENT,
+    ) is None
 
 
 class _FakeResponse:

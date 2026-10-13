@@ -2555,40 +2555,40 @@ class OptionsApp(tk.Tk):
             return
         if tk is None:
             return
-        banner = tk.Frame(self, bg=_BG_WELL)
-        banner.pack(before=self._root_frm, fill=tk.X)
-        row = tk.Frame(banner, bg=_BG_WELL)
-        row.pack(fill=tk.X, padx=24, pady=6)
-        tk.Label(
-            row,
-            text="Update available: Anonymizer ",
-            bg=_BG_WELL,
-            fg=_TEXT,
-            font=_FONT_SMALL,
-            anchor=tk.W,
-        ).pack(side=tk.LEFT)
-        link_font = (_FONT_SMALL[0], _FONT_SMALL[1], "underline")
-        link = tk.Label(
-            row,
-            text=notice.version,
-            bg=_BG_WELL,
-            fg="#6CB6FF",
-            font=link_font,
-            cursor="hand2",
-            anchor=tk.W,
-        )
-        link.pack(side=tk.LEFT)
-        self._update_url = notice.html_url
-        link.bind("<Button-1>", self._open_update_url)
-        self._update_banner = banner
-        self.update_idletasks()
         try:
+            banner = tk.Frame(self, bg=_BG_WELL)
+            banner.pack(before=self._root_frm, fill=tk.X)
+            row = tk.Frame(banner, bg=_BG_WELL)
+            row.pack(fill=tk.X, padx=24, pady=6)
+            tk.Label(
+                row,
+                text="Update available: Anonymizer ",
+                bg=_BG_WELL,
+                fg=_TEXT,
+                font=_FONT_SMALL,
+                anchor=tk.W,
+            ).pack(side=tk.LEFT)
+            link_font = (_FONT_SMALL[0], _FONT_SMALL[1], "underline")
+            link = tk.Label(
+                row,
+                text=notice.version,
+                bg=_BG_WELL,
+                fg="#6CB6FF",
+                font=link_font,
+                cursor="hand2",
+                anchor=tk.W,
+            )
+            link.pack(side=tk.LEFT)
+            self._update_url = notice.html_url
+            link.bind("<Button-1>", self._open_update_url)
+            self._update_banner = banner
+            self.update_idletasks()
             self.geometry(
                 f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
                 f"+{self.winfo_x()}+{self.winfo_y()}"
             )
         except tk.TclError:
-            pass
+            return
 
     def _open_update_url(self, _event: object = None) -> None:
         url = self._update_url
