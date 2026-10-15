@@ -147,6 +147,7 @@ if sys.platform == "darwin":
     _ACCENT_HOVER = "#409CFF"
     _TEXT_ON_ACCENT = "#FFFFFF"
     _SELECT = "#0059D1"  # selectedContentBackground approx
+    _BG_BANNER = "#2A2A2C"  # droplet uses AppKit; Tk fallback only
 else:
     _BG_APP = "#2C2C2E"
     _BG_WELL = "#1C1C1E"
@@ -159,6 +160,7 @@ else:
     _ACCENT_HOVER = "#409CFF"
     _TEXT_ON_ACCENT = "#FFFFFF"
     _SELECT = "#1E3A5F"
+    _BG_BANNER = "#363638"  # one step off window charcoal #2C2C2E
 
 # Platform fonts: Segoe on Windows; system UI on macOS (matches NSPanel).
 if sys.platform == "darwin":
@@ -1197,6 +1199,8 @@ def _chip_button(
     width: int | None = 11,
     chrome: str | None = None,
     fill_x: bool = False,
+    compact: bool = False,
+    size_for: str | None = None,
 ) -> "tk.Frame":
     """Rounded pill button drawn on canvas.
 
@@ -1213,9 +1217,14 @@ def _chip_button(
     fg_disabled = _TEXT_MUTED
     outline = _ACCENT if primary else _BORDER
     font = _FONT_BOLD if primary else _FONT
-    pad_x, pad_y, radius = 14, 7, 8
+    if compact:
+        pad_x, pad_y, radius = 6, 2, 5
+        min_h, min_w_floor = 0, 0
+    else:
+        pad_x, pad_y, radius = 14, 7, 8
+        min_h, min_w_floor = 32, 72
 
-    probe = tk.Label(parent, text=text, font=font)
+    probe = tk.Label(parent, text=size_for or text, font=font)
     try:
         probe.update_idletasks()
         tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
@@ -1231,8 +1240,8 @@ def _chip_button(
         finally:
             probe2.destroy()
     size = {
-        "bw": max(tw + pad_x * 2, min_w, 72),
-        "bh": max(th + pad_y * 2, 32),
+        "bw": max(tw + pad_x * 2, min_w, min_w_floor),
+        "bh": max(th + pad_y * 2, min_h),
     }
 
     wrap = tk.Frame(
@@ -1251,6 +1260,7 @@ def _chip_button(
     canvas.pack(fill=tk.BOTH, expand=True)
 
     state: dict = {"enabled": True, "hover": False}
+    label = {"text": text}
 
     def _paint() -> None:
         enabled = state["enabled"]
@@ -1268,7 +1278,7 @@ def _chip_button(
             canvas, 1, 1, max(bw - 2, 2), max(bh - 2, 2), radius,
             fill=fill, outline=ol, width=1,
         )
-        canvas.create_text(bw // 2, bh // 2, text=text, fill=fg, font=font)
+        canvas.create_text(bw // 2, bh // 2, text=label["text"], fill=fg, font=font)
 
     def _run(_e=None) -> None:
         if state["enabled"] and command is not None:
@@ -1280,11 +1290,30 @@ def _chip_button(
         elif cnf is not None and not kw:
             # cnf as single option name → Frame.configure
             return tk.Frame.configure(wrap, cnf)
+        repaint = False
+        if "text" in kw:
+            label["text"] = str(kw.pop("text"))
+            if compact:
+                measure = tk.Label(parent, text=label["text"], font=font)
+                try:
+                    measure.update_idletasks()
+                    nw = max(measure.winfo_reqwidth() + pad_x * 2, min_w_floor)
+                    nh = max(measure.winfo_reqheight() + pad_y * 2, min_h)
+                finally:
+                    measure.destroy()
+                size["bw"], size["bh"] = nw, nh
+                tk.Frame.configure(wrap, width=nw, height=nh)
+                canvas.configure(width=nw, height=nh)
+            repaint = True
         if "state" in kw:
             st = kw.pop("state")
             state["enabled"] = st not in (tk.DISABLED, "disabled", 0, "0")
-            wrap.configure(cursor="hand2" if state["enabled"] else "arrow")
+            tk.Frame.configure(
+                wrap, cursor="hand2" if state["enabled"] else "arrow"
+            )
             canvas.configure(cursor="hand2" if state["enabled"] else "arrow")
+            repaint = True
+        if repaint:
             _paint()
         if kw:
             return tk.Frame.configure(wrap, **kw)
@@ -2262,15 +2291,17 @@ class OptionsApp(tk.Tk):
         self.debug_var = tk.BooleanVar(value=False)
 
         pad = 24
-        root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
-        root.pack(fill=tk.BOTH, expand=True)
+        # Top inset lives on the title row so a banner can tighten it alone.
+        root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=0)
+        root.pack(fill=tk.BOTH, expand=True, pady=(0, pad))
         self._root_frm = root
 
-        _pack_title_row(
+        self._title_row = _pack_title_row(
             root,
             f"Anonymizer (version {__version__})",
             self._icon_refs,
         )
+        self._title_row.pack_configure(pady=(pad, 6))
 
         self.sub_lbl = tk.Label(
             root,
@@ -2558,48 +2589,52 @@ class OptionsApp(tk.Tk):
         try:
             self._update_notice = notice
             self._update_url = notice.html_url
-            banner = tk.Frame(self, bg=_BG_WELL)
+            self._update_detail = None
+            banner = tk.Frame(self, bg=_BG_BANNER)
             banner.pack(before=self._root_frm, fill=tk.X)
-            row = tk.Frame(banner, bg=_BG_WELL)
-            row.pack(fill=tk.X, padx=24, pady=(8, 2))
-            self._update_status = tk.Label(
+            edge = tk.Frame(banner, bg=_BORDER, height=1)
+            edge.pack_propagate(False)
+            edge.pack(side=tk.BOTTOM, fill=tk.X)
+            row = tk.Frame(banner, bg=_BG_BANNER)
+            row.pack(pady=(2, 2))
+            tk.Label(
                 row,
-                text=f"Update to version: {notice.version}",
-                bg=_BG_WELL,
+                text="New version",
+                bg=_BG_BANNER,
                 fg=_TEXT,
-                font=_FONT_SMALL,
-                anchor=tk.W,
-            )
-            self._update_status.pack(side=tk.LEFT)
-            self._update_button = tk.Button(
+                font=_FONT,
+            ).pack(side=tk.LEFT)
+            self._update_version = tk.Label(
                 row,
-                text="Update",
-                command=self._start_update_apply,
+                text=notice.version,
+                bg=_BG_BANNER,
+                fg=_TEXT,
+                font=_FONT,
             )
-            self._update_button.pack(side=tk.LEFT, padx=(12, 0))
-            self._update_detail = tk.Label(
-                banner,
-                text="",
-                bg=_BG_WELL,
-                fg=_TEXT_MUTED,
-                font=_FONT_SMALL,
-                justify=tk.LEFT,
-                anchor=tk.W,
-                wraplength=520,
+            self._update_version.pack(side=tk.LEFT, padx=(4, 4))
+            tk.Label(
+                row,
+                text="available!",
+                bg=_BG_BANNER,
+                fg=_TEXT,
+                font=_FONT,
+            ).pack(side=tk.LEFT, padx=(0, 12))
+            self._update_button = _chip_button(
+                row,
+                "Update",
+                self._start_update_apply,
+                primary=True,
+                width=None,
+                chrome=_BG_BANNER,
+                compact=True,
             )
-            self._update_detail.pack(fill=tk.X, padx=24, pady=(0, 8))
-            self._update_link = tk.Label(
-                banner,
-                text="",
-                bg=_BG_WELL,
-                fg="#6CB6FF",
-                font=(_FONT_SMALL[0], _FONT_SMALL[1], "underline"),
-                cursor="hand2",
-                anchor=tk.W,
-            )
-            self._update_link.pack(fill=tk.X, padx=24, pady=(0, 4))
-            self._update_link.bind("<Button-1>", self._open_update_url)
+            self._update_button.pack(side=tk.LEFT)
+            self._update_row = row
             self._update_banner = banner
+            try:
+                self._title_row.pack_configure(pady=(2, 6))
+            except tk.TclError:
+                pass
             self.update_idletasks()
             self.geometry(
                 f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
@@ -2611,8 +2646,6 @@ class OptionsApp(tk.Tk):
     def _start_update_apply(self) -> None:
         try:
             self._update_button.configure(state=tk.DISABLED, text="Updating…")
-            self._update_detail.configure(text="")
-            self._update_link.configure(text="")
         except tk.TclError:
             return
         notice = getattr(self, "_update_notice", None)
@@ -2696,16 +2729,28 @@ class OptionsApp(tk.Tk):
         self._show_update_failure(detail)
 
     def _show_update_failure(self, detail: str) -> None:
-        version = ""
-        notice = getattr(self, "_update_notice", None)
-        if notice is not None:
-            version = notice.version
         try:
-            self._update_status.configure(text="Update failed")
-            self._update_detail.configure(text=detail)
-            if version:
-                self._update_link.configure(text=version)
             self._update_button.configure(state=tk.NORMAL, text="Update")
+            link_font = (_FONT[0], _FONT[1], "underline")
+            self._update_version.configure(
+                fg="#6CB6FF", font=link_font, cursor="hand2"
+            )
+            self._update_version.unbind("<Button-1>")
+            self._update_version.bind("<Button-1>", self._open_update_url)
+            if self._update_detail is None:
+                self._update_detail = tk.Label(
+                    self._update_banner,
+                    text=detail,
+                    bg=_BG_BANNER,
+                    fg=_TEXT_MUTED,
+                    font=_FONT_SMALL,
+                    justify=tk.CENTER,
+                    wraplength=440,
+                )
+                self._update_detail.pack(fill=tk.X, padx=28, pady=(0, 4))
+                self._update_row.pack_configure(pady=(2, 2))
+            else:
+                self._update_detail.configure(text=detail)
             self.update_idletasks()
             self.geometry(
                 f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"

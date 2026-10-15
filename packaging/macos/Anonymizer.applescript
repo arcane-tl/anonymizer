@@ -61,12 +61,20 @@ property optionsUpdateBusy : false
 property optionsUpdateStatusLabel : missing value
 property optionsUpdateDetailLabel : missing value
 property optionsUpdateButton : missing value
+property optionsUpdateStrip : missing value
+property optionsUpdateFillBox : missing value
+property optionsUpdateVersionButton : missing value
+property optionsUpdateSuffixLabel : missing value
+property optionsUpdateVersionLinked : false
+property optionsUpdateBannerY : 0
+property optionsUpdateBannerHeight : 0
 property optionsPanelRef : missing value
 property optionsBannerApplied : false
 property optionsContentHeight : 0
 property optionsPanelWidth : 500
 property optionsUpdateTask : missing value
 property optionsUpdateReadHandle : missing value
+property optionsUpdateTimer : missing value
 
 on clickOptionsStart_(sender)
 	if (count of optionsFilePaths) is 0 then
@@ -1821,47 +1829,41 @@ on pythonForUpdateCheck()
 	end try
 end pythonForUpdateCheck
 
-on startUpdateCheck(thePanel)
+on loadUpdateNotice()
+	-- The options panel is modal, so a background file-handle notification
+	-- never arrives. Read the check before the panel is built.
 	if optionsUpdateStarted then return
-	set optionsPanelRef to thePanel
-	if updateCheckDisabled() then
-		set optionsUpdateStarted to true
-		return
-	end if
+	set optionsUpdateStarted to true
+	if updateCheckDisabled() then return
 	set py to pythonForUpdateCheck()
-	if py is "" then
-		set optionsUpdateStarted to true
-		return
-	end if
+	if py is "" then return
+	set cmd to "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
 	try
-		set task to current application's NSTask's alloc()'s init()
-		set pyURL to current application's NSURL's fileURLWithPath:py
-		task's setExecutableURL:pyURL
-		task's setArguments:{"-m", "anonymizer.util.update_check"}
-		set pipe to current application's NSPipe's pipe()
-		task's setStandardOutput:pipe
-		task's setStandardError:(current application's NSFileHandle's fileHandleWithNullDevice())
-		set fh to pipe's fileHandleForReading()
-		set optionsUpdateTask to task
-		set optionsUpdateReadHandle to fh
-		current application's NSNotificationCenter's defaultCenter()'s addObserver:me selector:"updateCheckFinished:" |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:fh
-		fh's readToEndOfFileInBackgroundAndNotify()
-		set optionsUpdateStarted to true
-		task's |launch|()
-	on error
-		set optionsUpdateStarted to true
+		set ov to system attribute "ANONYMIZER_UPDATE_CHECK_OVERRIDE"
+		if ov is not missing value and (ov as text) is not "" then
+			set cmd to cmd & "; export ANONYMIZER_UPDATE_CHECK_OVERRIDE=" & quoted form of (ov as text)
+		end if
 	end try
-end startUpdateCheck
+	try
+		set pp to system attribute "PYTHONPATH"
+		if pp is not missing value and (pp as text) is not "" then
+			set cmd to cmd & "; export PYTHONPATH=" & quoted form of (pp as text)
+		end if
+	end try
+	set cmd to cmd & "; " & quoted form of py & " -m anonymizer.util.update_check"
+	set raw to ""
+	try
+		set raw to do shell script cmd
+	end try
+	if raw is "" then return
+	try
+		set ns to current application's NSString's stringWithString:raw
+		set rawData to ns's dataUsingEncoding:4
+		applyUpdateCheckData(rawData)
+	end try
+end loadUpdateNotice
 
-on updateCheckFinished_(notification)
-	try
-		set rawData to notification's userInfo()'s objectForKey:(current application's NSFileHandleNotificationDataItem)
-	on error
-		set rawData to missing value
-	end try
-	try
-		current application's NSNotificationCenter's defaultCenter()'s removeObserver:me |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:optionsUpdateReadHandle
-	end try
+on applyUpdateCheckData(rawData)
 	if rawData is missing value then return
 	try
 		if (rawData's |length|() as integer) is 0 then return
@@ -1886,7 +1888,7 @@ on updateCheckFinished_(notification)
 	try
 		insertUpdateBanner(optionsPanelRef)
 	end try
-end updateCheckFinished_
+end applyUpdateCheckData
 
 on insertUpdateBanner(thePanel)
 	if thePanel is missing value then return
@@ -1895,19 +1897,88 @@ on insertUpdateBanner(thePanel)
 	set content to thePanel's contentView()
 	set oldH to optionsContentHeight
 	set wide to optionsPanelWidth
-	set bannerH to 64
+	set bannerH to updateBannerIdleHeight()
 	thePanel's setContentSize:(current application's NSMakeSize(wide, oldH + bannerH))
 	addUpdateBanner(content, 0, oldH, wide, bannerH, optionsUpdateVersion)
 	set optionsContentHeight to oldH + bannerH
 	set optionsBannerApplied to true
 end insertUpdateBanner
 
+on updateBannerPad()
+	return 2
+end updateBannerPad
+
+on updateBannerIdleHeight()
+	-- One row: 32pt dialog button plus a short pad above and below.
+	return 32 + updateBannerPad() + updateBannerPad()
+end updateBannerIdleHeight
+
+on updateBannerFillColor()
+	-- A small step off the window color. Dark appearance lifts; light appearance settles.
+	set base to current application's NSColor's windowBackgroundColor()
+	set rgb to base's colorUsingColorSpace:(current application's NSColorSpace's sRGBColorSpace())
+	set r to rgb's redComponent()
+	set g to rgb's greenComponent()
+	set b to rgb's blueComponent()
+	set lift to 0.09
+	if r > 0.5 then set lift to -0.06
+	set r to r + lift
+	set g to g + lift
+	set b to b + lift
+	if r < 0 then set r to 0
+	if g < 0 then set g to 0
+	if b < 0 then set b to 0
+	if r > 1 then set r to 1
+	if g > 1 then set g to 1
+	if b > 1 then set b to 1
+	return (current application's NSColor's colorWithCalibratedRed:r green:g blue:b alpha:1)
+end updateBannerFillColor
+
+on singleLineSize(titleText)
+	set ns to current application's NSString's stringWithString:(titleText as text)
+	set fnt to current application's NSFont's systemFontOfSize:13
+	set attrs to current application's NSDictionary's dictionaryWithObject:fnt forKey:(current application's NSFontAttributeName)
+	set sz to ns's sizeWithAttributes:attrs
+	set rList to sz as list
+	set lineW to (item 1 of rList) as integer
+	set lineH to (item 2 of rList) as integer
+	if lineH < 16 then set lineH to 16
+	return {lineW + 2, lineH}
+end singleLineSize
+
+on placeUpdateBannerRow(buttonY)
+	if optionsUpdateStrip is missing value then return
+	if optionsUpdateStatusLabel is missing value then return
+	if optionsUpdateVersionButton is missing value then return
+	if optionsUpdateButton is missing value then return
+	set stripW to optionsPanelWidth
+	set btnW to 110
+	set btnH to 32
+	-- Cell inset, so the last glyph is not clipped.
+	set sentenceSize to singleLineSize(optionsUpdateStatusLabel's stringValue() as text)
+	set labelW to (item 1 of sentenceSize) + 12
+	set labelH to item 2 of sentenceSize
+	set totalW to labelW + 12 + btnW
+	set originX to (stripW - totalW) div 2
+	if originX < 12 then set originX to 12
+	set labelY to buttonY + (btnH - labelH) div 2
+	optionsUpdateStatusLabel's setFrame:(current application's NSMakeRect(originX, labelY, labelW, labelH))
+	optionsUpdateButton's setFrame:(current application's NSMakeRect(originX + labelW + 12, buttonY, btnW, btnH))
+end placeUpdateBannerRow
+
 on addUpdateBanner(parentView, x, y, w, h, versionText)
+	-- Layer CGColor does not bridge here. A custom NSBox does, and tracks appearance.
+	-- It is a sibling behind the controls; an NSBox content view covers its own fill.
+	set box to current application's NSBox's alloc()'s initWithFrame:(current application's NSMakeRect(x, y, w, h))
+	box's setBoxType:4
+	box's setBorderType:0
+	box's setBorderWidth:0
+	box's setTitlePosition:0
+	box's setContentViewMargins:{0, 0}
+	box's setFillColor:(updateBannerFillColor())
+	parentView's addSubview:box
+	set optionsUpdateFillBox to box
 	set strip to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(x, y, w, h))
-	strip's setWantsLayer:true
-	try
-		strip's layer()'s setBackgroundColor:((current application's NSColor's windowBackgroundColor())'s CGColor())
-	end try
 	set edge to current application's NSView's alloc()'s initWithFrame:(current application's NSMakeRect(0, 0, w, 1))
 	edge's setWantsLayer:true
 	try
@@ -1915,59 +1986,36 @@ on addUpdateBanner(parentView, x, y, w, h, versionText)
 	end try
 	strip's addSubview:edge
 
-	set prefix to "Update to version: "
-	set label to current application's NSTextField's alloc()'s initWithFrame:(current application's NSMakeRect(24, 0, 10, 16))
-	label's setStringValue:prefix
+	set label to current application's NSTextField's alloc()'s initWithFrame:{{0, 0}, {10, 16}}
+	label's setStringValue:("New version " & (versionText as text) & " available!")
 	label's setEditable:false
 	label's setBezeled:false
+	label's setBordered:false
 	label's setDrawsBackground:false
 	label's setSelectable:false
 	label's setFont:(current application's NSFont's systemFontOfSize:13)
 	try
 		label's setTextColor:(current application's NSColor's labelColor())
 	end try
-	label's sizeToFit()
-	set labelW to current application's NSWidth(label's frame())
-	set labelH to current application's NSHeight(label's frame())
-	set textY to h - labelH - 8
-	label's setFrame:(current application's NSMakeRect(24, textY, labelW, labelH))
-	parentView's addSubview:strip
 	strip's addSubview:label
 	set optionsUpdateStatusLabel to label
+	set optionsUpdateVersionButton to label
+	set optionsUpdateSuffixLabel to missing value
 
-	set verField to current application's NSTextField's alloc()'s initWithFrame:(current application's NSMakeRect(24 + labelW + 2, textY, 80, labelH))
-	verField's setStringValue:(versionText as text)
-	verField's setEditable:false
-	verField's setBezeled:false
-	verField's setDrawsBackground:false
-	verField's setSelectable:false
-	verField's setFont:(current application's NSFont's systemFontOfSize:13)
-	verField's sizeToFit()
-	set verW to current application's NSWidth(verField's frame())
-	verField's setFrame:(current application's NSMakeRect(24 + labelW + 2, textY, verW, labelH))
-	strip's addSubview:verField
-
-	set updateBtn to current application's NSButton's alloc()'s initWithFrame:(current application's NSMakeRect(24 + labelW + verW + 16, textY - 2, 72, 22))
-	updateBtn's setTitle:"Update"
-	updateBtn's setBezelStyle:1
-	updateBtn's setTarget:me
-	updateBtn's setAction:"clickUpdateApply:"
-	updateBtn's sizeToFit()
+	set updateBtn to makeDialogButton("Update", 0, 0, 110, 32, "clickUpdateApply:")
+	try
+		-- Same accent fill as Start, without taking the Return key.
+		updateBtn's setBezelColor:(current application's NSColor's controlAccentColor())
+	end try
 	strip's addSubview:updateBtn
 	set optionsUpdateButton to updateBtn
 
-	set detail to current application's NSTextField's alloc()'s initWithFrame:(current application's NSMakeRect(24, 6, w - 48, h - labelH - 16))
-	detail's setStringValue:""
-	detail's setEditable:false
-	detail's setBezeled:false
-	detail's setDrawsBackground:false
-	detail's setSelectable:true
-	detail's setFont:(current application's NSFont's systemFontOfSize:11)
-	try
-		detail's setTextColor:(current application's NSColor's secondaryLabelColor())
-	end try
-	strip's addSubview:detail
-	set optionsUpdateDetailLabel to detail
+	parentView's addSubview:strip
+	set optionsUpdateStrip to strip
+	set optionsUpdateBannerY to y
+	set optionsUpdateBannerHeight to h
+	set optionsUpdateDetailLabel to missing value
+	placeUpdateBannerRow(h - (32 + updateBannerPad()))
 	return strip
 end addUpdateBanner
 
@@ -1996,25 +2044,35 @@ on clickUpdateApply_(sender)
 		set pipe to current application's NSPipe's pipe()
 		task's setStandardOutput:pipe
 		task's setStandardError:(current application's NSFileHandle's fileHandleWithNullDevice())
-		set fh to pipe's fileHandleForReading()
 		set optionsUpdateTask to task
-		set optionsUpdateReadHandle to fh
-		current application's NSNotificationCenter's defaultCenter()'s addObserver:me selector:"updateApplyFinished:" |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:fh
-		fh's readToEndOfFileInBackgroundAndNotify()
+		set optionsUpdateReadHandle to pipe's fileHandleForReading()
 		task's |launch|()
+		-- Same modal run-loop limit as the availability check.
+		set optionsUpdateTimer to current application's NSTimer's timerWithTimeInterval:0.4 target:me selector:"pollUpdateApply:" userInfo:(missing value) repeats:true
+		current application's NSRunLoop's currentRunLoop()'s addTimer:optionsUpdateTimer forMode:(current application's NSRunLoopCommonModes)
 	on error
 		showUpdateFailure("Update failed.")
 	end try
 end clickUpdateApply_
 
-on updateApplyFinished_(notification)
+on pollUpdateApply_(timer)
+	set running to false
+	try
+		if optionsUpdateTask is not missing value then set running to ((optionsUpdateTask's isRunning()) as boolean)
+	end try
+	if running then return
+	try
+		timer's invalidate()
+	end try
+	set optionsUpdateTimer to missing value
 	set rawData to missing value
 	try
-		set rawData to notification's userInfo()'s objectForKey:(current application's NSFileHandleNotificationDataItem)
+		set rawData to optionsUpdateReadHandle's readDataToEndOfFile()
 	end try
-	try
-		current application's NSNotificationCenter's defaultCenter()'s removeObserver:me |name|:(current application's NSFileHandleReadToEndOfFileNotification) object:optionsUpdateReadHandle
-	end try
+	finishUpdateApply(rawData)
+end pollUpdateApply_
+
+on finishUpdateApply(rawData)
 	set statusName to "fail"
 	set detailText to "Update failed."
 	set urlText to optionsUpdateURL
@@ -2044,26 +2102,107 @@ on updateApplyFinished_(notification)
 	if statusName is "open-release" then
 		set optionsUpdateURL to urlText
 		clickUpdateLink_(me)
-		showUpdateFailure("This copy was not installed with Homebrew. The release page is open. " & optionsUpdateVersion)
+		showUpdateFailure("This copy was not installed with Homebrew. The release page is open.")
 		return
 	end if
 	if urlText is not "" then set optionsUpdateURL to urlText
 	showUpdateFailure(detailText)
-end updateApplyFinished_
+end finishUpdateApply
+
+on styleUpdateVersionAsLink()
+	if optionsUpdateStatusLabel is missing value then return
+	set prefix to "New version "
+	set sentence to prefix & optionsUpdateVersion & " available!"
+	try
+		set mas to current application's NSMutableAttributedString's alloc()'s initWithString:sentence
+		set fullRange to current application's NSMakeRange(0, (count of sentence))
+		mas's addAttribute:(current application's NSFontAttributeName) value:(current application's NSFont's systemFontOfSize:13) range:fullRange
+		mas's addAttribute:(current application's NSForegroundColorAttributeName) value:(current application's NSColor's labelColor()) range:fullRange
+		set verRange to current application's NSMakeRange((count of prefix), (count of optionsUpdateVersion))
+		mas's addAttribute:(current application's NSForegroundColorAttributeName) value:(current application's NSColor's linkColor()) range:verRange
+		mas's addAttribute:(current application's NSUnderlineStyleAttributeName) value:(current application's NSNumber's numberWithInteger:1) range:verRange
+		optionsUpdateStatusLabel's setAttributedStringValue:mas
+	end try
+	if optionsUpdateVersionLinked then return
+	try
+		set prefixSize to singleLineSize(prefix)
+		set verSize to singleLineSize(optionsUpdateVersion)
+		set labFrame to optionsUpdateStatusLabel's frame() as list
+		set labX to (item 1 of item 1 of labFrame) as integer
+		set labY to (item 2 of item 1 of labFrame) as integer
+		set labH to (item 2 of item 2 of labFrame) as integer
+		set hit to current application's NSButton's alloc()'s initWithFrame:{{labX + (item 1 of prefixSize), labY}, {(item 1 of verSize), labH}}
+		hit's setTitle:""
+		hit's setBordered:false
+		hit's setTransparent:true
+		hit's setTarget:me
+		hit's setAction:"clickUpdateLink:"
+		optionsUpdateStatusLabel's superview()'s addSubview:hit
+		set optionsUpdateVersionLinked to true
+	end try
+end styleUpdateVersionAsLink
+
+on growUpdateBanner(extra)
+	if extra <= 0 then return
+	if optionsPanelRef is missing value then return
+	if optionsUpdateStrip is missing value then return
+	set newContentH to optionsContentHeight + extra
+	set newBannerH to optionsUpdateBannerHeight + extra
+	optionsPanelRef's setContentSize:(current application's NSMakeSize(optionsPanelWidth, newContentH))
+	optionsUpdateStrip's setFrame:(current application's NSMakeRect(0, optionsUpdateBannerY, optionsPanelWidth, newBannerH))
+	if optionsUpdateFillBox is not missing value then
+		optionsUpdateFillBox's setFrame:(current application's NSMakeRect(0, optionsUpdateBannerY, optionsPanelWidth, newBannerH))
+	end if
+	set optionsContentHeight to newContentH
+	set optionsUpdateBannerHeight to newBannerH
+end growUpdateBanner
 
 on showUpdateFailure(messageText)
 	set optionsUpdateBusy to false
 	try
-		if optionsUpdateDetailLabel is not missing value then
-			optionsUpdateDetailLabel's setStringValue:messageText
-		end if
-	end try
-	try
 		if optionsUpdateButton is not missing value then
 			optionsUpdateButton's setEnabled:true
-			optionsUpdateButton's setTitle:optionsUpdateVersion
-			optionsUpdateButton's setAction:"clickUpdateLink:"
+			optionsUpdateButton's setTitle:"Update"
+			optionsUpdateButton's setAction:"clickUpdateApply:"
 		end if
+	end try
+	styleUpdateVersionAsLink()
+	set msg to ""
+	try
+		set msg to messageText as text
+	end try
+	if msg is "" then
+		placeUpdateBannerRow(optionsUpdateBannerHeight - (32 + updateBannerPad()))
+		return
+	end if
+	set detailW to optionsPanelWidth - 48
+	if detailW < 200 then set detailW to 200
+	set measured to heightForWrappingText(msg, detailW, 11)
+	set desired to updateBannerPad() + 32 + 4 + measured + 6
+	set growBy to desired - optionsUpdateBannerHeight
+	if growBy > 0 then growUpdateBanner(growBy)
+	placeUpdateBannerRow(optionsUpdateBannerHeight - (32 + updateBannerPad()))
+	if optionsUpdateDetailLabel is missing value then
+		set detail to current application's NSTextField's alloc()'s initWithFrame:{{24, 2}, {detailW, measured}}
+		detail's setEditable:false
+		detail's setBezeled:false
+		detail's setBordered:false
+		detail's setDrawsBackground:false
+		detail's setSelectable:true
+		detail's setFont:(current application's NSFont's systemFontOfSize:11)
+		try
+			detail's setTextColor:(current application's NSColor's secondaryLabelColor())
+			detail's setAlignment:(current application's NSTextAlignmentCenter)
+			detail's cell()'s setWraps:true
+			detail's cell()'s setScrollable:false
+			detail's setLineBreakMode:(current application's NSLineBreakByWordWrapping)
+		end try
+		if optionsUpdateStrip is not missing value then optionsUpdateStrip's addSubview:detail
+		set optionsUpdateDetailLabel to detail
+	end if
+	try
+		optionsUpdateDetailLabel's setStringValue:msg
+		optionsUpdateDetailLabel's setFrame:(current application's NSMakeRect(24, 2, detailW, measured))
 	end try
 end showUpdateFailure
 
@@ -2111,6 +2250,7 @@ on clickUpdateLink_(sender)
 end clickUpdateLink_
 
 on showOptionsPanel()
+	loadUpdateNotice()
 	set templateCSV to loadEnabledTemplatesCSV()
 
 	set lastModeRow to 0
@@ -2176,8 +2316,11 @@ on showOptionsPanel()
 		if optionsMoreOpen then
 			set moreBlockH to gapSm + styleLabelH + gapXs + popupH + gapSm + checkH + gapSm + checkH + gapSm + checkH
 		end if
-		set panelH to margin + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
-		set bannerH to 64
+		-- With a banner, the strip replaces the 24pt top margin. Leave a short gap under it.
+		set titleGap to margin
+		if optionsUpdateVersion is not "" then set titleGap to updateBannerPad()
+		set panelH to titleGap + titleRowH + gapSm + subH + gapLg + filesLabelH + gapXs + filesH + gapLg + modeLabelH + gapXs + popupH + gapLg + formatLabelH + gapXs + checkH + gapSm + checkH + gapSm + checkH + gapLg + outLabelH + gapXs + outPathH + gapLg + tmplLabelH + gapXs + tmplStatusH + gapMd + checkH + gapSm + moreRowH + moreBlockH + gapXl + btnH + margin
+		set bannerH to updateBannerIdleHeight()
 		if optionsUpdateVersion is not "" then set panelH to panelH + bannerH
 		set panelRect to current application's NSMakeRect(0, 0, panelW, panelH)
 		set thePanel to (current application's NSPanel's alloc())
@@ -2207,9 +2350,9 @@ on showOptionsPanel()
 				addUpdateBanner(content, 0, y, panelW, bannerH, optionsUpdateVersion)
 				set optionsBannerApplied to true
 			end try
-			set y to y - margin - titleRowH
+			set y to y - titleGap - titleRowH
 		else
-			set y to panelH - margin - titleRowH
+			set y to panelH - titleGap - titleRowH
 		end if
 		addTitleRow(content, panelW, y)
 
@@ -2400,7 +2543,6 @@ on showOptionsPanel()
 		content's addSubview:cancelBtn
 		content's addSubview:startBtn
 
-		startUpdateCheck(thePanel)
 		set optionsModalCode to -1
 		current application's NSApp's activateIgnoringOtherApps:true
 		thePanel's makeKeyAndOrderFront_(missing value)
