@@ -7,10 +7,12 @@ Dark charcoal chrome + app icon matches the Mac ASObjC options panel.
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 from pathlib import Path
 
@@ -44,6 +46,11 @@ from anonymizer.util.files import (
     SUPPORTED_TYPES_HUMAN,
     SUPPORTED_TYPES_README_URL,
     unsupported_type_notice,
+)
+from anonymizer.util.update_check import (
+    UpdateNotice,
+    check_for_update,
+    update_check_disabled,
 )
 
 MODE_LABELS = [
@@ -140,6 +147,7 @@ if sys.platform == "darwin":
     _ACCENT_HOVER = "#409CFF"
     _TEXT_ON_ACCENT = "#FFFFFF"
     _SELECT = "#0059D1"  # selectedContentBackground approx
+    _BG_BANNER = "#2A2A2C"  # droplet uses AppKit; Tk fallback only
 else:
     _BG_APP = "#2C2C2E"
     _BG_WELL = "#1C1C1E"
@@ -152,6 +160,7 @@ else:
     _ACCENT_HOVER = "#409CFF"
     _TEXT_ON_ACCENT = "#FFFFFF"
     _SELECT = "#1E3A5F"
+    _BG_BANNER = "#363638"  # one step off window charcoal #2C2C2E
 
 # Platform fonts: Segoe on Windows; system UI on macOS (matches NSPanel).
 if sys.platform == "darwin":
@@ -1190,6 +1199,8 @@ def _chip_button(
     width: int | None = 11,
     chrome: str | None = None,
     fill_x: bool = False,
+    compact: bool = False,
+    size_for: str | None = None,
 ) -> "tk.Frame":
     """Rounded pill button drawn on canvas.
 
@@ -1206,9 +1217,14 @@ def _chip_button(
     fg_disabled = _TEXT_MUTED
     outline = _ACCENT if primary else _BORDER
     font = _FONT_BOLD if primary else _FONT
-    pad_x, pad_y, radius = 14, 7, 8
+    if compact:
+        pad_x, pad_y, radius = 6, 2, 5
+        min_h, min_w_floor = 0, 0
+    else:
+        pad_x, pad_y, radius = 14, 7, 8
+        min_h, min_w_floor = 32, 72
 
-    probe = tk.Label(parent, text=text, font=font)
+    probe = tk.Label(parent, text=size_for or text, font=font)
     try:
         probe.update_idletasks()
         tw, th = probe.winfo_reqwidth(), probe.winfo_reqheight()
@@ -1224,8 +1240,8 @@ def _chip_button(
         finally:
             probe2.destroy()
     size = {
-        "bw": max(tw + pad_x * 2, min_w, 72),
-        "bh": max(th + pad_y * 2, 32),
+        "bw": max(tw + pad_x * 2, min_w, min_w_floor),
+        "bh": max(th + pad_y * 2, min_h),
     }
 
     wrap = tk.Frame(
@@ -1244,6 +1260,7 @@ def _chip_button(
     canvas.pack(fill=tk.BOTH, expand=True)
 
     state: dict = {"enabled": True, "hover": False}
+    label = {"text": text}
 
     def _paint() -> None:
         enabled = state["enabled"]
@@ -1261,7 +1278,7 @@ def _chip_button(
             canvas, 1, 1, max(bw - 2, 2), max(bh - 2, 2), radius,
             fill=fill, outline=ol, width=1,
         )
-        canvas.create_text(bw // 2, bh // 2, text=text, fill=fg, font=font)
+        canvas.create_text(bw // 2, bh // 2, text=label["text"], fill=fg, font=font)
 
     def _run(_e=None) -> None:
         if state["enabled"] and command is not None:
@@ -1273,11 +1290,30 @@ def _chip_button(
         elif cnf is not None and not kw:
             # cnf as single option name → Frame.configure
             return tk.Frame.configure(wrap, cnf)
+        repaint = False
+        if "text" in kw:
+            label["text"] = str(kw.pop("text"))
+            if compact:
+                measure = tk.Label(parent, text=label["text"], font=font)
+                try:
+                    measure.update_idletasks()
+                    nw = max(measure.winfo_reqwidth() + pad_x * 2, min_w_floor)
+                    nh = max(measure.winfo_reqheight() + pad_y * 2, min_h)
+                finally:
+                    measure.destroy()
+                size["bw"], size["bh"] = nw, nh
+                tk.Frame.configure(wrap, width=nw, height=nh)
+                canvas.configure(width=nw, height=nh)
+            repaint = True
         if "state" in kw:
             st = kw.pop("state")
             state["enabled"] = st not in (tk.DISABLED, "disabled", 0, "0")
-            wrap.configure(cursor="hand2" if state["enabled"] else "arrow")
+            tk.Frame.configure(
+                wrap, cursor="hand2" if state["enabled"] else "arrow"
+            )
             canvas.configure(cursor="hand2" if state["enabled"] else "arrow")
+            repaint = True
+        if repaint:
             _paint()
         if kw:
             return tk.Frame.configure(wrap, **kw)
@@ -2255,15 +2291,17 @@ class OptionsApp(tk.Tk):
         self.debug_var = tk.BooleanVar(value=False)
 
         pad = 24
-        root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=pad)
-        root.pack(fill=tk.BOTH, expand=True)
+        # Top inset lives on the title row so a banner can tighten it alone.
+        root = tk.Frame(self, bg=_BG_APP, padx=pad, pady=0)
+        root.pack(fill=tk.BOTH, expand=True, pady=(0, pad))
         self._root_frm = root
 
-        _pack_title_row(
+        self._title_row = _pack_title_row(
             root,
             f"Anonymizer (version {__version__})",
             self._icon_refs,
         )
+        self._title_row.pack_configure(pady=(pad, 6))
 
         self.sub_lbl = tk.Label(
             root,
@@ -2490,6 +2528,7 @@ class OptionsApp(tk.Tk):
             pass
         # Enable Return → Start only after focus has settled
         self.after(500, self._enable_return_shortcut)
+        self._start_update_check()
         _log(
             f"OptionsApp ready files={len(self.files)} "
             f"geom={self.geometry()!r} viewable={self.winfo_viewable()}"
@@ -2498,6 +2537,238 @@ class OptionsApp(tk.Tk):
             f"Options window ready\n{len(self.files)} file(s)\n{self.geometry()}\n"
             f"Log: {_log_path()}"
         )
+
+    def _start_update_check(self) -> None:
+        """Look for a newer release off the UI thread. Failures stay invisible."""
+        if update_check_disabled():
+            return
+        self._update_queue: queue.Queue[UpdateNotice | None] = queue.Queue(maxsize=1)
+        self._update_polls = 0
+        self._update_banner: tk.Frame | None = None
+        self._update_url = ""
+        current = __version__
+
+        def work() -> None:
+            notice: UpdateNotice | None = None
+            try:
+                notice = check_for_update(current)
+            finally:
+                try:
+                    self._update_queue.put_nowait(notice)
+                except queue.Full:
+                    pass
+
+        threading.Thread(
+            target=work,
+            name="anonymizer-update-check",
+            daemon=True,
+        ).start()
+        self.after(200, self._poll_update_notice)
+
+    def _poll_update_notice(self) -> None:
+        try:
+            notice = self._update_queue.get_nowait()
+        except queue.Empty:
+            self._update_polls += 1
+            if self._update_polls < 40:
+                try:
+                    self.after(200, self._poll_update_notice)
+                except tk.TclError:
+                    return
+            return
+        except tk.TclError:
+            return
+        if notice is not None:
+            self._show_update_banner(notice)
+
+    def _show_update_banner(self, notice: UpdateNotice) -> None:
+        if self._update_banner is not None:
+            return
+        if tk is None:
+            return
+        try:
+            self._update_notice = notice
+            self._update_url = notice.html_url
+            self._update_detail = None
+            banner = tk.Frame(self, bg=_BG_BANNER)
+            banner.pack(before=self._root_frm, fill=tk.X)
+            edge = tk.Frame(banner, bg=_BORDER, height=1)
+            edge.pack_propagate(False)
+            edge.pack(side=tk.BOTTOM, fill=tk.X)
+            row = tk.Frame(banner, bg=_BG_BANNER)
+            row.pack(pady=(2, 2))
+            tk.Label(
+                row,
+                text="New version",
+                bg=_BG_BANNER,
+                fg=_TEXT,
+                font=_FONT,
+            ).pack(side=tk.LEFT)
+            self._update_version = tk.Label(
+                row,
+                text=notice.version,
+                bg=_BG_BANNER,
+                fg=_TEXT,
+                font=_FONT,
+            )
+            self._update_version.pack(side=tk.LEFT, padx=(4, 4))
+            tk.Label(
+                row,
+                text="available!",
+                bg=_BG_BANNER,
+                fg=_TEXT,
+                font=_FONT,
+            ).pack(side=tk.LEFT, padx=(0, 12))
+            self._update_button = _chip_button(
+                row,
+                "Update",
+                self._start_update_apply,
+                primary=True,
+                width=None,
+                chrome=_BG_BANNER,
+                compact=True,
+            )
+            self._update_button.pack(side=tk.LEFT)
+            self._update_row = row
+            self._update_banner = banner
+            try:
+                self._title_row.pack_configure(pady=(2, 6))
+            except tk.TclError:
+                pass
+            self.update_idletasks()
+            self.geometry(
+                f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
+                f"+{self.winfo_x()}+{self.winfo_y()}"
+            )
+        except tk.TclError:
+            return
+
+    def _start_update_apply(self) -> None:
+        try:
+            self._update_button.configure(state=tk.DISABLED, text="Updating…")
+        except tk.TclError:
+            return
+        notice = getattr(self, "_update_notice", None)
+        if notice is None:
+            return
+
+        def work() -> None:
+            from anonymizer.util.update_apply import (
+                ApplyStatus,
+                apply_mac_update,
+                apply_windows_update,
+            )
+
+            try:
+                if sys.platform == "win32" and getattr(sys, "frozen", False):
+                    result = apply_windows_update(
+                        setup_url=notice.setup_url,
+                        version=notice.version,
+                        html_url=notice.html_url,
+                        app_dir=str(Path(sys.executable).resolve().parent),
+                    )
+                elif sys.platform == "darwin":
+                    result = apply_mac_update(
+                        "/Applications/Anonymizer.app",
+                        html_url=notice.html_url,
+                        version=notice.version,
+                    )
+                else:
+                    result = ApplyStatus(
+                        "open-release",
+                        html_url=notice.html_url,
+                        version=notice.version,
+                    )
+            except Exception:  # noqa: BLE001
+                from anonymizer.util.update_apply import windows_manual_steps
+
+                result = ApplyStatus(
+                    "fail",
+                    detail=windows_manual_steps(notice.version),
+                    html_url=notice.html_url,
+                    version=notice.version,
+                )
+            try:
+                self._update_queue.put_nowait(result)  # type: ignore[arg-type]
+            except queue.Full:
+                pass
+
+        self._update_queue = queue.Queue(maxsize=1)
+        threading.Thread(target=work, name="anonymizer-update-apply", daemon=True).start()
+        self.after(200, self._poll_update_apply)
+
+    def _poll_update_apply(self) -> None:
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self.after(200, self._poll_update_apply)
+            except tk.TclError:
+                return
+            return
+        except tk.TclError:
+            return
+        status = getattr(result, "status", "fail")
+        if status == "ok":
+            if sys.platform == "darwin":
+                try:
+                    subprocess.Popen(["open", "-a", "/Applications/Anonymizer.app"])
+                except OSError:
+                    pass
+            self.destroy()
+            return
+        if status == "open-release":
+            self._update_url = getattr(result, "html_url", "") or self._update_url
+            self._open_update_url()
+            self._show_update_failure(
+                "This copy was not installed with Homebrew. The release page is open."
+            )
+            return
+        detail = getattr(result, "detail", "") or "Update failed."
+        self._update_url = getattr(result, "html_url", "") or self._update_url
+        self._show_update_failure(detail)
+
+    def _show_update_failure(self, detail: str) -> None:
+        try:
+            self._update_button.configure(state=tk.NORMAL, text="Update")
+            link_font = (_FONT[0], _FONT[1], "underline")
+            self._update_version.configure(
+                fg="#6CB6FF", font=link_font, cursor="hand2"
+            )
+            self._update_version.unbind("<Button-1>")
+            self._update_version.bind("<Button-1>", self._open_update_url)
+            if self._update_detail is None:
+                self._update_detail = tk.Label(
+                    self._update_banner,
+                    text=detail,
+                    bg=_BG_BANNER,
+                    fg=_TEXT_MUTED,
+                    font=_FONT_SMALL,
+                    justify=tk.CENTER,
+                    wraplength=440,
+                )
+                self._update_detail.pack(fill=tk.X, padx=28, pady=(0, 4))
+                self._update_row.pack_configure(pady=(2, 2))
+            else:
+                self._update_detail.configure(text=detail)
+            self.update_idletasks()
+            self.geometry(
+                f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}"
+                f"+{self.winfo_x()}+{self.winfo_y()}"
+            )
+        except tk.TclError:
+            return
+
+    def _open_update_url(self, _event: object = None) -> None:
+        url = self._update_url
+        if not url:
+            return
+        import webbrowser
+
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            return
 
     def _clear_topmost_soon(self) -> None:
         self._safe_topmost(False)
